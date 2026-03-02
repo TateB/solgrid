@@ -31,7 +31,9 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(error_name_capwords::ErrorNameCapwordsRule));
     registry.register(Box::new(param_name_mixedcase::ParamNameMixedcaseRule));
     registry.register(Box::new(var_name_mixedcase::VarNameMixedcaseRule));
-    registry.register(Box::new(immutable_name_snakecase::ImmutableNameSnakecaseRule));
+    registry.register(Box::new(
+        immutable_name_snakecase::ImmutableNameSnakecaseRule,
+    ));
     registry.register(Box::new(private_vars_underscore::PrivateVarsUnderscoreRule));
     registry.register(Box::new(modifier_name_mixedcase::ModifierNameMixedcaseRule));
     registry.register(Box::new(type_name_capwords::TypeNameCapwordsRule));

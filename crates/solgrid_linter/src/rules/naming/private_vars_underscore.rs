@@ -40,14 +40,16 @@ impl Rule for PrivateVarsUnderscoreRule {
                             }
 
                             // Check if visibility is private, internal, or default (None = internal)
-                            let is_private_or_internal = matches!(var.visibility, Some(Visibility::Private) | Some(Visibility::Internal) | None);
+                            let is_private_or_internal = matches!(
+                                var.visibility,
+                                Some(Visibility::Private) | Some(Visibility::Internal) | None
+                            );
 
                             if is_private_or_internal {
                                 if let Some(name_ident) = var.name {
                                     let name = name_ident.as_str();
                                     if !name.starts_with('_') {
-                                        let range =
-                                            solgrid_ast::span_to_range(name_ident.span);
+                                        let range = solgrid_ast::span_to_range(name_ident.span);
                                         diagnostics.push(Diagnostic::new(
                                             META.id,
                                             format!(

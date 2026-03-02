@@ -36,9 +36,7 @@ impl Rule for NoGlobalImportRule {
                         let range = solgrid_ast::span_to_range(item.span);
                         diagnostics.push(Diagnostic::new(
                             META.id,
-                            format!(
-                                "use named imports instead of `import \"{path_str}\"`"
-                            ),
+                            format!("use named imports instead of `import \"{path_str}\"`"),
                             META.default_severity,
                             range,
                         ));

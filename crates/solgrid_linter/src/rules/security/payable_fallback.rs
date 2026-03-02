@@ -33,18 +33,17 @@ impl Rule for PayableFallbackRule {
                     for body_item in contract.body.iter() {
                         if let ItemKind::Function(func) = &body_item.kind {
                             if matches!(func.kind, FunctionKind::Fallback | FunctionKind::Receive)
-                                && func.header.state_mutability() != StateMutability::Payable {
-                                    let kind_str = func.kind.to_str();
-                                    let range = solgrid_ast::span_to_range(body_item.span);
-                                    diagnostics.push(Diagnostic::new(
-                                        META.id,
-                                        format!(
-                                            "`{kind_str}` function should be marked `payable`"
-                                        ),
-                                        META.default_severity,
-                                        range,
-                                    ));
-                                }
+                                && func.header.state_mutability() != StateMutability::Payable
+                            {
+                                let kind_str = func.kind.to_str();
+                                let range = solgrid_ast::span_to_range(body_item.span);
+                                diagnostics.push(Diagnostic::new(
+                                    META.id,
+                                    format!("`{kind_str}` function should be marked `payable`"),
+                                    META.default_severity,
+                                    range,
+                                ));
+                            }
                         }
                     }
                 }

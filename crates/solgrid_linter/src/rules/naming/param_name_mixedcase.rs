@@ -44,8 +44,7 @@ impl Rule for ParamNameMixedcaseRule {
                                         continue;
                                     }
                                     if !solgrid_ast::is_camel_case(name) {
-                                        let range =
-                                            solgrid_ast::span_to_range(name_ident.span);
+                                        let range = solgrid_ast::span_to_range(name_ident.span);
                                         diagnostics.push(Diagnostic::new(
                                             META.id,
                                             format!(

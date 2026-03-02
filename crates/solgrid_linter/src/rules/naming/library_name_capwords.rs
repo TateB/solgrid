@@ -36,9 +36,7 @@ impl Rule for LibraryNameCapwordsRule {
                             let range = solgrid_ast::span_to_range(contract.name.span);
                             diagnostics.push(Diagnostic::new(
                                 META.id,
-                                format!(
-                                    "library name `{name}` should use CapWords (PascalCase)"
-                                ),
+                                format!("library name `{name}` should use CapWords (PascalCase)"),
                                 META.default_severity,
                                 range,
                             ));

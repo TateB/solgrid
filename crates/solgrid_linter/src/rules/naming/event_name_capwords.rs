@@ -37,9 +37,7 @@ impl Rule for EventNameCapwordsRule {
                                 let range = solgrid_ast::span_to_range(ev.name.span);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,
-                                    format!(
-                                        "event name `{name}` should use CapWords (PascalCase)"
-                                    ),
+                                    format!("event name `{name}` should use CapWords (PascalCase)"),
                                     META.default_severity,
                                     range,
                                 ));

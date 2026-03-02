@@ -86,7 +86,13 @@ fn find_loops_with_pattern(
                 // Recurse into the body to find nested loops
                 if let StmtKind::Block(block) = &body.kind {
                     find_loops_with_pattern(
-                        source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                        source,
+                        block.stmts,
+                        pattern,
+                        diagnostics,
+                        rule_id,
+                        severity,
+                        message,
                     );
                 }
             }
@@ -108,32 +114,62 @@ fn find_loops_with_pattern(
                 }
                 if let StmtKind::Block(block) = &body.kind {
                     find_loops_with_pattern(
-                        source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                        source,
+                        block.stmts,
+                        pattern,
+                        diagnostics,
+                        rule_id,
+                        severity,
+                        message,
                     );
                 }
             }
             StmtKind::Block(block) => {
                 find_loops_with_pattern(
-                    source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                    source,
+                    block.stmts,
+                    pattern,
+                    diagnostics,
+                    rule_id,
+                    severity,
+                    message,
                 );
             }
             StmtKind::If(_, then_stmt, else_stmt) => {
                 if let StmtKind::Block(block) = &then_stmt.kind {
                     find_loops_with_pattern(
-                        source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                        source,
+                        block.stmts,
+                        pattern,
+                        diagnostics,
+                        rule_id,
+                        severity,
+                        message,
                     );
                 }
                 if let Some(else_s) = else_stmt {
                     if let StmtKind::Block(block) = &else_s.kind {
                         find_loops_with_pattern(
-                            source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                            source,
+                            block.stmts,
+                            pattern,
+                            diagnostics,
+                            rule_id,
+                            severity,
+                            message,
                         );
                     }
                 }
             }
             StmtKind::UncheckedBlock(block) => {
                 find_loops_with_pattern(
-                    source, block.stmts, pattern, diagnostics, rule_id, severity, message,
+                    source,
+                    block.stmts,
+                    pattern,
+                    diagnostics,
+                    rule_id,
+                    severity,
+                    message,
                 );
             }
             _ => {}

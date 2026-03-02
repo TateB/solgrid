@@ -39,9 +39,7 @@ fn walk_stmts(stmts: &[Stmt], diagnostics: &mut Vec<Diagnostic>) {
                         let range = solgrid_ast::span_to_range(name_ident.span);
                         diagnostics.push(Diagnostic::new(
                             META.id,
-                            format!(
-                                "local variable `{name}` should use mixedCase (camelCase)"
-                            ),
+                            format!("local variable `{name}` should use mixedCase (camelCase)"),
                             META.default_severity,
                             range,
                         ));

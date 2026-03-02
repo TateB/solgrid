@@ -522,7 +522,10 @@ contract Test {
 }
 "#;
     let diagnostics = lint_source_for_rule(source, "security/arbitrary-send-eth");
-    assert!(diagnostics.len() >= 1, "Expected at least 1 diagnostic for arbitrary-send-eth");
+    assert!(
+        !diagnostics.is_empty(),
+        "Expected at least 1 diagnostic for arbitrary-send-eth"
+    );
 }
 
 #[test]

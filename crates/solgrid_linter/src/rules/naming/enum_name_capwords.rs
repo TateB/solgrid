@@ -53,9 +53,7 @@ impl Rule for EnumNameCapwordsRule {
                                 let range = solgrid_ast::span_to_range(e.name.span);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,
-                                    format!(
-                                        "enum name `{name}` should use CapWords (PascalCase)"
-                                    ),
+                                    format!("enum name `{name}` should use CapWords (PascalCase)"),
                                     META.default_severity,
                                     range,
                                 ));

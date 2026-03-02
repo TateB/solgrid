@@ -37,9 +37,7 @@ impl Rule for TypeNameCapwordsRule {
                         let range = solgrid_ast::span_to_range(udvt.name.span);
                         diagnostics.push(Diagnostic::new(
                             META.id,
-                            format!(
-                                "user-defined type `{name}` should use CapWords (PascalCase)"
-                            ),
+                            format!("user-defined type `{name}` should use CapWords (PascalCase)"),
                             META.default_severity,
                             range,
                         ));
