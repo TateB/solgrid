@@ -2224,7 +2224,7 @@ pragma solidity ^0.8.0;
 "#;
     // import after contract, pragma after contract
     let diags = lint_source_for_rule(source, "style/ordering");
-    assert!(diags.len() >= 1, "Expected at least 1 ordering diagnostic");
+    assert!(!diags.is_empty(), "Expected at least 1 ordering diagnostic");
 }
 
 #[test]
@@ -2321,7 +2321,7 @@ contract MyContract {}
     // The test uses "test.sol" as filename, which doesn't match "MyContract"
     let diags = lint_source_for_rule(source, "style/file-name-format");
     assert!(
-        diags.len() >= 1,
+        !diags.is_empty(),
         "Expected file name format diagnostic for mismatched name"
     );
 }
