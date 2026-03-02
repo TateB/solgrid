@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/solgrid",
     "crates/solgrid_ast",
+    "crates/solgrid_cache",
     "crates/solgrid_config",
     "crates/solgrid_diagnostics",
     "crates/solgrid_formatter",
@@ -20,6 +21,7 @@ repository = "https://github.com/TateB/solgrid"
 [workspace.dependencies]
 # Internal crates
 solgrid_ast = { path = "crates/solgrid_ast" }
+solgrid_cache = { path = "crates/solgrid_cache" }
 solgrid_config = { path = "crates/solgrid_config" }
 solgrid_diagnostics = { path = "crates/solgrid_diagnostics" }
 solgrid_formatter = { path = "crates/solgrid_formatter" }
@@ -41,6 +43,9 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+
+# Hashing
+sha2 = "0.10"
 
 # Parallelism
 rayon = "1"

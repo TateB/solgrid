@@ -144,33 +144,33 @@ _Two new rule categories — all rules from ARCHITECTURE.md._
 ### Chunk 10: Built-in Formatter (Phase 2)
 _Replace the Phase 1 stub with the full chunk-based IR formatter._
 
-- [ ] Design chunk-based format IR (FormatChunk: Text, Line, HardLine, Group, Indent, Comment)
-- [ ] Implement line-fitting algorithm (Wadler-Lindig style)
-- [ ] Implement comment extraction and reattachment
-- [ ] Format pragma declarations
-- [ ] Format import statements (+ sort_imports option)
-- [ ] Format contract declarations (+ contract_new_lines option)
-- [ ] Format function declarations (+ multiline_func_header option)
-- [ ] Format variable declarations (+ uint_type, number_underscore options)
-- [ ] Format expressions and statements
-- [ ] Format string literals (+ single_quote option)
-- [ ] Format spacing (+ bracket_spacing, override_spacing options)
-- [ ] Implement formatter directives (solgrid-fmt: off/on, forgefmt: disable-next-line)
-- [ ] Idempotency verification (format(format(x)) == format(x))
-- [ ] Integration tests against corpus of Solidity files
+- [x] Design chunk-based format IR (FormatChunk: Text, Line, HardLine, Group, Indent, Comment)
+- [x] Implement line-fitting algorithm (Wadler-Lindig style)
+- [x] Implement comment extraction and reattachment
+- [x] Format pragma declarations
+- [x] Format import statements (+ sort_imports option)
+- [x] Format contract declarations (+ contract_new_lines option)
+- [x] Format function declarations (+ multiline_func_header option)
+- [x] Format variable declarations (+ uint_type, number_underscore options)
+- [x] Format expressions and statements
+- [x] Format string literals (+ single_quote option)
+- [x] Format spacing (+ bracket_spacing, override_spacing options)
+- [x] Implement formatter directives (solgrid-fmt: off/on, forgefmt: disable-next-line)
+- [x] Idempotency verification (format(format(x)) == format(x))
+- [x] Integration tests against corpus of Solidity files
 
 ### Chunk 11: Incremental Caching & Extra Output Formats
 _Performance and CI integration features._
 
-- [ ] Create `solgrid_cache` crate
-- [ ] Implement content-hash-based file cache
-- [ ] Cache invalidation on config change or solgrid version upgrade
-- [ ] Implement `--no-cache` flag
-- [ ] GitHub Actions output format (`::error file=...`)
-- [ ] SARIF output format (OASIS SARIF 2.1 for CodeQL etc.)
-- [ ] `solgrid migrate --from solhint` command (read .solhint.json, write solgrid.toml)
-- [ ] Foundry.toml fallback (read `[fmt]` section when no solgrid.toml found)
-- [ ] `--stdin` support (read from stdin, write to stdout)
+- [x] Create `solgrid_cache` crate
+- [x] Implement content-hash-based file cache
+- [x] Cache invalidation on config change or solgrid version upgrade
+- [x] Implement `--no-cache` flag
+- [x] GitHub Actions output format (`::error file=...`)
+- [x] SARIF output format (OASIS SARIF 2.1 for CodeQL etc.)
+- [x] `solgrid migrate --from solhint` command (read .solhint.json, write solgrid.toml)
+- [x] Foundry.toml fallback (read `[fmt]` section when no solgrid.toml found)
+- [x] `--stdin` support (read from stdin, write to stdout)
 
 ### Chunk 12: LSP Server & VSCode Extension (Phase 3)
 _Editor integration._
@@ -229,10 +229,10 @@ _Final polish._
 | 7. Naming Expansion | **Done** | +13 | All 13 naming rules |
 | 8. Gas Rules | **Done** | +15 | New category |
 | 9. Style & Docs Rules | **Done** | +18 | Two new categories |
-| 10. Formatter | TODO | — | Full chunk-based formatter |
-| 11. Caching & CI Formats | TODO | — | Cache, SARIF, GitHub output |
+| 10. Formatter | **Done** | — | Full chunk-based formatter |
+| 11. Caching & CI Formats | **Done** | — | Cache, SARIF, GitHub output |
 | 12. LSP & VSCode | TODO | — | Editor integration |
 | 13. Prettier Plugin | TODO | — | npm plugin |
 | 14. WASM & v1.0 | TODO | — | Final polish |
 
-**Current state:** 90/90 rules implemented, working CLI, 188 tests passing.
+**Current state:** 90/90 rules implemented, full formatter, caching, SARIF/GitHub output, working CLI, 258 tests passing.

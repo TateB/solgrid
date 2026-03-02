@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+solgrid_ast = { workspace = true }
 solgrid_config = { workspace = true }
 solgrid_parser = { workspace = true }
 solar-ast = { workspace = true }
 solar-interface = { workspace = true }
 solar-parse = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

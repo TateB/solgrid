@@ -1,16 +1,34 @@
 use crate::Cli;
+use solgrid_cache::Cache;
 use solgrid_config::{resolve_config, Config};
 use solgrid_formatter::{check_formatted, format_source};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     let config = load_config(cli);
+
+    // Handle --stdin mode
+    if cli.stdin {
+        return run_stdin(&config);
+    }
+
     let files = super::discover_sol_files(paths);
 
     if files.is_empty() {
         eprintln!("No .sol files found");
         return 0;
     }
+
+    // Load cache unless --no-cache
+    let config_hash = solgrid_cache::sha256_hex(&format!("{:?}", config));
+    let mut cache = if !cli.no_cache {
+        Some(Cache::load(
+            Path::new(&config.global.cache_dir),
+            &config_hash,
+        ))
+    } else {
+        None
+    };
 
     let mut changed = 0usize;
     let mut errors = 0usize;
@@ -25,10 +43,25 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
             }
         };
 
+        let path_str = path.display().to_string();
+
+        // Check cache — skip files that are already formatted
+        if let Some(ref cache) = cache {
+            if let Some(entry) = cache.check(&path_str, &source) {
+                if entry.is_formatted {
+                    continue;
+                }
+            }
+        }
+
         if cli.diff {
             // Check mode: just report if files are not formatted
             match check_formatted(&source, &config.format) {
-                Ok(true) => {} // Already formatted
+                Ok(true) => {
+                    if let Some(ref mut cache) = cache {
+                        cache.update(&path_str, &source, 0, true);
+                    }
+                }
                 Ok(false) => {
                     eprintln!("Would reformat: {}", path.display());
                     changed += 1;
@@ -48,7 +81,12 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                             errors += 1;
                         } else {
                             changed += 1;
+                            if let Some(ref mut cache) = cache {
+                                cache.update(&path_str, &formatted, 0, true);
+                            }
                         }
+                    } else if let Some(ref mut cache) = cache {
+                        cache.update(&path_str, &source, 0, true);
                     }
                 }
                 Err(e) => {
@@ -56,6 +94,13 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                     errors += 1;
                 }
             }
+        }
+    }
+
+    // Save cache
+    if let Some(ref cache) = cache {
+        if let Err(e) = cache.save() {
+            eprintln!("warning: failed to save cache: {e}");
         }
     }
 
@@ -71,6 +116,27 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         1
     } else {
         0
+    }
+}
+
+fn run_stdin(config: &Config) -> i32 {
+    use std::io::Read;
+
+    let mut source = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut source) {
+        eprintln!("Error reading stdin: {e}");
+        return 1;
+    }
+
+    match format_source(&source, &config.format) {
+        Ok(formatted) => {
+            print!("{formatted}");
+            0
+        }
+        Err(e) => {
+            eprintln!("Error formatting: {e}");
+            1
+        }
     }
 }
 

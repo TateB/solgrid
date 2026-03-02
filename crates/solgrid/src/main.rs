@@ -18,7 +18,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
-    /// Output format: text, json
+    /// Output format: text, json, github, sarif
     #[arg(long, default_value = "text", global = true)]
     pub output_format: String,
 
@@ -37,6 +37,14 @@ pub struct Cli {
     /// Only show errors (suppress warnings and info)
     #[arg(long, global = true)]
     pub quiet: bool,
+
+    /// Read from stdin instead of files
+    #[arg(long, global = true)]
+    pub stdin: bool,
+
+    /// Disable caching
+    #[arg(long, global = true)]
+    pub no_cache: bool,
 }
 
 #[derive(Subcommand)]
@@ -63,6 +71,12 @@ enum Commands {
         /// Rule ID (e.g. "security/tx-origin")
         rule: String,
     },
+    /// Migrate configuration from another tool
+    Migrate {
+        /// Source tool to migrate from (e.g. "solhint")
+        #[arg(long)]
+        from: String,
+    },
 }
 
 fn main() {
@@ -83,6 +97,7 @@ fn main() {
         }
         Some(Commands::ListRules) => commands::list_rules::run(),
         Some(Commands::Explain { rule }) => commands::explain::run(rule),
+        Some(Commands::Migrate { from }) => commands::migrate::run(from),
         None => {
             // Default: check
             commands::check::run(&cli.paths, &cli)

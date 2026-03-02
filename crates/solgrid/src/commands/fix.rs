@@ -7,6 +7,12 @@ use std::path::PathBuf;
 
 pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     let config = load_config(cli);
+
+    // Handle --stdin mode
+    if cli.stdin {
+        return run_stdin(&config, cli);
+    }
+
     let engine = LintEngine::new();
     let files = super::discover_sol_files(paths);
 
@@ -37,7 +43,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                 // Show diff
                 eprintln!("--- {}", path.display());
                 eprintln!("+++ {}", path.display());
-                // Simple diff: just show it changed
                 for line in diff_lines(&source, &fixed_source) {
                     eprintln!("{line}");
                 }
@@ -63,6 +68,39 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     }
 
     eprintln!("Fixed {total_fixed} file(s), {total_remaining} remaining issue(s)");
+
+    if has_errors {
+        1
+    } else {
+        0
+    }
+}
+
+fn run_stdin(config: &Config, cli: &Cli) -> i32 {
+    use std::io::Read;
+    use std::path::Path;
+
+    let mut source = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut source) {
+        eprintln!("Error reading stdin: {e}");
+        return 1;
+    }
+
+    let engine = LintEngine::new();
+    let (fixed_source, remaining) =
+        engine.fix_source(&source, Path::new("<stdin>"), config, cli.unsafe_fixes);
+
+    // Write fixed source to stdout
+    print!("{fixed_source}");
+
+    let has_errors = remaining
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == Severity::Error);
+
+    if !remaining.diagnostics.is_empty() {
+        output::print_results(&[remaining], &cli.output_format);
+    }
 
     if has_errors {
         1

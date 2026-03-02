@@ -3,6 +3,7 @@ pub mod explain;
 pub mod fix;
 pub mod fmt;
 pub mod list_rules;
+pub mod migrate;
 
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};

@@ -1967,11 +1967,14 @@ dependencies = [
  "clap",
  "ignore",
  "rayon",
+ "serde",
  "serde_json",
+ "solgrid_cache",
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_formatter",
  "solgrid_linter",
+ "toml",
 ]
 
 [[package]]
@@ -1981,6 +1984,15 @@ dependencies = [
  "solar-ast",
  "solar-interface",
  "solgrid_parser",
+]
+
+[[package]]
+name = "solgrid_cache"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2003,9 +2015,11 @@ dependencies = [
 name = "solgrid_formatter"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "solar-ast",
  "solar-interface",
  "solar-parse",
+ "solgrid_ast",
  "solgrid_config",
  "solgrid_parser",
 ]
