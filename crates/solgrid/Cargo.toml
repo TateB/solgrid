@@ -1,0 +1,19 @@
+[package]
+name = "solgrid"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "solgrid"
+path = "src/main.rs"
+
+[dependencies]
+solgrid_config = { workspace = true }
+solgrid_diagnostics = { workspace = true }
+solgrid_formatter = { workspace = true }
+solgrid_linter = { workspace = true }
+clap = { workspace = true }
+ariadne = { workspace = true }
+ignore = { workspace = true }
+rayon = { workspace = true }
+serde_json = { workspace = true }

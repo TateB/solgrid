@@ -1,0 +1,9 @@
+[package]
+name = "solgrid_ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+solgrid_parser = { workspace = true }
+solar-ast = { workspace = true }
+solar-interface = { workspace = true }
