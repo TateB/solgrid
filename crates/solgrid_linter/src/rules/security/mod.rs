@@ -14,9 +14,11 @@ mod no_inline_assembly;
 mod not_rely_on_block_hash;
 mod not_rely_on_time;
 mod payable_fallback;
+mod reentrancy;
 mod state_visibility;
 mod tx_origin;
 mod unchecked_transfer;
+mod uninitialized_storage;
 
 use crate::registry::RuleRegistry;
 
@@ -38,4 +40,6 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(not_rely_on_time::NotRelyOnTimeRule));
     registry.register(Box::new(multiple_sends::MultipleSendsRule));
     registry.register(Box::new(payable_fallback::PayableFallbackRule));
+    registry.register(Box::new(reentrancy::ReentrancyRule));
+    registry.register(Box::new(uninitialized_storage::UninitializedStorageRule));
 }

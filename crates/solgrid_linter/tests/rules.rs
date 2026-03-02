@@ -1196,6 +1196,367 @@ contract Test {
 }
 
 // =============================================================================
+// Deferred Security rules
+// =============================================================================
+
+#[test]
+fn test_reentrancy_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public balance;
+    function withdraw() public {
+        (bool success, ) = msg.sender.call{value: balance}("");
+        balance = 0;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "security/reentrancy", 1);
+}
+
+#[test]
+fn test_reentrancy_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public balance;
+    function withdraw() public {
+        balance = 0;
+        (bool success, ) = msg.sender.call{value: balance}("");
+    }
+}
+"#;
+    assert_no_diagnostics(source, "security/reentrancy");
+}
+
+#[test]
+fn test_uninitialized_storage_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    struct Data { uint256 value; }
+    Data[] public items;
+    function bad() public {
+        Data storage item;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "security/uninitialized-storage", 1);
+}
+
+#[test]
+fn test_uninitialized_storage_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    struct Data { uint256 value; }
+    Data[] public items;
+    function good() public {
+        Data storage item = items[0];
+    }
+}
+"#;
+    assert_no_diagnostics(source, "security/uninitialized-storage");
+}
+
+// =============================================================================
+// Deferred Best Practices rules
+// =============================================================================
+
+#[test]
+fn test_constructor_syntax_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract MyContract {
+    function MyContract() public {}
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/constructor-syntax", 1);
+}
+
+#[test]
+fn test_constructor_syntax_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract MyContract {
+    constructor() {}
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/constructor-syntax");
+}
+
+#[test]
+fn test_use_natspec_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function doSomething() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/use-natspec", 1);
+}
+
+#[test]
+fn test_use_natspec_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Does something useful
+    function doSomething() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/use-natspec");
+}
+
+#[test]
+fn test_use_natspec_block_comment_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /**
+     * @notice Does something useful
+     */
+    function doSomething() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/use-natspec");
+}
+
+#[test]
+fn test_use_natspec_skips_internal() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _internal() internal pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/use-natspec");
+}
+
+#[test]
+fn test_natspec_params_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Transfers tokens
+    function transfer(address to, uint256 amount) public {
+    }
+}
+"#;
+    let diagnostics = lint_source_for_rule(source, "best-practices/natspec-params");
+    assert!(
+        diagnostics.len() >= 2,
+        "Expected at least 2 diagnostics for missing @param, got {}",
+        diagnostics.len()
+    );
+}
+
+#[test]
+fn test_natspec_params_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Transfers tokens
+    /// @param to Recipient address
+    /// @param amount Number of tokens
+    function transfer(address to, uint256 amount) public {
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/natspec-params");
+}
+
+#[test]
+fn test_natspec_returns_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Gets the balance
+    function getBalance() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/natspec-returns", 1);
+}
+
+#[test]
+fn test_natspec_returns_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Gets the balance
+    /// @return The current balance
+    function getBalance() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/natspec-returns");
+}
+
+#[test]
+fn test_visibility_modifier_order_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() pure public returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/visibility-modifier-order", 1);
+}
+
+#[test]
+fn test_visibility_modifier_order_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/visibility-modifier-order");
+}
+
+#[test]
+fn test_no_unused_imports_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Unused} from "some.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/no-unused-imports", 1);
+}
+
+#[test]
+fn test_no_unused_imports_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC20} from "some.sol";
+contract Test {
+    IERC20 public token;
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-imports");
+}
+
+#[test]
+fn test_no_unused_state_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private unusedVar;
+    function good() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/no-unused-state", 1);
+}
+
+#[test]
+fn test_no_unused_state_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private usedVar;
+    function good() public view returns (uint256) {
+        return usedVar;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-state");
+}
+
+#[test]
+fn test_no_unused_state_skips_public() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public notUsedButPublic;
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-state");
+}
+
+#[test]
+fn test_no_unused_vars_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() public pure returns (uint256) {
+        uint256 unused = 42;
+        return 0;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/no-unused-vars", 1);
+}
+
+#[test]
+fn test_no_unused_vars_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure returns (uint256) {
+        uint256 used = 42;
+        return used;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-vars");
+}
+
+#[test]
+fn test_no_unused_vars_underscore_prefix() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure returns (uint256) {
+        uint256 _ignored = 42;
+        return 0;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-vars");
+}
+
+// =============================================================================
 // Registry tests
 // =============================================================================
 
@@ -1203,10 +1564,10 @@ contract Test {
 fn test_registry_has_all_rules() {
     let engine = solgrid_linter::LintEngine::new();
     let registry = engine.registry();
-    // 17 security + 14 best-practices + 16 naming = 47 rules
+    // 19 security + 22 best-practices + 16 naming = 57 rules
     assert!(
-        registry.len() >= 47,
-        "Expected at least 47 rules, got {}",
+        registry.len() >= 57,
+        "Expected at least 57 rules, got {}",
         registry.len()
     );
 }
@@ -1217,8 +1578,18 @@ fn test_registry_lookup() {
     let registry = engine.registry();
     assert!(registry.get("security/tx-origin").is_some());
     assert!(registry.get("security/avoid-selfdestruct").is_some());
+    assert!(registry.get("security/reentrancy").is_some());
+    assert!(registry.get("security/uninitialized-storage").is_some());
     assert!(registry.get("naming/contract-name-capwords").is_some());
     assert!(registry.get("naming/interface-starts-with-i").is_some());
     assert!(registry.get("best-practices/no-floating-pragma").is_some());
+    assert!(registry.get("best-practices/constructor-syntax").is_some());
+    assert!(registry.get("best-practices/use-natspec").is_some());
+    assert!(registry.get("best-practices/natspec-params").is_some());
+    assert!(registry.get("best-practices/natspec-returns").is_some());
+    assert!(registry.get("best-practices/visibility-modifier-order").is_some());
+    assert!(registry.get("best-practices/no-unused-imports").is_some());
+    assert!(registry.get("best-practices/no-unused-state").is_some());
+    assert!(registry.get("best-practices/no-unused-vars").is_some());
     assert!(registry.get("nonexistent/rule").is_none());
 }

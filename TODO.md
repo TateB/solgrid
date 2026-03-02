@@ -43,7 +43,7 @@
 ### Chunk 5: Security Rules Expansion (13 rules)
 _Add remaining security rules from ARCHITECTURE.md._
 
-- [ ] `security/reentrancy` — detect state changes after external calls (CEI violation) — **semantic, complex** _(deferred: requires control-flow graph)_
+- [x] `security/reentrancy` — detect state changes after external calls (CEI violation) — heuristic linear scan
 - [x] `security/avoid-selfdestruct` — flag `selfdestruct` (deprecated in Solidity 0.8.18+)
 - [x] `security/compiler-version` — require specific or minimum compiler version (+ auto-fix suggestion)
 - [x] `security/not-rely-on-block-hash` — avoid `blockhash()` for randomness
@@ -54,29 +54,29 @@ _Add remaining security rules from ARCHITECTURE.md._
 - [x] `security/unchecked-transfer` — flag ERC20 transfer without return check
 - [x] `security/msg-value-in-loop` — flag `msg.value` access inside loops
 - [x] `security/arbitrary-send-eth` — flag send/transfer/call to user-controlled address
-- [ ] `security/uninitialized-storage` — detect uninitialized storage pointers _(deferred: requires data-flow analysis)_
+- [x] `security/uninitialized-storage` — detect uninitialized storage pointers (text heuristic)
 - [x] `security/divide-before-multiply` — detect precision loss from division before multiplication
 
 ### Chunk 6: Best Practices Rules Expansion (19 rules)
 _Add remaining best practices rules from ARCHITECTURE.md._
 
-- [ ] `best-practices/no-unused-vars` — detect unused local variables **(semantic)** _(deferred: requires scope/type resolution)_
-- [ ] `best-practices/no-unused-imports` — detect unused imports **(semantic)** _(deferred: requires scope/type resolution)_
-- [ ] `best-practices/no-unused-state` — detect unused state variables **(semantic)** _(deferred: requires scope/type resolution)_
+- [x] `best-practices/no-unused-vars` — detect unused local variables (text search heuristic + suggestion fix)
+- [x] `best-practices/no-unused-imports` — detect unused imports (text search heuristic)
+- [x] `best-practices/no-unused-state` — detect unused state variables (text search heuristic)
 - [x] `best-practices/code-complexity` — flag functions exceeding cyclomatic complexity threshold
 - [x] `best-practices/function-max-lines` — flag functions exceeding line count (default: 50)
 - [x] `best-practices/max-states-count` — flag contracts with too many state variables (default: 15)
 - [x] `best-practices/one-contract-per-file` — enforce one contract/interface/library per file
 - [x] `best-practices/no-global-import` — disallow `import "file.sol"` (+ auto-fix suggestion)
-- [ ] `best-practices/constructor-syntax` — use `constructor` keyword (+ auto-fix safe) _(deferred: modern Solidity requires constructor keyword)_
-- [ ] `best-practices/use-natspec` — require NatSpec on public/external functions _(deferred: requires NatSpec comment parsing)_
-- [ ] `best-practices/natspec-params` — NatSpec @param for every function parameter _(deferred: requires NatSpec comment parsing)_
-- [ ] `best-practices/natspec-returns` — NatSpec @return for every return value _(deferred: requires NatSpec comment parsing)_
+- [x] `best-practices/constructor-syntax` — use `constructor` keyword (+ auto-fix safe)
+- [x] `best-practices/use-natspec` — require NatSpec on public/external functions
+- [x] `best-practices/natspec-params` — NatSpec @param for every function parameter
+- [x] `best-practices/natspec-returns` — NatSpec @return for every return value
 - [x] `best-practices/reason-string` — require reason strings in require/revert
 - [x] `best-practices/custom-errors` — prefer custom errors over require with string (+ suggestion fix)
 - [x] `best-practices/no-floating-pragma` — disallow floating pragma (+ safe fix)
 - [x] `best-practices/imports-on-top` — all imports must be at the top
-- [ ] `best-practices/visibility-modifier-order` — enforce Solidity style guide order (+ safe fix) _(deferred: requires source position tracking of keywords)_
+- [x] `best-practices/visibility-modifier-order` — enforce Solidity style guide order (+ safe fix)
 - [x] `best-practices/no-unused-error` — detect declared but unused custom errors (+ suggestion fix)
 - [x] `best-practices/no-unused-event` — detect declared but unused events (+ suggestion fix)
 
@@ -224,8 +224,8 @@ _Final polish._
 | 2. Workspace & Foundation | Done | — | 8 crates scaffolded |
 | 3. Rule Engine & 12 Rules | Done | 12 | Core engine + starter rules |
 | 4. CLI & Testing | Done | — | Full CLI + 21 tests |
-| 5. Security Expansion | **Done** | +11 | 11 of 13 rules (2 deferred: semantic) |
-| 6. Best Practices Expansion | **Done** | +11 | 11 of 19 rules (8 deferred: semantic/NatSpec) |
+| 5. Security Expansion | **Done** | +13 | All 13 security rules |
+| 6. Best Practices Expansion | **Done** | +19 | All 19 best practices rules |
 | 7. Naming Expansion | **Done** | +13 | All 13 naming rules |
 | 8. Gas Rules | TODO | +15 | New category |
 | 9. Style & Docs Rules | TODO | +18 | Two new categories |
@@ -235,4 +235,4 @@ _Final polish._
 | 13. Prettier Plugin | TODO | — | npm plugin |
 | 14. WASM & v1.0 | TODO | — | Final polish |
 
-**Current state:** 47/90 rules implemented, working CLI, 88 tests passing.
+**Current state:** 57/90 rules implemented, working CLI, 112 tests passing.
