@@ -1,0 +1,102 @@
+{
+  "name": "solgrid",
+  "displayName": "solgrid",
+  "description": "Solidity linter and formatter — powered by solgrid",
+  "version": "0.1.0",
+  "publisher": "solgrid",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TateB/solgrid"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Linters",
+    "Formatters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "solidity",
+    "linter",
+    "formatter",
+    "smart-contracts",
+    "ethereum"
+  ],
+  "activationEvents": [
+    "onLanguage:solidity"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "solgrid",
+      "properties": {
+        "solgrid.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable solgrid linting and formatting."
+        },
+        "solgrid.path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Path to the solgrid binary. If null, uses the bundled binary or searches PATH."
+        },
+        "solgrid.fixOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-fix safe lint issues on save."
+        },
+        "solgrid.fixOnSave.unsafeFixes": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also apply suggestion-level (unsafe) fixes on save."
+        },
+        "solgrid.formatOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Format the file on save."
+        },
+        "solgrid.configPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Path to solgrid.toml. If null, auto-discovers from workspace root."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "solidity",
+        "extensions": [
+          ".sol"
+        ],
+        "aliases": [
+          "Solidity"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

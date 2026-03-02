@@ -12,6 +12,8 @@ A blazing-fast, Rust-native Solidity linter and formatter. One tool to replace s
 - **Foundry.toml fallback** — reads `[fmt]` section when no `solgrid.toml` is found
 - **Migration support** — `solgrid migrate --from solhint` converts `.solhint.json` to `solgrid.toml`
 - **Stdin/stdout support** — pipe Solidity through solgrid for editor integrations
+- **LSP server** — real-time linting, code actions, formatting, hover docs, and suppression completions
+- **VSCode extension** — first-class editor integration with fix-on-save and format-on-save
 - **Sub-second performance** on entire projects, powered by the Solar parser
 
 ## Quick Start
@@ -43,6 +45,9 @@ solgrid check --output-format sarif
 
 # Migrate from solhint
 solgrid migrate --from solhint
+
+# Start the LSP server (for editor integration)
+solgrid server
 ```
 
 ## Configuration
@@ -85,7 +90,7 @@ exclude = ["lib/**", "node_modules/**"]
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
-- Multi-crate Rust workspace structure (9 crates)
+- Multi-crate Rust workspace structure (10 crates)
 - Rule engine design with two-pass analysis (syntactic + semantic)
 - Complete rule set with 90 rules across 6 categories
 - Formatter with chunk-based intermediate representation
@@ -97,4 +102,38 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
 ## Status
 
-**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. 258 tests passing. See [TODO.md](./TODO.md) for detailed progress.
+**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. 304 tests passing. See [TODO.md](./TODO.md) for detailed progress.
+
+## Editor Integration
+
+### VSCode
+
+The `editors/vscode/` directory contains a VSCode extension that provides:
+
+- Real-time linting as you type
+- Quick-fix code actions grouped by safety tier (safe, suggestion, dangerous)
+- Document and range formatting
+- Fix-on-save and format-on-save
+- Rule documentation on hover
+- Suppression comment completion (`// solgrid-disable-next-line ...`)
+
+**Extension settings:**
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `solgrid.enable` | `true` | Enable solgrid |
+| `solgrid.path` | `null` | Path to solgrid binary (auto-detected from PATH) |
+| `solgrid.fixOnSave` | `true` | Auto-fix safe issues on save |
+| `solgrid.fixOnSave.unsafeFixes` | `false` | Also apply suggestion-level fixes |
+| `solgrid.formatOnSave` | `true` | Format on save |
+| `solgrid.configPath` | `null` | Path to solgrid.toml (auto-discovered) |
+
+### Other Editors
+
+Any editor with LSP support can use solgrid as a language server:
+
+```bash
+solgrid server
+```
+
+The server communicates via stdio and supports the standard LSP protocol.
