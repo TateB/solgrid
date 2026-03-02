@@ -1,4 +1,3 @@
-import * as path from "path";
 import { workspace, ExtensionContext, window } from "vscode";
 import {
   LanguageClient,
@@ -6,17 +5,23 @@ import {
   ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node";
+import {
+  SolgridConfig,
+  getServerPath,
+  getInitializationOptions,
+  getSettings,
+} from "./config";
 
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
-  const config = workspace.getConfiguration("solgrid");
+  const solgridConfig = readVSCodeConfig();
 
-  if (!config.get<boolean>("enable", true)) {
+  if (!solgridConfig.enable) {
     return;
   }
 
-  const serverPath = getServerPath(config);
+  const serverPath = getServerPath(solgridConfig);
 
   const serverOptions: ServerOptions = {
     command: serverPath,
@@ -30,9 +35,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       configurationSection: "solgrid",
       fileEvents: workspace.createFileSystemWatcher("**/solgrid.toml"),
     },
-    initializationOptions: getInitializationOptions(config),
+    initializationOptions: getInitializationOptions(solgridConfig),
     middleware: {
-      // Send configuration changes to the server
       workspace: {
         configuration: async (params, token, next) => {
           const result = await next(params, token);
@@ -53,7 +57,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("solgrid")) {
-        const newConfig = workspace.getConfiguration("solgrid");
+        const newConfig = readVSCodeConfig();
         client?.sendNotification("workspace/didChangeConfiguration", {
           settings: getSettings(newConfig),
         });
@@ -88,47 +92,16 @@ export async function deactivate(): Promise<void> {
 }
 
 /**
- * Resolve the path to the solgrid binary.
- *
- * Priority:
- * 1. User-configured `solgrid.path`
- * 2. `solgrid` on PATH
+ * Read solgrid settings from the VSCode configuration API.
  */
-function getServerPath(
-  config: ReturnType<typeof workspace.getConfiguration>
-): string {
-  const configuredPath = config.get<string | null>("path", null);
-  if (configuredPath) {
-    return configuredPath;
-  }
-
-  // Default: assume solgrid is on PATH
-  return "solgrid";
-}
-
-/**
- * Get initialization options from VSCode configuration.
- */
-function getInitializationOptions(
-  config: ReturnType<typeof workspace.getConfiguration>
-): Record<string, unknown> {
+function readVSCodeConfig(): SolgridConfig {
+  const config = workspace.getConfiguration("solgrid");
   return {
+    enable: config.get<boolean>("enable", true),
+    path: config.get<string | null>("path", null),
     fixOnSave: config.get<boolean>("fixOnSave", true),
     fixOnSaveUnsafe: config.get<boolean>("fixOnSave.unsafeFixes", false),
     formatOnSave: config.get<boolean>("formatOnSave", true),
     configPath: config.get<string | null>("configPath", null),
-  };
-}
-
-/**
- * Get current settings to send to the server.
- */
-function getSettings(
-  config: ReturnType<typeof workspace.getConfiguration>
-): Record<string, unknown> {
-  return {
-    fixOnSave: config.get<boolean>("fixOnSave", true),
-    fixOnSaveUnsafe: config.get<boolean>("fixOnSave.unsafeFixes", false),
-    formatOnSave: config.get<boolean>("formatOnSave", true),
   };
 }

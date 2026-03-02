@@ -1,0 +1,101 @@
+import { describe, it, expect } from "vitest";
+import {
+  SolgridConfig,
+  DEFAULT_CONFIG,
+  getServerPath,
+  getInitializationOptions,
+  getSettings,
+} from "./config";
+
+describe("DEFAULT_CONFIG", () => {
+  it("has sensible defaults", () => {
+    expect(DEFAULT_CONFIG.enable).toBe(true);
+    expect(DEFAULT_CONFIG.path).toBeNull();
+    expect(DEFAULT_CONFIG.fixOnSave).toBe(true);
+    expect(DEFAULT_CONFIG.fixOnSaveUnsafe).toBe(false);
+    expect(DEFAULT_CONFIG.formatOnSave).toBe(true);
+    expect(DEFAULT_CONFIG.configPath).toBeNull();
+  });
+});
+
+describe("getServerPath", () => {
+  it("returns configured path when set", () => {
+    const config: SolgridConfig = {
+      ...DEFAULT_CONFIG,
+      path: "/usr/local/bin/solgrid",
+    };
+    expect(getServerPath(config)).toBe("/usr/local/bin/solgrid");
+  });
+
+  it("returns 'solgrid' when path is null", () => {
+    const config: SolgridConfig = { ...DEFAULT_CONFIG, path: null };
+    expect(getServerPath(config)).toBe("solgrid");
+  });
+
+  it("returns 'solgrid' when path is empty string", () => {
+    const config: SolgridConfig = { ...DEFAULT_CONFIG, path: "" };
+    expect(getServerPath(config)).toBe("solgrid");
+  });
+});
+
+describe("getInitializationOptions", () => {
+  it("maps all config fields with defaults", () => {
+    const opts = getInitializationOptions(DEFAULT_CONFIG);
+    expect(opts).toEqual({
+      fixOnSave: true,
+      fixOnSaveUnsafe: false,
+      formatOnSave: true,
+      configPath: null,
+    });
+  });
+
+  it("maps custom config values", () => {
+    const config: SolgridConfig = {
+      ...DEFAULT_CONFIG,
+      fixOnSave: false,
+      fixOnSaveUnsafe: true,
+      formatOnSave: false,
+      configPath: "/path/to/solgrid.toml",
+    };
+    const opts = getInitializationOptions(config);
+    expect(opts).toEqual({
+      fixOnSave: false,
+      fixOnSaveUnsafe: true,
+      formatOnSave: false,
+      configPath: "/path/to/solgrid.toml",
+    });
+  });
+});
+
+describe("getSettings", () => {
+  it("maps all settings fields with defaults", () => {
+    const settings = getSettings(DEFAULT_CONFIG);
+    expect(settings).toEqual({
+      fixOnSave: true,
+      fixOnSaveUnsafe: false,
+      formatOnSave: true,
+    });
+  });
+
+  it("does not include configPath (not a runtime setting)", () => {
+    const settings = getSettings(DEFAULT_CONFIG);
+    expect(settings).not.toHaveProperty("configPath");
+    expect(settings).not.toHaveProperty("path");
+    expect(settings).not.toHaveProperty("enable");
+  });
+
+  it("maps custom settings values", () => {
+    const config: SolgridConfig = {
+      ...DEFAULT_CONFIG,
+      fixOnSave: false,
+      fixOnSaveUnsafe: true,
+      formatOnSave: false,
+    };
+    const settings = getSettings(config);
+    expect(settings).toEqual({
+      fixOnSave: false,
+      fixOnSaveUnsafe: true,
+      formatOnSave: false,
+    });
+  });
+});
