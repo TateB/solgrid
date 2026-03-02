@@ -66,10 +66,7 @@ impl LintEngine {
                         .lint
                         .rule_severity(&diag.rule_id, rule.meta().category)
                         .unwrap_or(diag.severity);
-                    diagnostics.push(Diagnostic {
-                        severity,
-                        ..diag
-                    });
+                    diagnostics.push(Diagnostic { severity, ..diag });
                 }
             }
         }

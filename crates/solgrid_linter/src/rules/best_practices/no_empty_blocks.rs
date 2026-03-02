@@ -5,8 +5,8 @@
 use crate::context::LintContext;
 use crate::rule::Rule;
 use solgrid_diagnostics::*;
+use solgrid_parser::solar_ast::{FunctionKind, ItemKind};
 use solgrid_parser::with_parsed_ast_sequential;
-use solgrid_parser::solar_ast::{ItemKind, FunctionKind};
 
 static META: RuleMeta = RuleMeta {
     id: "best-practices/no-empty-blocks",

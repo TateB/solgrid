@@ -48,12 +48,14 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
 
     if total_diagnostics > 0 {
         let file_count = results.iter().filter(|r| !r.diagnostics.is_empty()).count();
-        eprintln!(
-            "\nFound {total_diagnostics} issue(s) in {file_count} file(s)"
-        );
+        eprintln!("\nFound {total_diagnostics} issue(s) in {file_count} file(s)");
     }
 
-    if has_errors { 1 } else if total_diagnostics > 0 { 0 } else { 0 }
+    if has_errors {
+        1
+    } else {
+        0
+    }
 }
 
 fn load_config(cli: &Cli) -> Config {

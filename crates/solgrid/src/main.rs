@@ -70,27 +70,15 @@ fn main() {
 
     let exit_code = match &cli.command {
         Some(Commands::Check { paths }) => {
-            let paths = if paths.is_empty() {
-                &cli.paths
-            } else {
-                paths
-            };
+            let paths = if paths.is_empty() { &cli.paths } else { paths };
             commands::check::run(paths, &cli)
         }
         Some(Commands::Fix { paths }) => {
-            let paths = if paths.is_empty() {
-                &cli.paths
-            } else {
-                paths
-            };
+            let paths = if paths.is_empty() { &cli.paths } else { paths };
             commands::fix::run(paths, &cli)
         }
         Some(Commands::Fmt { paths }) => {
-            let paths = if paths.is_empty() {
-                &cli.paths
-            } else {
-                paths
-            };
+            let paths = if paths.is_empty() { &cli.paths } else { paths };
             commands::fmt::run(paths, &cli)
         }
         Some(Commands::ListRules) => commands::list_rules::run(),

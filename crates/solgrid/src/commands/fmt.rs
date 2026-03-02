@@ -67,7 +67,11 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         }
     }
 
-    if errors > 0 { 1 } else if cli.diff && changed > 0 { 1 } else { 0 }
+    if errors > 0 || (cli.diff && changed > 0) {
+        1
+    } else {
+        0
+    }
 }
 
 fn load_config(cli: &Cli) -> Config {

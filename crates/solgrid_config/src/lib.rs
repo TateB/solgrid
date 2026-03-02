@@ -9,22 +9,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Top-level solgrid configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub lint: LintConfig,
     pub format: FormatConfig,
     pub global: GlobalConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            lint: LintConfig::default(),
-            format: FormatConfig::default(),
-            global: GlobalConfig::default(),
-        }
-    }
 }
 
 /// Rule severity level in configuration.
@@ -49,21 +39,16 @@ impl From<RuleLevel> for Option<Severity> {
 }
 
 /// Rule preset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RulePreset {
     /// All rules enabled at their default severity.
     All,
     /// Recommended rules only (default).
+    #[default]
     Recommended,
     /// Security rules only.
     SecurityOnly,
-}
-
-impl Default for RulePreset {
-    fn default() -> Self {
-        Self::Recommended
-    }
 }
 
 /// Lint configuration section.
@@ -195,11 +180,7 @@ impl Default for GlobalConfig {
                 "test/**/*.sol".into(),
                 "script/**/*.sol".into(),
             ],
-            exclude: vec![
-                "lib/**".into(),
-                "node_modules/**".into(),
-                "out/**".into(),
-            ],
+            exclude: vec!["lib/**".into(), "node_modules/**".into(), "out/**".into()],
             respect_gitignore: true,
             threads: 0,
             cache_dir: ".solgrid_cache".into(),
@@ -211,8 +192,7 @@ impl Default for GlobalConfig {
 pub fn load_config(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    toml::from_str(&content)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
 /// Discover and load config by walking up the filesystem from `start_dir`.

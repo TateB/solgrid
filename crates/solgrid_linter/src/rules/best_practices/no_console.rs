@@ -24,8 +24,15 @@ impl Rule for NoConsoleRule {
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let patterns = ["console.log", "console2.log", "console.logInt", "console.logString",
-                        "console.logBool", "console.logAddress", "console.logBytes"];
+        let patterns = [
+            "console.log",
+            "console2.log",
+            "console.logInt",
+            "console.logString",
+            "console.logBool",
+            "console.logAddress",
+            "console.logBytes",
+        ];
 
         for pattern in &patterns {
             let mut search_from = 0;

@@ -1,6 +1,8 @@
 //! Integration tests for lint rules.
 
-use solgrid_testing::{assert_diagnostic_count, assert_no_diagnostics, lint_source_for_rule, fix_source};
+use solgrid_testing::{
+    assert_diagnostic_count, assert_no_diagnostics, fix_source, lint_source_for_rule,
+};
 
 // =============================================================================
 // Security rules
@@ -238,7 +240,10 @@ contract Test {
 }
 "#;
     let fixed = fix_source(source);
-    assert!(fixed.contains("keccak256("), "Expected sha3 to be replaced with keccak256");
+    assert!(
+        fixed.contains("keccak256("),
+        "Expected sha3 to be replaced with keccak256"
+    );
     assert!(!fixed.contains("sha3("), "Expected sha3 to be removed");
 }
 
@@ -254,8 +259,14 @@ contract Test {
 }
 "#;
     let fixed = fix_source(source);
-    assert!(fixed.contains("selfdestruct"), "Expected suicide to be replaced with selfdestruct");
-    assert!(!fixed.contains("suicide("), "Expected suicide to be removed");
+    assert!(
+        fixed.contains("selfdestruct"),
+        "Expected suicide to be replaced with selfdestruct"
+    );
+    assert!(
+        !fixed.contains("suicide("),
+        "Expected suicide to be removed"
+    );
 }
 
 // =============================================================================
@@ -286,7 +297,11 @@ fn test_registry_has_all_rules() {
     let engine = solgrid_linter::LintEngine::new();
     let registry = engine.registry();
     // We registered 12 rules total
-    assert!(registry.len() >= 12, "Expected at least 12 rules, got {}", registry.len());
+    assert!(
+        registry.len() >= 12,
+        "Expected at least 12 rules, got {}",
+        registry.len()
+    );
 }
 
 #[test]

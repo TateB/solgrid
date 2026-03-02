@@ -35,7 +35,10 @@ impl Rule for ExplicitTypesRule {
                 let after_pos = abs_pos + pattern.len();
                 if after_pos < ctx.source.len() {
                     let next_char = ctx.source.as_bytes()[after_pos];
-                    if next_char.is_ascii_digit() || next_char.is_ascii_alphanumeric() || next_char == b'_' {
+                    if next_char.is_ascii_digit()
+                        || next_char.is_ascii_alphanumeric()
+                        || next_char == b'_'
+                    {
                         search_from = after_pos;
                         continue;
                     }

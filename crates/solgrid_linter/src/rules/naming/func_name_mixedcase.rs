@@ -39,8 +39,7 @@ impl Rule for FuncNameMixedcaseRule {
                             if let Some(name_ident) = func.header.name {
                                 let name = name_ident.as_str();
                                 if !solgrid_ast::is_camel_case(name) {
-                                    let range =
-                                        solgrid_ast::span_to_range(name_ident.span);
+                                    let range = solgrid_ast::span_to_range(name_ident.span);
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
                                         format!(

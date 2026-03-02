@@ -39,16 +39,12 @@ impl Rule for ConstNameSnakecaseRule {
                                 if let Some(name_ident) = var.name {
                                     let name = name_ident.as_str();
                                     if !solgrid_ast::is_upper_snake_case(name) {
-                                        let range = solgrid_ast::span_to_range(
-                                            name_ident.span,
-                                        );
+                                        let range = solgrid_ast::span_to_range(name_ident.span);
                                         let kind =
                                             if is_constant { "constant" } else { "immutable" };
                                         diagnostics.push(Diagnostic::new(
                                             META.id,
-                                            format!(
-                                                "{kind} `{name}` should use UPPER_SNAKE_CASE"
-                                            ),
+                                            format!("{kind} `{name}` should use UPPER_SNAKE_CASE"),
                                             META.default_severity,
                                             range,
                                         ));
