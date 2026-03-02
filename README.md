@@ -28,4 +28,4 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
 ## Status
 
-**Pre-development** — Architecture phase. See the [roadmap](./ARCHITECTURE.md#11-project-roadmap) for planned milestones.
+**In development** — 72/90 lint rules implemented across 4 categories (security, best practices, naming, gas optimization), working CLI with check/fix/fmt/list-rules/explain commands, 148 tests passing. See [TODO.md](./TODO.md) for detailed progress.
