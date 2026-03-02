@@ -28,4 +28,4 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
 ## Status
 
-**In development** — 72/90 lint rules implemented across 4 categories (security, best practices, naming, gas optimization), working CLI with check/fix/fmt/list-rules/explain commands, 148 tests passing. See [TODO.md](./TODO.md) for detailed progress.
+**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation), working CLI with check/fix/fmt/list-rules/explain commands, 188 tests passing. See [TODO.md](./TODO.md) for detailed progress.

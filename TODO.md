@@ -120,26 +120,26 @@ _New rule category — all rules from ARCHITECTURE.md._
 ### Chunk 9: Style & Documentation Rules (18 rules)
 _Two new rule categories — all rules from ARCHITECTURE.md._
 
-- [ ] Create `rules/style/` module
-- [ ] `style/func-order` — enforce function ordering per Solidity style guide
-- [ ] `style/ordering` — enforce top-level declaration order
-- [ ] `style/imports-ordering` — sort imports alphabetically (+ safe fix)
-- [ ] `style/max-line-length` — maximum line length (default: 120)
-- [ ] `style/no-trailing-whitespace` — no trailing whitespace (+ safe fix)
-- [ ] `style/eol-last` — require newline at end of file (+ safe fix)
-- [ ] `style/no-multiple-empty-lines` — max consecutive empty lines (+ safe fix)
-- [ ] `style/contract-layout` — enforce ordering within contracts
-- [ ] `style/import-path-format` — enforce relative or absolute import paths
-- [ ] `style/file-name-format` — file names must match primary contract name
-- [ ] Create `rules/docs/` module
-- [ ] `docs/natspec-contract` — contracts must have @title and @author NatSpec
-- [ ] `docs/natspec-interface` — public interfaces must have NatSpec on all functions
-- [ ] `docs/natspec-function` — external/public functions must have @notice NatSpec
-- [ ] `docs/natspec-event` — events must have NatSpec
-- [ ] `docs/natspec-error` — custom errors must have NatSpec
-- [ ] `docs/natspec-modifier` — modifiers must have NatSpec
-- [ ] `docs/natspec-param-mismatch` — NatSpec @param names must match actual parameters (+ safe fix)
-- [ ] `docs/license-identifier` — file must contain SPDX license identifier
+- [x] Create `rules/style/` module
+- [x] `style/func-order` — enforce function ordering per Solidity style guide (+ suggestion fix)
+- [x] `style/ordering` — enforce top-level declaration order (+ suggestion fix)
+- [x] `style/imports-ordering` — sort imports alphabetically (+ safe fix)
+- [x] `style/max-line-length` — maximum line length (default: 120)
+- [x] `style/no-trailing-whitespace` — no trailing whitespace (+ safe fix)
+- [x] `style/eol-last` — require newline at end of file (+ safe fix)
+- [x] `style/no-multiple-empty-lines` — max consecutive empty lines (+ safe fix)
+- [x] `style/contract-layout` — enforce ordering within contracts (+ suggestion fix)
+- [x] `style/import-path-format` — enforce relative or absolute import paths (+ suggestion fix)
+- [x] `style/file-name-format` — file names must match primary contract name
+- [x] Create `rules/docs/` module
+- [x] `docs/natspec-contract` — contracts must have @title and @author NatSpec
+- [x] `docs/natspec-interface` — public interfaces must have NatSpec on all functions
+- [x] `docs/natspec-function` — external/public functions must have @notice NatSpec
+- [x] `docs/natspec-event` — events must have NatSpec
+- [x] `docs/natspec-error` — custom errors must have NatSpec
+- [x] `docs/natspec-modifier` — modifiers must have NatSpec
+- [x] `docs/natspec-param-mismatch` — NatSpec @param names must match actual parameters (+ safe fix)
+- [x] `docs/license-identifier` — file must contain SPDX license identifier
 
 ### Chunk 10: Built-in Formatter (Phase 2)
 _Replace the Phase 1 stub with the full chunk-based IR formatter._
@@ -228,11 +228,11 @@ _Final polish._
 | 6. Best Practices Expansion | **Done** | +19 | All 19 best practices rules |
 | 7. Naming Expansion | **Done** | +13 | All 13 naming rules |
 | 8. Gas Rules | **Done** | +15 | New category |
-| 9. Style & Docs Rules | TODO | +18 | Two new categories |
+| 9. Style & Docs Rules | **Done** | +18 | Two new categories |
 | 10. Formatter | TODO | — | Full chunk-based formatter |
 | 11. Caching & CI Formats | TODO | — | Cache, SARIF, GitHub output |
 | 12. LSP & VSCode | TODO | — | Editor integration |
 | 13. Prettier Plugin | TODO | — | npm plugin |
 | 14. WASM & v1.0 | TODO | — | Final polish |
 
-**Current state:** 72/90 rules implemented, working CLI, 148 tests passing.
+**Current state:** 90/90 rules implemented, working CLI, 188 tests passing.

@@ -2095,6 +2095,473 @@ contract Test {
 }
 
 // =============================================================================
+// Style rules
+// =============================================================================
+
+#[test]
+fn test_no_trailing_whitespace_detected() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {   \n    uint256 x;\n}\n";
+    assert_diagnostic_count(source, "style/no-trailing-whitespace", 1);
+}
+
+#[test]
+fn test_no_trailing_whitespace_clean() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    uint256 x;\n}\n";
+    assert_no_diagnostics(source, "style/no-trailing-whitespace");
+}
+
+#[test]
+fn test_no_trailing_whitespace_fix() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {   \n    uint256 x;  \n}\n";
+    let fixed = fix_source(source);
+    assert!(!fixed.contains("Test {   \n"));
+    assert!(!fixed.contains("x;  \n"));
+    assert!(fixed.contains("Test {\n"));
+    assert!(fixed.contains("x;\n"));
+}
+
+#[test]
+fn test_eol_last_detected() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {}";
+    assert_diagnostic_count(source, "style/eol-last", 1);
+}
+
+#[test]
+fn test_eol_last_clean() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {}\n";
+    assert_no_diagnostics(source, "style/eol-last");
+}
+
+#[test]
+fn test_eol_last_fix() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {}";
+    let fixed = fix_source(source);
+    assert!(fixed.ends_with('\n'));
+}
+
+#[test]
+fn test_no_multiple_empty_lines_detected() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+
+
+
+contract Test {
+    uint256 x;
+}
+"#;
+    assert_diagnostic_count(source, "style/no-multiple-empty-lines", 1);
+}
+
+#[test]
+fn test_no_multiple_empty_lines_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 x;
+}
+"#;
+    assert_no_diagnostics(source, "style/no-multiple-empty-lines");
+}
+
+#[test]
+fn test_max_line_length_detected() {
+    let source = format!(
+        "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {{\n    // {}\n}}\n",
+        "x".repeat(200)
+    );
+    assert_diagnostic_count(&source, "style/max-line-length", 1);
+}
+
+#[test]
+fn test_max_line_length_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 x;
+}
+"#;
+    assert_no_diagnostics(source, "style/max-line-length");
+}
+
+#[test]
+fn test_func_order_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() private {}
+    function bar() external {}
+}
+"#;
+    assert_diagnostic_count(source, "style/func-order", 1);
+}
+
+#[test]
+fn test_func_order_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    constructor() {}
+    function bar() external {}
+    function baz() public {}
+    function foo() private {}
+}
+"#;
+    assert_no_diagnostics(source, "style/func-order");
+}
+
+#[test]
+fn test_ordering_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+contract Test {}
+import "./Foo.sol";
+pragma solidity ^0.8.0;
+"#;
+    // import after contract, pragma after contract
+    let diags = lint_source_for_rule(source, "style/ordering");
+    assert!(!diags.is_empty(), "Expected at least 1 ordering diagnostic");
+}
+
+#[test]
+fn test_ordering_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Foo.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/ordering");
+}
+
+#[test]
+fn test_contract_layout_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() external {}
+    uint256 x;
+}
+"#;
+    assert_diagnostic_count(source, "style/contract-layout", 1);
+}
+
+#[test]
+fn test_contract_layout_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 x;
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    function foo() external {}
+}
+"#;
+    assert_no_diagnostics(source, "style/contract-layout");
+}
+
+#[test]
+fn test_imports_ordering_detected() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Zebra.sol";
+import "./Alpha.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "style/imports-ordering", 1);
+}
+
+#[test]
+fn test_imports_ordering_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Alpha.sol";
+import "./Zebra.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/imports-ordering");
+}
+
+#[test]
+fn test_import_path_format_detected() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+import "lib/External.sol";
+contract Test {}
+"#;
+    // Mix of relative and absolute - minority (absolute) should be flagged
+    assert_diagnostic_count(source, "style/import-path-format", 1);
+}
+
+#[test]
+fn test_import_path_format_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/import-path-format");
+}
+
+#[test]
+fn test_file_name_format_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract MyContract {}
+"#;
+    // The test uses "test.sol" as filename, which doesn't match "MyContract"
+    let diags = lint_source_for_rule(source, "style/file-name-format");
+    assert!(
+        !diags.is_empty(),
+        "Expected file name format diagnostic for mismatched name"
+    );
+}
+
+#[test]
+fn test_file_name_format_no_contract() {
+    // No contract = no diagnostic
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+"#;
+    assert_no_diagnostics(source, "style/file-name-format");
+}
+
+// =============================================================================
+// Documentation rules
+// =============================================================================
+
+#[test]
+fn test_license_identifier_detected() {
+    let source = r#"
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "docs/license-identifier", 1);
+}
+
+#[test]
+fn test_license_identifier_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "docs/license-identifier");
+}
+
+#[test]
+fn test_natspec_contract_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-contract", 1);
+}
+
+#[test]
+fn test_natspec_contract_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @title Test contract
+/// @author Test author
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-contract");
+}
+
+#[test]
+fn test_natspec_contract_missing_author() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @title Test contract
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-contract", 1);
+}
+
+#[test]
+fn test_natspec_interface_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function foo() external;
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-interface", 1);
+}
+
+#[test]
+fn test_natspec_interface_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    /// @notice Does foo
+    function foo() external;
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-interface");
+}
+
+#[test]
+fn test_natspec_function_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() external {}
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-function", 1);
+}
+
+#[test]
+fn test_natspec_function_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Does foo
+    function foo() external {}
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-function");
+}
+
+#[test]
+fn test_natspec_function_missing_notice() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @param x The value
+    function foo(uint256 x) external {}
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-function", 1);
+}
+
+#[test]
+fn test_natspec_event_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-event", 1);
+}
+
+#[test]
+fn test_natspec_event_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Emitted on transfer
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-event");
+}
+
+#[test]
+fn test_natspec_error_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    error Unauthorized();
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-error", 1);
+}
+
+#[test]
+fn test_natspec_error_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Thrown when unauthorized
+    error Unauthorized();
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-error");
+}
+
+#[test]
+fn test_natspec_modifier_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    modifier onlyOwner() {
+        _;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-modifier", 1);
+}
+
+#[test]
+fn test_natspec_modifier_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Restricts access to owner
+    modifier onlyOwner() {
+        _;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-modifier");
+}
+
+#[test]
+fn test_natspec_param_mismatch_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Does foo
+    /// @param wrongName The value
+    function foo(uint256 x) external {}
+}
+"#;
+    assert_diagnostic_count(source, "docs/natspec-param-mismatch", 1);
+}
+
+#[test]
+fn test_natspec_param_mismatch_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @notice Does foo
+    /// @param x The value
+    function foo(uint256 x) external {}
+}
+"#;
+    assert_no_diagnostics(source, "docs/natspec-param-mismatch");
+}
+
+// =============================================================================
 // Registry tests
 // =============================================================================
 
@@ -2102,10 +2569,10 @@ contract Test {
 fn test_registry_has_all_rules() {
     let engine = solgrid_linter::LintEngine::new();
     let registry = engine.registry();
-    // 19 security + 22 best-practices + 16 naming + 15 gas = 72 rules
+    // 19 security + 22 best-practices + 16 naming + 15 gas + 10 style + 8 docs = 90 rules
     assert!(
-        registry.len() >= 72,
-        "Expected at least 72 rules, got {}",
+        registry.len() >= 90,
+        "Expected at least 90 rules, got {}",
         registry.len()
     );
 }
@@ -2147,5 +2614,25 @@ fn test_registry_lookup() {
     assert!(registry.get("gas/no-redundant-sload").is_some());
     assert!(registry.get("gas/struct-packing").is_some());
     assert!(registry.get("gas/tight-variable-packing").is_some());
+    // Style rules
+    assert!(registry.get("style/func-order").is_some());
+    assert!(registry.get("style/ordering").is_some());
+    assert!(registry.get("style/imports-ordering").is_some());
+    assert!(registry.get("style/max-line-length").is_some());
+    assert!(registry.get("style/no-trailing-whitespace").is_some());
+    assert!(registry.get("style/eol-last").is_some());
+    assert!(registry.get("style/no-multiple-empty-lines").is_some());
+    assert!(registry.get("style/contract-layout").is_some());
+    assert!(registry.get("style/import-path-format").is_some());
+    assert!(registry.get("style/file-name-format").is_some());
+    // Docs rules
+    assert!(registry.get("docs/natspec-contract").is_some());
+    assert!(registry.get("docs/natspec-interface").is_some());
+    assert!(registry.get("docs/natspec-function").is_some());
+    assert!(registry.get("docs/natspec-event").is_some());
+    assert!(registry.get("docs/natspec-error").is_some());
+    assert!(registry.get("docs/natspec-modifier").is_some());
+    assert!(registry.get("docs/natspec-param-mismatch").is_some());
+    assert!(registry.get("docs/license-identifier").is_some());
     assert!(registry.get("nonexistent/rule").is_none());
 }
