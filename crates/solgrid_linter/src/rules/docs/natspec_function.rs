@@ -83,9 +83,7 @@ impl Rule for NatspecFunctionRule {
                                             .unwrap_or_else(|| func.kind.to_str().to_string());
                                         diagnostics.push(Diagnostic::new(
                                             META.id,
-                                            format!(
-                                                "function `{name}` NatSpec is missing @notice"
-                                            ),
+                                            format!("function `{name}` NatSpec is missing @notice"),
                                             META.default_severity,
                                             range,
                                         ));

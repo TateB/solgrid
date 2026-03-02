@@ -88,9 +88,8 @@ impl Rule for NatspecParamMismatchRule {
                                         .unwrap_or_else(|| func.kind.to_str().to_string());
 
                                     // Try to find the mismatched @param in source and create a fix
-                                    let natspec_start = span_start
-                                        .checked_sub(natspec.len() + 10)
-                                        .unwrap_or(0);
+                                    let natspec_start =
+                                        span_start.saturating_sub(natspec.len() + 10);
                                     let search_area = &ctx.source[natspec_start..span_start];
 
                                     let fix = find_param_in_source(

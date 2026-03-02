@@ -49,9 +49,7 @@ impl Rule for NatspecModifierRule {
                                 let range = solgrid_ast::span_to_range(body_item.span);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,
-                                    format!(
-                                        "modifier `{name}` is missing NatSpec documentation"
-                                    ),
+                                    format!("modifier `{name}` is missing NatSpec documentation"),
                                     META.default_severity,
                                     range,
                                 ));

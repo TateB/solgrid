@@ -52,9 +52,7 @@ impl Rule for NoMultipleEmptyLinesRule {
                                 start..offset,
                             )
                             .with_fix(Fix::safe(
-                                format!(
-                                    "Collapse to {MAX_CONSECUTIVE_EMPTY} empty lines"
-                                ),
+                                format!("Collapse to {MAX_CONSECUTIVE_EMPTY} empty lines"),
                                 vec![TextEdit::delete(start..offset)],
                             )),
                         );

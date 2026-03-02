@@ -20,9 +20,7 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(max_line_length::MaxLineLengthRule));
     registry.register(Box::new(no_trailing_whitespace::NoTrailingWhitespaceRule));
     registry.register(Box::new(eol_last::EolLastRule));
-    registry.register(Box::new(
-        no_multiple_empty_lines::NoMultipleEmptyLinesRule,
-    ));
+    registry.register(Box::new(no_multiple_empty_lines::NoMultipleEmptyLinesRule));
     registry.register(Box::new(contract_layout::ContractLayoutRule));
     registry.register(Box::new(import_path_format::ImportPathFormatRule));
     registry.register(Box::new(file_name_format::FileNameFormatRule));

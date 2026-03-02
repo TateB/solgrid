@@ -18,8 +18,6 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(natspec_event::NatspecEventRule));
     registry.register(Box::new(natspec_error::NatspecErrorRule));
     registry.register(Box::new(natspec_modifier::NatspecModifierRule));
-    registry.register(Box::new(
-        natspec_param_mismatch::NatspecParamMismatchRule,
-    ));
+    registry.register(Box::new(natspec_param_mismatch::NatspecParamMismatchRule));
     registry.register(Box::new(license_identifier::LicenseIdentifierRule));
 }

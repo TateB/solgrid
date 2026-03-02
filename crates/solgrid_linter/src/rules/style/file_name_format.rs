@@ -40,7 +40,9 @@ impl Rule for FileNameFormatRule {
                 if let ItemKind::Contract(contract) = &item.kind {
                     let name = contract.name.as_str();
                     match contract.kind {
-                        ContractKind::Contract | ContractKind::Interface | ContractKind::Library => {
+                        ContractKind::Contract
+                        | ContractKind::Interface
+                        | ContractKind::Library => {
                             primary_name = Some(name.to_string());
                             break;
                         }

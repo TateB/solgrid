@@ -68,7 +68,8 @@ impl Rule for ImportsOrderingRule {
                         META.id,
                         format!(
                             "import `{}` should appear before `{}`",
-                            imports[i].2, imports[i - 1].2
+                            imports[i].2,
+                            imports[i - 1].2
                         ),
                         META.default_severity,
                         imports[i].0..imports[i].1,

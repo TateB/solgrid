@@ -27,7 +27,7 @@ impl Rule for NoTrailingWhitespaceRule {
         let mut offset = 0;
 
         for line in ctx.source.split('\n') {
-            let trimmed = line.trim_end_matches(|c: char| c == ' ' || c == '\t');
+            let trimmed = line.trim_end_matches([' ', '\t']);
             if trimmed.len() < line.len() {
                 let ws_start = offset + trimmed.len();
                 let ws_end = offset + line.len();
