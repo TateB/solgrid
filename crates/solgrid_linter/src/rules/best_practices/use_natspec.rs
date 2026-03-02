@@ -133,7 +133,11 @@ pub(crate) fn extract_natspec(source: &str, item_start: usize) -> Option<String>
 pub(crate) fn parse_natspec_params(natspec: &str) -> Vec<String> {
     let mut params = Vec::new();
     for line in natspec.lines() {
-        let trimmed = line.trim().trim_start_matches('/').trim_start_matches('*').trim();
+        let trimmed = line
+            .trim()
+            .trim_start_matches('/')
+            .trim_start_matches('*')
+            .trim();
         if let Some(rest) = trimmed.strip_prefix("@param") {
             let rest = rest.trim();
             // The first word after @param is the parameter name
@@ -149,7 +153,11 @@ pub(crate) fn parse_natspec_params(natspec: &str) -> Vec<String> {
 pub(crate) fn count_natspec_returns(natspec: &str) -> usize {
     let mut count = 0;
     for line in natspec.lines() {
-        let trimmed = line.trim().trim_start_matches('/').trim_start_matches('*').trim();
+        let trimmed = line
+            .trim()
+            .trim_start_matches('/')
+            .trim_start_matches('*')
+            .trim();
         if trimmed.starts_with("@return") {
             count += 1;
         }

@@ -24,11 +24,11 @@ pub struct VisibilityModifierOrderRule;
 /// Solidity style guide order: visibility, mutability, virtual, override, custom modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ModCategory {
-    Visibility,  // public, external, internal, private
-    Mutability,  // pure, view, payable
-    Virtual,     // virtual
-    Override,    // override
-    Custom,      // user-defined modifiers
+    Visibility, // public, external, internal, private
+    Mutability, // pure, view, payable
+    Virtual,    // virtual
+    Override,   // override
+    Custom,     // user-defined modifiers
 }
 
 fn classify_keyword(word: &str) -> ModCategory {
@@ -195,11 +195,11 @@ fn parse_modifiers(area: &str) -> Vec<(String, ModCategory)> {
 /// Remove parenthetical content after `override` keyword.
 fn remove_override_params(area: &str) -> String {
     let mut result = String::new();
-    let mut chars = area.chars().peekable();
+    let chars = area.chars().peekable();
     let mut in_override_parens = false;
     let mut depth = 0;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         if in_override_parens {
             match ch {
                 '(' => depth += 1,

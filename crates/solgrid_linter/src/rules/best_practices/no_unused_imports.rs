@@ -54,9 +54,7 @@ impl Rule for NoUnusedImportsRule {
                                         let name_range = solgrid_ast::span_to_range(alias.0.span);
                                         let diag = Diagnostic::new(
                                             META.id,
-                                            format!(
-                                                "imported symbol `{imported_name}` is unused"
-                                            ),
+                                            format!("imported symbol `{imported_name}` is unused"),
                                             META.default_severity,
                                             name_range,
                                         );
@@ -77,9 +75,7 @@ impl Rule for NoUnusedImportsRule {
                                     let name_range = solgrid_ast::span_to_range(alias.span);
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
-                                        format!(
-                                            "imported symbol `{alias_name}` is unused"
-                                        ),
+                                        format!("imported symbol `{alias_name}` is unused"),
                                         META.default_severity,
                                         name_range,
                                     ));

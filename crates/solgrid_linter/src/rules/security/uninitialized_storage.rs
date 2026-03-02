@@ -76,7 +76,7 @@ impl Rule for UninitializedStorageRule {
                 // Variable name should be a single identifier
                 if !var_name.is_empty()
                     && var_name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                    && var_name.chars().next().map_or(false, |c| c.is_alphabetic() || c == '_')
+                    && var_name.starts_with(|c: char| c.is_alphabetic() || c == '_')
                 {
                     // Calculate byte offset for this line
                     let line_start = ctx
@@ -91,9 +91,7 @@ impl Rule for UninitializedStorageRule {
 
                     diagnostics.push(Diagnostic::new(
                         META.id,
-                        format!(
-                            "local storage variable `{var_name}` is not initialized"
-                        ),
+                        format!("local storage variable `{var_name}` is not initialized"),
                         META.default_severity,
                         abs_start..abs_end,
                     ));

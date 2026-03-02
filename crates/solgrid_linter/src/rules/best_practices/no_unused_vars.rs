@@ -95,10 +95,7 @@ fn collect_var_decls(stmts: &[Stmt<'_>]) -> Vec<(String, std::ops::Range<usize>)
     decls
 }
 
-fn collect_var_decls_from_stmt(
-    stmt: &Stmt<'_>,
-    decls: &mut Vec<(String, std::ops::Range<usize>)>,
-) {
+fn collect_var_decls_from_stmt(stmt: &Stmt<'_>, decls: &mut Vec<(String, std::ops::Range<usize>)>) {
     match &stmt.kind {
         StmtKind::DeclSingle(var_def) => {
             if let Some(name_ident) = var_def.name {

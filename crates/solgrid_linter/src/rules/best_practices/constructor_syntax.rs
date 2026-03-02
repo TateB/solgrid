@@ -36,11 +36,15 @@ impl Rule for ConstructorSyntaxRule {
                     for body_item in contract.body.iter() {
                         if let ItemKind::Function(func) = &body_item.kind {
                             // Check if a regular function has the same name as the contract
-                            if matches!(func.kind, solgrid_parser::solar_ast::FunctionKind::Function) {
+                            if matches!(
+                                func.kind,
+                                solgrid_parser::solar_ast::FunctionKind::Function
+                            ) {
                                 if let Some(name) = func.header.name {
                                     if name.as_str() == contract_name {
                                         let range = solgrid_ast::span_to_range(body_item.span);
-                                        let func_text = solgrid_ast::span_text(ctx.source, body_item.span);
+                                        let func_text =
+                                            solgrid_ast::span_text(ctx.source, body_item.span);
 
                                         let mut diag = Diagnostic::new(
                                             META.id,

@@ -1587,7 +1587,9 @@ fn test_registry_lookup() {
     assert!(registry.get("best-practices/use-natspec").is_some());
     assert!(registry.get("best-practices/natspec-params").is_some());
     assert!(registry.get("best-practices/natspec-returns").is_some());
-    assert!(registry.get("best-practices/visibility-modifier-order").is_some());
+    assert!(registry
+        .get("best-practices/visibility-modifier-order")
+        .is_some());
     assert!(registry.get("best-practices/no-unused-imports").is_some());
     assert!(registry.get("best-practices/no-unused-state").is_some());
     assert!(registry.get("best-practices/no-unused-vars").is_some());

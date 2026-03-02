@@ -22,7 +22,8 @@ static META: RuleMeta = RuleMeta {
 pub struct ReentrancyRule;
 
 /// External call patterns to detect.
-const EXTERNAL_CALL_PATTERNS: &[&str] = &[".call(", ".call{", ".send(", ".transfer(", ".delegatecall("];
+const EXTERNAL_CALL_PATTERNS: &[&str] =
+    &[".call(", ".call{", ".send(", ".transfer(", ".delegatecall("];
 
 impl Rule for ReentrancyRule {
     fn meta(&self) -> &RuleMeta {
@@ -154,7 +155,7 @@ fn assigns_state_var<'a>(stmt_text: &str, state_vars: &'a [String]) -> Option<&'
             format!("{var} -="),
             format!("{var} *="),
             format!("{var} /="),
-            format!("{var}["),   // array element assignment
+            format!("{var}["), // array element assignment
             format!("{var}++"),
             format!("{var}--"),
             format!("++{var}"),
