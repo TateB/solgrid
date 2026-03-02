@@ -1,25 +1,46 @@
-//! Minimal solgrid formatter (Phase 1 stub).
+//! solgrid formatter — chunk-based IR Solidity formatter.
 //!
-//! Full chunk-based IR formatter is planned for Phase 2.
-//! For now, this validates syntax and applies basic normalizations.
+//! Formats Solidity source code using a Wadler-Lindig inspired
+//! intermediate representation with line-fitting.
+
+pub mod comments;
+pub mod directives;
+pub mod format;
+pub mod format_expr;
+pub mod format_item;
+pub mod format_stmt;
+pub mod format_ty;
+pub mod ir;
+pub mod printer;
 
 use solgrid_config::FormatConfig;
 
 /// Format Solidity source code.
 ///
-/// Phase 1: Returns the source as-is after validating syntax.
-/// Phase 2 will implement the full chunk-based formatter.
-pub fn format_source(source: &str, _config: &FormatConfig) -> Result<String, String> {
-    // Validate syntax
-    solgrid_parser::check_syntax(source, "<stdin>").map_err(|e| format!("syntax error: {e}"))?;
-
-    // Phase 1: return source as-is
-    // TODO: Implement chunk-based IR formatter
-    Ok(source.to_string())
+/// Parses the source, builds a chunk-based IR, and prints it with
+/// line-fitting according to the provided configuration.
+pub fn format_source(source: &str, config: &FormatConfig) -> Result<String, String> {
+    solgrid_parser::with_parsed_ast_sequential(source, "<stdin>", |ast| {
+        let ir = format::format_source_unit(source, ast, config);
+        printer::print_chunks(&ir, config)
+    })
+    .map_err(|e| format!("syntax error: {e}"))
 }
 
 /// Check if source is already formatted.
 pub fn check_formatted(source: &str, config: &FormatConfig) -> Result<bool, String> {
     let formatted = format_source(source, config)?;
     Ok(formatted == source)
+}
+
+/// Format source code and verify idempotency.
+///
+/// Returns an error if formatting is not idempotent (format(format(x)) != format(x)).
+pub fn format_source_verified(source: &str, config: &FormatConfig) -> Result<String, String> {
+    let first = format_source(source, config)?;
+    let second = format_source(&first, config)?;
+    if first != second {
+        return Err("formatter is not idempotent: format(format(x)) != format(x)".into());
+    }
+    Ok(first)
 }

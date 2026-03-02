@@ -196,6 +196,7 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
 }
 
 /// Discover and load config by walking up the filesystem from `start_dir`.
+/// Falls back to foundry.toml `[fmt]` section if no solgrid.toml is found.
 /// Returns default config if no config file is found.
 pub fn resolve_config(start_dir: &Path) -> Config {
     if let Some(path) = find_config_file(start_dir) {
@@ -206,6 +207,17 @@ pub fn resolve_config(start_dir: &Path) -> Config {
             }
         }
     }
+
+    // Fallback: try foundry.toml
+    if let Some(path) = find_foundry_toml(start_dir) {
+        match load_foundry_fmt_config(&path) {
+            Ok(config) => return config,
+            Err(e) => {
+                eprintln!("warning: {e}, using defaults");
+            }
+        }
+    }
+
     Config::default()
 }
 
@@ -222,4 +234,82 @@ pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Find the nearest `foundry.toml` by walking up from `start_dir`.
+fn find_foundry_toml(start_dir: &Path) -> Option<PathBuf> {
+    let mut current = start_dir.to_path_buf();
+    loop {
+        let config_path = current.join("foundry.toml");
+        if config_path.exists() {
+            return Some(config_path);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// Load format config from a foundry.toml `[fmt]` section.
+fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let table: toml::Table =
+        toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+
+    let mut config = Config::default();
+
+    if let Some(fmt) = table.get("fmt").and_then(|v| v.as_table()) {
+        if let Some(v) = fmt.get("line_length").and_then(|v| v.as_integer()) {
+            config.format.line_length = v as usize;
+        }
+        if let Some(v) = fmt.get("tab_width").and_then(|v| v.as_integer()) {
+            config.format.tab_width = v as usize;
+        }
+        if let Some(v) = fmt.get("bracket_spacing").and_then(|v| v.as_bool()) {
+            config.format.bracket_spacing = v;
+        }
+        if let Some(v) = fmt.get("quote_style").and_then(|v| v.as_str()) {
+            config.format.single_quote = v == "single";
+        }
+        if let Some(v) = fmt.get("int_types").and_then(|v| v.as_str()) {
+            config.format.uint_type = match v {
+                "long" => UintType::Long,
+                "short" => UintType::Short,
+                "preserve" => UintType::Preserve,
+                _ => UintType::Long,
+            };
+        }
+        if let Some(v) = fmt.get("number_underscore").and_then(|v| v.as_str()) {
+            config.format.number_underscore = match v {
+                "thousands" => NumberUnderscore::Thousands,
+                "remove" => NumberUnderscore::Remove,
+                "preserve" => NumberUnderscore::Preserve,
+                _ => NumberUnderscore::Preserve,
+            };
+        }
+        if let Some(v) = fmt.get("multiline_func_header").and_then(|v| v.as_str()) {
+            config.format.multiline_func_header = match v {
+                "attributes_first" => MultilineFuncHeader::AttributesFirst,
+                "params_first" => MultilineFuncHeader::ParamsFirst,
+                "all" => MultilineFuncHeader::All,
+                _ => MultilineFuncHeader::AttributesFirst,
+            };
+        }
+        if let Some(v) = fmt.get("sort_imports").and_then(|v| v.as_bool()) {
+            config.format.sort_imports = v;
+        }
+        if let Some(v) = fmt.get("contract_new_lines").and_then(|v| v.as_bool()) {
+            config.format.contract_new_lines = v;
+        }
+        if let Some(v) = fmt.get("override_spacing").and_then(|v| v.as_bool()) {
+            config.format.override_spacing = v;
+        }
+        if let Some(v) = fmt.get("wrap_comments").and_then(|v| v.as_bool()) {
+            config.format.wrap_comments = v;
+        }
+    }
+
+    Ok(config)
 }
