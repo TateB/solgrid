@@ -15,14 +15,16 @@ pub fn run(rule_id: &str) -> i32 {
             "Auto-fix: {}",
             match meta.fix_availability {
                 FixAvailability::None => "not available".to_string(),
-                FixAvailability::Available(safety) =>
-                    format!("available ({safety})"),
+                FixAvailability::Available(safety) => format!("available ({safety})"),
             }
         );
         println!();
         println!("Configuration:");
         println!("  [lint.rules]");
-        println!("  \"{}\" = \"warn\"  # or \"error\", \"info\", \"off\"", meta.id);
+        println!(
+            "  \"{}\" = \"warn\"  # or \"error\", \"info\", \"off\"",
+            meta.id
+        );
         0
     } else {
         eprintln!("Unknown rule: {rule_id}");

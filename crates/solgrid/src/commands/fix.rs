@@ -29,8 +29,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
             }
         };
 
-        let (fixed_source, remaining) =
-            engine.fix_source(&source, path, &config, cli.unsafe_fixes);
+        let (fixed_source, remaining) = engine.fix_source(&source, path, &config, cli.unsafe_fixes);
 
         if fixed_source != source {
             total_fixed += 1;
@@ -42,14 +41,16 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                 for line in diff_lines(&source, &fixed_source) {
                     eprintln!("{line}");
                 }
-            } else {
-                if let Err(e) = std::fs::write(path, &fixed_source) {
-                    eprintln!("Error writing {}: {e}", path.display());
-                }
+            } else if let Err(e) = std::fs::write(path, &fixed_source) {
+                eprintln!("Error writing {}: {e}", path.display());
             }
         }
 
-        if remaining.diagnostics.iter().any(|d| d.severity == Severity::Error) {
+        if remaining
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
+        {
             has_errors = true;
         }
         total_remaining += remaining.diagnostics.len();
@@ -63,7 +64,11 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
 
     eprintln!("Fixed {total_fixed} file(s), {total_remaining} remaining issue(s)");
 
-    if has_errors { 1 } else { 0 }
+    if has_errors {
+        1
+    } else {
+        0
+    }
 }
 
 fn load_config(cli: &Cli) -> Config {

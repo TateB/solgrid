@@ -94,19 +94,13 @@ fn parse_comment_directive(
             if prefix.ends_with("next-line") {
                 let target_line = line_num + 1;
                 if let Some(id) = rule_id {
-                    suppressed_lines
-                        .entry(target_line)
-                        .or_default()
-                        .insert(id);
+                    suppressed_lines.entry(target_line).or_default().insert(id);
                 } else {
                     blanket_suppressed_lines.insert(target_line);
                 }
             } else if prefix.ends_with("disable-line") {
                 if let Some(id) = rule_id {
-                    suppressed_lines
-                        .entry(line_num)
-                        .or_default()
-                        .insert(id);
+                    suppressed_lines.entry(line_num).or_default().insert(id);
                 } else {
                     blanket_suppressed_lines.insert(line_num);
                 }

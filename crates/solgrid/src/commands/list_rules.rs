@@ -7,7 +7,7 @@ pub fn run() -> i32 {
     let mut metas: Vec<_> = registry.all_meta();
     metas.sort_by_key(|m| m.id);
 
-    println!("{:<35} {:<15} {:<10} {}", "Rule", "Category", "Severity", "Fix");
+    println!("{:<35} {:<15} {:<10} Fix", "Rule", "Category", "Severity");
     println!("{}", "-".repeat(75));
 
     for meta in metas {

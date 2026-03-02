@@ -31,10 +31,7 @@ pub fn discover_sol_files(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn collect_sol_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    let walker = WalkBuilder::new(dir)
-        .hidden(true)
-        .git_ignore(true)
-        .build();
+    let walker = WalkBuilder::new(dir).hidden(true).git_ignore(true).build();
 
     for entry in walker.flatten() {
         let path = entry.path();

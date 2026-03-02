@@ -11,8 +11,7 @@ use solgrid_config::FormatConfig;
 /// Phase 2 will implement the full chunk-based formatter.
 pub fn format_source(source: &str, _config: &FormatConfig) -> Result<String, String> {
     // Validate syntax
-    solgrid_parser::check_syntax(source, "<stdin>")
-        .map_err(|e| format!("syntax error: {e}"))?;
+    solgrid_parser::check_syntax(source, "<stdin>").map_err(|e| format!("syntax error: {e}"))?;
 
     // Phase 1: return source as-is
     // TODO: Implement chunk-based IR formatter

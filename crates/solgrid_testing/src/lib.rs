@@ -2,9 +2,9 @@
 //!
 //! Provides helpers for writing concise rule tests.
 
+use solgrid_config::Config;
 use solgrid_diagnostics::Diagnostic;
 use solgrid_linter::LintEngine;
-use solgrid_config::Config;
 use std::path::Path;
 
 pub use solgrid_diagnostics;

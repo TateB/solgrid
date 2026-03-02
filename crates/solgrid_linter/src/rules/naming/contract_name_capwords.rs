@@ -34,9 +34,7 @@ impl Rule for ContractNameCapwordsRule {
                         let range = solgrid_ast::span_to_range(contract.name.span);
                         diagnostics.push(Diagnostic::new(
                             META.id,
-                            format!(
-                                "contract name `{name}` should use CapWords (PascalCase)"
-                            ),
+                            format!("contract name `{name}` should use CapWords (PascalCase)"),
                             META.default_severity,
                             range,
                         ));

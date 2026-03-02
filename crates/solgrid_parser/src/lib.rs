@@ -47,8 +47,7 @@ where
         .build();
     sess.enter(|| -> Result<T, ParseError> {
         let arena = solar_ast::Arena::new();
-        let filename_obj =
-            solar_interface::source_map::FileName::Custom(filename.to_string());
+        let filename_obj = solar_interface::source_map::FileName::Custom(filename.to_string());
         let parser =
             solar_parse::Parser::from_source_code(&sess, &arena, filename_obj, source.to_string());
         match parser {
@@ -85,8 +84,7 @@ where
         .build();
     sess.enter_sequential(|| -> Result<T, ParseError> {
         let arena = solar_ast::Arena::new();
-        let filename_obj =
-            solar_interface::source_map::FileName::Custom(filename.to_string());
+        let filename_obj = solar_interface::source_map::FileName::Custom(filename.to_string());
         let parser =
             solar_parse::Parser::from_source_code(&sess, &arena, filename_obj, source.to_string());
         match parser {

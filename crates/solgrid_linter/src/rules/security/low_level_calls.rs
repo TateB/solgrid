@@ -30,7 +30,7 @@ impl Rule for LowLevelCallsRule {
             let mut search_from = 0;
             while let Some(pos) = ctx.source[search_from..].find(pattern) {
                 let abs_pos = search_from + pos;
-                let method = pattern.trim_start_matches('.').trim_end_matches(|c| c == '(' || c == '{');
+                let method = pattern.trim_start_matches('.').trim_end_matches(['(', '{']);
                 diagnostics.push(Diagnostic::new(
                     META.id,
                     format!("avoid using low-level `.{method}()`"),

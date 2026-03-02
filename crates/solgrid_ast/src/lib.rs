@@ -16,7 +16,7 @@ pub fn span_to_range(span: Span) -> std::ops::Range<usize> {
 }
 
 /// Get the source text for a span.
-pub fn span_text<'a>(source: &'a str, span: Span) -> &'a str {
+pub fn span_text(source: &str, span: Span) -> &str {
     let range = span_to_range(span);
     &source[range]
 }
@@ -48,7 +48,8 @@ pub fn is_upper_snake_case(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    s.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
+    s.chars()
+        .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// Check if a variable definition is a state variable (at contract level, not local).
@@ -95,10 +96,10 @@ pub fn is_member_call(expr: &solar_ast::Expr<'_>, member_names: &[&str]) -> bool
 }
 
 /// Iterate over all items inside a contract body.
-pub fn contract_items<'a>(
-    items: &'a [Item<'a>],
-) -> impl Iterator<Item = &'a Item<'a>> {
-    items.iter().filter(|item| matches!(item.kind, ItemKind::Contract(_)))
+pub fn contract_items<'a>(items: &'a [Item<'a>]) -> impl Iterator<Item = &'a Item<'a>> {
+    items
+        .iter()
+        .filter(|item| matches!(item.kind, ItemKind::Contract(_)))
         .flat_map(|item| {
             if let ItemKind::Contract(contract) = &item.kind {
                 contract.body.iter().collect::<Vec<_>>()
