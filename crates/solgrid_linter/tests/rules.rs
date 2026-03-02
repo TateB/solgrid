@@ -1557,6 +1557,544 @@ contract Test {
 }
 
 // =============================================================================
+// Gas Optimization rules (Chunk 8)
+// =============================================================================
+
+#[test]
+fn test_bool_storage_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    bool public paused;
+}
+"#;
+    assert_diagnostic_count(source, "gas/bool-storage", 1);
+}
+
+#[test]
+fn test_bool_storage_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public paused;
+}
+"#;
+    assert_no_diagnostics(source, "gas/bool-storage");
+}
+
+#[test]
+fn test_increment_by_one_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() public pure {
+        uint256 i = 0;
+        i += 1;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/increment-by-one", 1);
+}
+
+#[test]
+fn test_increment_by_one_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure {
+        uint256 i = 0;
+        ++i;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/increment-by-one");
+}
+
+#[test]
+fn test_increment_by_one_not_triggered_by_larger() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure {
+        uint256 i = 0;
+        i += 10;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/increment-by-one");
+}
+
+#[test]
+fn test_fix_increment_by_one() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() public pure {
+        uint256 i = 0;
+        i += 1;
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("++i"),
+        "Expected `i += 1` to be replaced with `++i`"
+    );
+}
+
+#[test]
+fn test_cache_array_length_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256[] public arr;
+    function bad() public view {
+        for (uint256 i = 0; i < arr.length; i++) {
+        }
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/cache-array-length", 1);
+}
+
+#[test]
+fn test_cache_array_length_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256[] public arr;
+    function good() public view {
+        uint256 len = arr.length;
+        for (uint256 i = 0; i < len; i++) {
+        }
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/cache-array-length");
+}
+
+#[test]
+fn test_unchecked_increment_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() public pure {
+        for (uint256 i = 0; i < 10; i++) {
+        }
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/unchecked-increment", 1);
+}
+
+#[test]
+fn test_unchecked_increment_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure {
+        for (uint256 i = 0; i < 10; ) {
+            unchecked { ++i; }
+        }
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/unchecked-increment");
+}
+
+#[test]
+fn test_small_strings_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "This is a very long error message that exceeds thirty-two bytes of length easily");
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/small-strings", 1);
+}
+
+#[test]
+fn test_small_strings_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good(uint256 x) public pure {
+        require(x > 0, "too low");
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/small-strings");
+}
+
+#[test]
+fn test_gas_custom_errors_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "too low");
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/custom-errors", 1);
+}
+
+#[test]
+fn test_gas_custom_errors_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    error TooLow();
+    function good(uint256 x) public pure {
+        if (x == 0) revert TooLow();
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/custom-errors");
+}
+
+#[test]
+fn test_use_bytes32_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    string public name = "MyToken";
+}
+"#;
+    assert_diagnostic_count(source, "gas/use-bytes32", 1);
+}
+
+#[test]
+fn test_use_bytes32_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    bytes32 public name;
+}
+"#;
+    assert_no_diagnostics(source, "gas/use-bytes32");
+}
+
+#[test]
+fn test_calldata_parameters_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad(string memory name) external pure returns (bytes32) {
+        return keccak256(bytes(name));
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/calldata-parameters", 1);
+}
+
+#[test]
+fn test_calldata_parameters_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good(string calldata name) external pure returns (bytes32) {
+        return keccak256(bytes(name));
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/calldata-parameters");
+}
+
+#[test]
+fn test_calldata_parameters_internal_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _internal(string memory name) internal pure returns (bytes32) {
+        return keccak256(bytes(name));
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/calldata-parameters");
+}
+
+#[test]
+fn test_fix_calldata_parameters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad(string memory name) external pure returns (bytes32) {
+        return keccak256(bytes(name));
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("calldata"),
+        "Expected `memory` to be replaced with `calldata`"
+    );
+}
+
+#[test]
+fn test_indexed_events_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Transfer(address from, address to, uint256 amount);
+}
+"#;
+    let diagnostics = lint_source_for_rule(source, "gas/indexed-events");
+    assert!(
+        !diagnostics.is_empty(),
+        "Expected at least 1 diagnostic for indexed-events, got 0",
+    );
+}
+
+#[test]
+fn test_indexed_events_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Transfer(address indexed from, address indexed to, uint256 indexed amount);
+}
+"#;
+    assert_no_diagnostics(source, "gas/indexed-events");
+}
+
+#[test]
+fn test_named_return_values_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function bad() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/named-return-values", 1);
+}
+
+#[test]
+fn test_named_return_values_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure returns (uint256 amount) {
+        amount = 42;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/named-return-values");
+}
+
+#[test]
+fn test_named_return_values_no_returns_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function good() public pure {}
+}
+"#;
+    assert_no_diagnostics(source, "gas/named-return-values");
+}
+
+#[test]
+fn test_use_constant_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public MAX_SUPPLY = 1000000;
+    function get() public view returns (uint256) {
+        return MAX_SUPPLY;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/use-constant", 1);
+}
+
+#[test]
+fn test_use_constant_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public constant MAX_SUPPLY = 1000000;
+}
+"#;
+    assert_no_diagnostics(source, "gas/use-constant");
+}
+
+#[test]
+fn test_use_immutable_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    address public owner;
+    constructor() {
+        owner = msg.sender;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/use-immutable", 1);
+}
+
+#[test]
+fn test_use_immutable_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    address public immutable owner;
+    constructor() {
+        owner = msg.sender;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/use-immutable");
+}
+
+#[test]
+fn test_use_immutable_assigned_elsewhere_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    address public owner;
+    constructor() {
+        owner = msg.sender;
+    }
+    function transferOwnership(address newOwner) public {
+        owner = newOwner;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/use-immutable");
+}
+
+#[test]
+fn test_no_redundant_sload_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public totalSupply;
+    function bad() public view returns (uint256) {
+        uint256 a = totalSupply;
+        uint256 b = totalSupply;
+        return a + b;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/no-redundant-sload", 1);
+}
+
+#[test]
+fn test_no_redundant_sload_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public totalSupply;
+    function good() public view returns (uint256) {
+        uint256 cached = totalSupply;
+        return cached + cached;
+    }
+}
+"#;
+    // totalSupply is only read once in the function
+    assert_no_diagnostics(source, "gas/no-redundant-sload");
+}
+
+#[test]
+fn test_struct_packing_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    struct Bad {
+        uint256 a;
+        uint8 b;
+        uint256 c;
+        uint8 d;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "gas/struct-packing", 1);
+}
+
+#[test]
+fn test_struct_packing_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    struct Good {
+        uint8 b;
+        uint8 d;
+        uint256 a;
+        uint256 c;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "gas/struct-packing");
+}
+
+#[test]
+fn test_tight_variable_packing_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 a;
+    uint8 b;
+    uint256 c;
+    uint8 d;
+}
+"#;
+    assert_diagnostic_count(source, "gas/tight-variable-packing", 1);
+}
+
+#[test]
+fn test_tight_variable_packing_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint8 b;
+    uint8 d;
+    uint256 a;
+    uint256 c;
+}
+"#;
+    assert_no_diagnostics(source, "gas/tight-variable-packing");
+}
+
+// =============================================================================
 // Registry tests
 // =============================================================================
 
@@ -1564,10 +2102,10 @@ contract Test {
 fn test_registry_has_all_rules() {
     let engine = solgrid_linter::LintEngine::new();
     let registry = engine.registry();
-    // 19 security + 22 best-practices + 16 naming = 57 rules
+    // 19 security + 22 best-practices + 16 naming + 15 gas = 72 rules
     assert!(
-        registry.len() >= 57,
-        "Expected at least 57 rules, got {}",
+        registry.len() >= 72,
+        "Expected at least 72 rules, got {}",
         registry.len()
     );
 }
@@ -1593,5 +2131,21 @@ fn test_registry_lookup() {
     assert!(registry.get("best-practices/no-unused-imports").is_some());
     assert!(registry.get("best-practices/no-unused-state").is_some());
     assert!(registry.get("best-practices/no-unused-vars").is_some());
+    // Gas rules
+    assert!(registry.get("gas/bool-storage").is_some());
+    assert!(registry.get("gas/increment-by-one").is_some());
+    assert!(registry.get("gas/cache-array-length").is_some());
+    assert!(registry.get("gas/unchecked-increment").is_some());
+    assert!(registry.get("gas/small-strings").is_some());
+    assert!(registry.get("gas/custom-errors").is_some());
+    assert!(registry.get("gas/use-bytes32").is_some());
+    assert!(registry.get("gas/calldata-parameters").is_some());
+    assert!(registry.get("gas/indexed-events").is_some());
+    assert!(registry.get("gas/named-return-values").is_some());
+    assert!(registry.get("gas/use-constant").is_some());
+    assert!(registry.get("gas/use-immutable").is_some());
+    assert!(registry.get("gas/no-redundant-sload").is_some());
+    assert!(registry.get("gas/struct-packing").is_some());
+    assert!(registry.get("gas/tight-variable-packing").is_some());
     assert!(registry.get("nonexistent/rule").is_none());
 }

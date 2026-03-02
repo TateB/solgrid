@@ -100,22 +100,22 @@ _Add remaining naming rules from ARCHITECTURE.md._
 ### Chunk 8: Gas Optimization Rules (15 rules)
 _New rule category — all rules from ARCHITECTURE.md._
 
-- [ ] Create `rules/gas/` module
-- [ ] `gas/calldata-parameters` — use `calldata` instead of `memory` for read-only external params (+ safe fix)
-- [ ] `gas/custom-errors` — custom errors cheaper than require with string (+ suggestion fix)
-- [ ] `gas/increment-by-one` — use `++i` instead of `i += 1` (+ safe fix)
-- [ ] `gas/indexed-events` — index event parameters for cheaper filtering (+ suggestion fix)
-- [ ] `gas/named-return-values` — named return values avoid a stack variable (+ suggestion fix)
-- [ ] `gas/small-strings` — short strings in require/revert save gas
-- [ ] `gas/struct-packing` — reorder struct fields for optimal storage packing (+ suggestion fix)
-- [ ] `gas/cache-array-length` — cache `array.length` outside loops (+ safe fix)
-- [ ] `gas/use-immutable` — variables assigned only in constructor should be `immutable` (+ suggestion fix)
-- [ ] `gas/use-constant` — compile-time-known values should be `constant` (+ suggestion fix)
-- [ ] `gas/unchecked-increment` — loop counters can use `unchecked { ++i; }` (+ safe fix)
-- [ ] `gas/no-redundant-sload` — cache state variable reads used multiple times (+ suggestion fix)
-- [ ] `gas/bool-storage` — `bool` in storage costs more than `uint256`
-- [ ] `gas/tight-variable-packing` — pack adjacent storage variables (+ suggestion fix)
-- [ ] `gas/use-bytes32` — use `bytes32` instead of `string` for short fixed strings (+ suggestion fix)
+- [x] Create `rules/gas/` module
+- [x] `gas/calldata-parameters` — use `calldata` instead of `memory` for read-only external params (+ safe fix)
+- [x] `gas/custom-errors` — custom errors cheaper than require with string (+ suggestion fix)
+- [x] `gas/increment-by-one` — use `++i` instead of `i += 1` (+ safe fix)
+- [x] `gas/indexed-events` — index event parameters for cheaper filtering (+ suggestion fix)
+- [x] `gas/named-return-values` — named return values avoid a stack variable (+ suggestion fix)
+- [x] `gas/small-strings` — short strings in require/revert save gas
+- [x] `gas/struct-packing` — reorder struct fields for optimal storage packing (+ suggestion fix)
+- [x] `gas/cache-array-length` — cache `array.length` outside loops (+ safe fix)
+- [x] `gas/use-immutable` — variables assigned only in constructor should be `immutable` (+ suggestion fix)
+- [x] `gas/use-constant` — compile-time-known values should be `constant` (+ suggestion fix)
+- [x] `gas/unchecked-increment` — loop counters can use `unchecked { ++i; }` (+ safe fix)
+- [x] `gas/no-redundant-sload` — cache state variable reads used multiple times (+ suggestion fix)
+- [x] `gas/bool-storage` — `bool` in storage costs more than `uint256`
+- [x] `gas/tight-variable-packing` — pack adjacent storage variables (+ suggestion fix)
+- [x] `gas/use-bytes32` — use `bytes32` instead of `string` for short fixed strings (+ suggestion fix)
 
 ### Chunk 9: Style & Documentation Rules (18 rules)
 _Two new rule categories — all rules from ARCHITECTURE.md._
@@ -227,7 +227,7 @@ _Final polish._
 | 5. Security Expansion | **Done** | +13 | All 13 security rules |
 | 6. Best Practices Expansion | **Done** | +19 | All 19 best practices rules |
 | 7. Naming Expansion | **Done** | +13 | All 13 naming rules |
-| 8. Gas Rules | TODO | +15 | New category |
+| 8. Gas Rules | **Done** | +15 | New category |
 | 9. Style & Docs Rules | TODO | +18 | Two new categories |
 | 10. Formatter | TODO | — | Full chunk-based formatter |
 | 11. Caching & CI Formats | TODO | — | Cache, SARIF, GitHub output |
@@ -235,4 +235,4 @@ _Final polish._
 | 13. Prettier Plugin | TODO | — | npm plugin |
 | 14. WASM & v1.0 | TODO | — | Final polish |
 
-**Current state:** 57/90 rules implemented, working CLI, 112 tests passing.
+**Current state:** 72/90 rules implemented, working CLI, 148 tests passing.
