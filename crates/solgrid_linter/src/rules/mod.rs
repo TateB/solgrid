@@ -1,9 +1,11 @@
 //! Lint rule implementations organized by category.
 
 pub mod best_practices;
+pub mod docs;
 pub mod gas;
 pub mod naming;
 pub mod security;
+pub mod style;
 
 use crate::registry::RuleRegistry;
 
@@ -13,4 +15,6 @@ pub fn register_all(registry: &mut RuleRegistry) {
     best_practices::register(registry);
     naming::register(registry);
     gas::register(registry);
+    style::register(registry);
+    docs::register(registry);
 }

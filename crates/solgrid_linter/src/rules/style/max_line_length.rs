@@ -1,0 +1,51 @@
+//! Rule: style/max-line-length
+//!
+//! Enforce a maximum line length (default: 120 characters).
+
+use crate::context::LintContext;
+use crate::rule::Rule;
+use solgrid_diagnostics::*;
+
+static META: RuleMeta = RuleMeta {
+    id: "style/max-line-length",
+    name: "max-line-length",
+    category: RuleCategory::Style,
+    default_severity: Severity::Info,
+    description: "line length must not exceed 120 characters",
+    fix_availability: FixAvailability::None,
+};
+
+pub struct MaxLineLengthRule;
+
+const DEFAULT_MAX_LENGTH: usize = 120;
+
+impl Rule for MaxLineLengthRule {
+    fn meta(&self) -> &RuleMeta {
+        &META
+    }
+
+    fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut offset = 0;
+
+        for (line_idx, line) in ctx.source.split('\n').enumerate() {
+            let char_count = line.chars().count();
+            if char_count > DEFAULT_MAX_LENGTH {
+                diagnostics.push(Diagnostic::new(
+                    META.id,
+                    format!(
+                        "line {} exceeds maximum length ({} > {})",
+                        line_idx + 1,
+                        char_count,
+                        DEFAULT_MAX_LENGTH
+                    ),
+                    META.default_severity,
+                    offset..offset + line.len(),
+                ));
+            }
+            offset += line.len() + 1; // +1 for '\n'
+        }
+
+        diagnostics
+    }
+}
