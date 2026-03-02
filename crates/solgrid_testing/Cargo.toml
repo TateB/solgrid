@@ -1,0 +1,11 @@
+[package]
+name = "solgrid_testing"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+solgrid_config = { workspace = true }
+solgrid_diagnostics = { workspace = true }
+solgrid_linter = { workspace = true }
+solgrid_parser = { workspace = true }
+insta = { workspace = true }

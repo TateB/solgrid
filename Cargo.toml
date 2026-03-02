@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/solgrid",
+    "crates/solgrid_ast",
+    "crates/solgrid_config",
+    "crates/solgrid_diagnostics",
+    "crates/solgrid_formatter",
+    "crates/solgrid_linter",
+    "crates/solgrid_parser",
+    "crates/solgrid_testing",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TateB/solgrid"
+
+[workspace.dependencies]
+# Internal crates
+solgrid_ast = { path = "crates/solgrid_ast" }
+solgrid_config = { path = "crates/solgrid_config" }
+solgrid_diagnostics = { path = "crates/solgrid_diagnostics" }
+solgrid_formatter = { path = "crates/solgrid_formatter" }
+solgrid_linter = { path = "crates/solgrid_linter" }
+solgrid_parser = { path = "crates/solgrid_parser" }
+solgrid_testing = { path = "crates/solgrid_testing" }
+
+# Solar parser
+solar-ast = "0.1"
+solar-config = "0.1"
+solar-data-structures = "0.1"
+solar-interface = "0.1"
+solar-parse = "0.1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Parallelism
+rayon = "1"
+
+# File discovery
+ignore = "0.4"
+glob = "0.3"
+
+# Diagnostic rendering
+ariadne = "0.5"
+
+# Testing
+insta = { version = "1", features = ["yaml"] }

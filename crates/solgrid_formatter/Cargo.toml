@@ -1,0 +1,11 @@
+[package]
+name = "solgrid_formatter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+solgrid_config = { workspace = true }
+solgrid_parser = { workspace = true }
+solar-ast = { workspace = true }
+solar-interface = { workspace = true }
+solar-parse = { workspace = true }
