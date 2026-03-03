@@ -30,11 +30,15 @@ export const DEFAULT_CONFIG: SolgridConfig = {
  *
  * Priority:
  * 1. User-configured `solgrid.path`
- * 2. `"solgrid"` (assumes it's on PATH)
+ * 2. `SOLGRID_BIN` environment variable
+ * 3. `"solgrid"` (assumes it's on PATH)
  */
 export function getServerPath(config: SolgridConfig): string {
   if (config.path) {
     return config.path;
+  }
+  if (process.env.SOLGRID_BIN) {
+    return process.env.SOLGRID_BIN;
   }
   return "solgrid";
 }

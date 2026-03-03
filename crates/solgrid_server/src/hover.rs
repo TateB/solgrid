@@ -2,16 +2,16 @@
 
 use solgrid_diagnostics::{FixAvailability, RuleMeta};
 use solgrid_linter::LintEngine;
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Generate hover information for a position in a document.
 ///
 /// If the position overlaps with a diagnostic, shows the rule documentation.
 pub fn hover_for_diagnostic(
     engine: &LintEngine,
-    lsp_diagnostics: &[lsp_types::Diagnostic],
-    position: &lsp_types::Position,
-) -> Option<lsp_types::Hover> {
+    lsp_diagnostics: &[ls_types::Diagnostic],
+    position: &ls_types::Position,
+) -> Option<ls_types::Hover> {
     // Find diagnostics at this position
     for diag in lsp_diagnostics {
         if !position_in_range(position, &diag.range) {
@@ -20,7 +20,7 @@ pub fn hover_for_diagnostic(
 
         // Extract rule ID from the diagnostic code
         let rule_id = match &diag.code {
-            Some(lsp_types::NumberOrString::String(id)) => id.as_str(),
+            Some(ls_types::NumberOrString::String(id)) => id.as_str(),
             _ => continue,
         };
 
@@ -28,9 +28,9 @@ pub fn hover_for_diagnostic(
         if let Some(rule) = engine.registry().get(rule_id) {
             let meta = rule.meta();
             let content = format_rule_documentation(meta);
-            return Some(lsp_types::Hover {
-                contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
-                    kind: lsp_types::MarkupKind::Markdown,
+            return Some(ls_types::Hover {
+                contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+                    kind: ls_types::MarkupKind::Markdown,
                     value: content,
                 }),
                 range: Some(diag.range),
@@ -68,7 +68,7 @@ pub fn format_rule_documentation(meta: &RuleMeta) -> String {
 }
 
 /// Check if a position falls within a range.
-fn position_in_range(position: &lsp_types::Position, range: &lsp_types::Range) -> bool {
+fn position_in_range(position: &ls_types::Position, range: &ls_types::Range) -> bool {
     if position.line < range.start.line || position.line > range.end.line {
         return false;
     }
@@ -88,17 +88,17 @@ mod tests {
 
     #[test]
     fn test_position_in_range() {
-        let range = lsp_types::Range {
-            start: lsp_types::Position::new(1, 5),
-            end: lsp_types::Position::new(1, 15),
+        let range = ls_types::Range {
+            start: ls_types::Position::new(1, 5),
+            end: ls_types::Position::new(1, 15),
         };
-        assert!(position_in_range(&lsp_types::Position::new(1, 5), &range));
-        assert!(position_in_range(&lsp_types::Position::new(1, 10), &range));
-        assert!(position_in_range(&lsp_types::Position::new(1, 15), &range));
-        assert!(!position_in_range(&lsp_types::Position::new(0, 5), &range));
-        assert!(!position_in_range(&lsp_types::Position::new(1, 4), &range));
-        assert!(!position_in_range(&lsp_types::Position::new(1, 16), &range));
-        assert!(!position_in_range(&lsp_types::Position::new(2, 5), &range));
+        assert!(position_in_range(&ls_types::Position::new(1, 5), &range));
+        assert!(position_in_range(&ls_types::Position::new(1, 10), &range));
+        assert!(position_in_range(&ls_types::Position::new(1, 15), &range));
+        assert!(!position_in_range(&ls_types::Position::new(0, 5), &range));
+        assert!(!position_in_range(&ls_types::Position::new(1, 4), &range));
+        assert!(!position_in_range(&ls_types::Position::new(1, 16), &range));
+        assert!(!position_in_range(&ls_types::Position::new(2, 5), &range));
     }
 
     #[test]
@@ -123,13 +123,13 @@ mod tests {
     fn test_hover_for_diagnostic_found() {
         let engine = LintEngine::new();
 
-        let lsp_diags = vec![lsp_types::Diagnostic {
-            range: lsp_types::Range {
-                start: lsp_types::Position::new(5, 8),
-                end: lsp_types::Position::new(5, 30),
+        let lsp_diags = vec![ls_types::Diagnostic {
+            range: ls_types::Range {
+                start: ls_types::Position::new(5, 8),
+                end: ls_types::Position::new(5, 30),
             },
-            severity: Some(lsp_types::DiagnosticSeverity::ERROR),
-            code: Some(lsp_types::NumberOrString::String(
+            severity: Some(ls_types::DiagnosticSeverity::ERROR),
+            code: Some(ls_types::NumberOrString::String(
                 "security/tx-origin".into(),
             )),
             source: Some("solgrid".into()),
@@ -137,11 +137,11 @@ mod tests {
             ..Default::default()
         }];
 
-        let hover = hover_for_diagnostic(&engine, &lsp_diags, &lsp_types::Position::new(5, 15));
+        let hover = hover_for_diagnostic(&engine, &lsp_diags, &ls_types::Position::new(5, 15));
         assert!(hover.is_some());
         let hover = hover.unwrap();
         match hover.contents {
-            lsp_types::HoverContents::Markup(markup) => {
+            ls_types::HoverContents::Markup(markup) => {
                 assert!(markup.value.contains("tx-origin"));
             }
             _ => panic!("expected markup content"),
@@ -152,7 +152,7 @@ mod tests {
     fn test_hover_for_diagnostic_not_found() {
         let engine = LintEngine::new();
         let lsp_diags = vec![];
-        let hover = hover_for_diagnostic(&engine, &lsp_diags, &lsp_types::Position::new(0, 0));
+        let hover = hover_for_diagnostic(&engine, &lsp_diags, &ls_types::Position::new(0, 0));
         assert!(hover.is_none());
     }
 }

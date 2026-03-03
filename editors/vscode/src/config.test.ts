@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   SolgridConfig,
   DEFAULT_CONFIG,
@@ -19,6 +19,21 @@ describe("DEFAULT_CONFIG", () => {
 });
 
 describe("getServerPath", () => {
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.SOLGRID_BIN;
+    delete process.env.SOLGRID_BIN;
+  });
+
+  afterEach(() => {
+    if (savedEnv !== undefined) {
+      process.env.SOLGRID_BIN = savedEnv;
+    } else {
+      delete process.env.SOLGRID_BIN;
+    }
+  });
+
   it("returns configured path when set", () => {
     const config: SolgridConfig = {
       ...DEFAULT_CONFIG,
@@ -27,12 +42,27 @@ describe("getServerPath", () => {
     expect(getServerPath(config)).toBe("/usr/local/bin/solgrid");
   });
 
-  it("returns 'solgrid' when path is null", () => {
+  it("prefers configured path over SOLGRID_BIN", () => {
+    process.env.SOLGRID_BIN = "/env/bin/solgrid";
+    const config: SolgridConfig = {
+      ...DEFAULT_CONFIG,
+      path: "/usr/local/bin/solgrid",
+    };
+    expect(getServerPath(config)).toBe("/usr/local/bin/solgrid");
+  });
+
+  it("returns SOLGRID_BIN when path is null", () => {
+    process.env.SOLGRID_BIN = "/env/bin/solgrid";
+    const config: SolgridConfig = { ...DEFAULT_CONFIG, path: null };
+    expect(getServerPath(config)).toBe("/env/bin/solgrid");
+  });
+
+  it("returns 'solgrid' when path is null and SOLGRID_BIN is unset", () => {
     const config: SolgridConfig = { ...DEFAULT_CONFIG, path: null };
     expect(getServerPath(config)).toBe("solgrid");
   });
 
-  it("returns 'solgrid' when path is empty string", () => {
+  it("returns 'solgrid' when path is empty string and SOLGRID_BIN is unset", () => {
     const config: SolgridConfig = { ...DEFAULT_CONFIG, path: "" };
     expect(getServerPath(config)).toBe("solgrid");
   });

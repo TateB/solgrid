@@ -128,6 +128,10 @@ The `editors/vscode/` directory contains a VSCode extension that provides:
 | `solgrid.formatOnSave` | `true` | Format on save |
 | `solgrid.configPath` | `null` | Path to solgrid.toml (auto-discovered) |
 
+### Cursor
+
+Cursor uses the same Extension Host and LSP protocol as VSCode. The solgrid extension works in Cursor without modification. The LSP integration tests verify protocol-level behavior that applies to both editors.
+
 ### Other Editors
 
 Any editor with LSP support can use solgrid as a language server:
@@ -137,3 +141,46 @@ solgrid server
 ```
 
 The server communicates via stdio and supports the standard LSP protocol.
+
+## Development & Testing
+
+### Rust tests
+
+```bash
+cargo test --workspace
+```
+
+### VSCode extension — unit tests
+
+```bash
+cd editors/vscode
+pnpm install
+pnpm test:unit
+```
+
+### VSCode extension — LSP integration tests
+
+These tests spawn the `solgrid server` binary and verify all LSP features (diagnostics, code actions, formatting, hover, completion, configuration, fix-on-save) via the protocol. They apply to any LSP-compatible editor, including both VSCode and Cursor.
+
+```bash
+# Build the solgrid binary first
+cargo build -p solgrid
+
+# Run integration tests
+cd editors/vscode
+SOLGRID_BIN=../../target/debug/solgrid pnpm test:integration
+```
+
+### VSCode extension — e2e tests
+
+These tests launch a real VSCode instance with the extension installed and verify activation, diagnostics, and editor commands.
+
+```bash
+cargo build -p solgrid
+cd editors/vscode
+SOLGRID_BIN=../../target/debug/solgrid pnpm test:e2e
+```
+
+### CI
+
+The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, and VSCode e2e tests.

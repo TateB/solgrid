@@ -1,4 +1,4 @@
-//! LSP server — main server implementation using tower-lsp.
+//! LSP server — main server implementation using tower-lsp-server.
 
 use crate::document::DocumentStore;
 use crate::{actions, completion, convert, diagnostics, format, hover};
@@ -7,9 +7,9 @@ use solgrid_linter::LintEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer};
 
 /// Server settings from the client.
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ pub struct SolgridServer {
     config: Arc<RwLock<Config>>,
     settings: Arc<RwLock<ServerSettings>>,
     /// Cache of last-published LSP diagnostics per URI, for hover lookups.
-    published_diagnostics: Arc<RwLock<std::collections::HashMap<Url, Vec<Diagnostic>>>>,
+    published_diagnostics: Arc<RwLock<std::collections::HashMap<Uri, Vec<Diagnostic>>>>,
 }
 
 impl SolgridServer {
@@ -53,7 +53,7 @@ impl SolgridServer {
     }
 
     /// Lint a document and publish diagnostics to the client.
-    async fn lint_and_publish(&self, uri: &Url) {
+    async fn lint_and_publish(&self, uri: &Uri) {
         let documents = self.documents.read().await;
         let doc = match documents.get(uri) {
             Some(doc) => doc,
@@ -71,7 +71,10 @@ impl SolgridServer {
 
         // Cache the diagnostics for hover lookups
         {
-            let mut cache = self.published_diagnostics.write().await;
+            let mut cache: tokio::sync::RwLockWriteGuard<
+                '_,
+                std::collections::HashMap<Uri, Vec<Diagnostic>>,
+            > = self.published_diagnostics.write().await;
             cache.insert(uri.clone(), lsp_diags.clone());
         }
 
@@ -81,7 +84,7 @@ impl SolgridServer {
     }
 
     /// Apply fix-on-save and/or format-on-save edits.
-    async fn on_save_actions(&self, uri: &Url) {
+    async fn on_save_actions(&self, uri: &Uri) {
         let settings = self.settings.read().await.clone();
         let documents = self.documents.read().await;
         let doc = match documents.get(uri) {
@@ -124,12 +127,18 @@ impl SolgridServer {
     }
 }
 
-#[tower_lsp::async_trait]
 impl LanguageServer for SolgridServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         // Try to load config from the workspace root
-        if let Some(root_uri) = params.root_uri {
-            if let Some(root_path) = uri_to_path_option(&root_uri) {
+        let root_uri = params
+            .workspace_folders
+            .as_ref()
+            .and_then(|folders| folders.first())
+            .map(|f| &f.uri);
+        #[allow(deprecated)]
+        let root_uri = root_uri.or(params.root_uri.as_ref());
+        if let Some(root_uri) = root_uri {
+            if let Some(root_path) = uri_to_path_option(root_uri) {
                 let resolved = solgrid_config::resolve_config(&root_path);
                 let mut config = self.config.write().await;
                 *config = resolved;
@@ -239,7 +248,10 @@ impl LanguageServer for SolgridServer {
         }
         // Clear diagnostics for closed files
         {
-            let mut cache = self.published_diagnostics.write().await;
+            let mut cache: tokio::sync::RwLockWriteGuard<
+                '_,
+                std::collections::HashMap<Uri, Vec<Diagnostic>>,
+            > = self.published_diagnostics.write().await;
             cache.remove(&uri);
         }
         self.client.publish_diagnostics(uri, vec![], None).await;
@@ -420,8 +432,11 @@ impl LanguageServer for SolgridServer {
 
         let position = &params.text_document_position_params.position;
 
-        let cache = self.published_diagnostics.read().await;
-        let lsp_diags = match cache.get(uri) {
+        let cache: tokio::sync::RwLockReadGuard<
+            '_,
+            std::collections::HashMap<Uri, Vec<Diagnostic>>,
+        > = self.published_diagnostics.read().await;
+        let lsp_diags: Vec<Diagnostic> = match cache.get(uri) {
             Some(diags) => diags.clone(),
             None => return Ok(None),
         };
@@ -477,7 +492,7 @@ impl LanguageServer for SolgridServer {
         }
 
         // Re-lint all open documents with new config
-        let uris: Vec<Url> = {
+        let uris: Vec<Uri> = {
             let documents = self.documents.read().await;
             documents.uris().cloned().collect()
         };
@@ -498,19 +513,20 @@ struct ClientSettings {
 }
 
 /// Check if a URI points to a Solidity file.
-fn is_solidity_file(uri: &Url) -> bool {
-    uri.path().ends_with(".sol")
+fn is_solidity_file(uri: &Uri) -> bool {
+    uri.as_str().ends_with(".sol")
 }
 
 /// Convert a URI to a filesystem path.
-fn uri_to_path(uri: &Url) -> PathBuf {
+fn uri_to_path(uri: &Uri) -> PathBuf {
     uri.to_file_path()
-        .unwrap_or_else(|_| PathBuf::from(uri.path()))
+        .map(|p| p.into_owned())
+        .unwrap_or_else(|| PathBuf::from(uri.path().as_str()))
 }
 
 /// Try to convert a URI to a filesystem path.
-fn uri_to_path_option(uri: &Url) -> Option<PathBuf> {
-    uri.to_file_path().ok()
+fn uri_to_path_option(uri: &Uri) -> Option<PathBuf> {
+    uri.to_file_path().map(|p| p.into_owned())
 }
 
 /// Compute the LSP range covering the entire document.
@@ -527,8 +543,8 @@ pub async fn run_server() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = tower_lsp::LspService::new(SolgridServer::new);
-    tower_lsp::Server::new(stdin, stdout, socket)
+    let (service, socket) = tower_lsp_server::LspService::new(SolgridServer::new);
+    tower_lsp_server::Server::new(stdin, stdout, socket)
         .serve(service)
         .await;
 }
@@ -539,17 +555,23 @@ mod tests {
 
     #[test]
     fn test_is_solidity_file() {
-        assert!(is_solidity_file(&Url::parse("file:///test.sol").unwrap()));
         assert!(is_solidity_file(
-            &Url::parse("file:///path/to/Contract.sol").unwrap()
+            &"file:///test.sol".parse::<Uri>().unwrap()
         ));
-        assert!(!is_solidity_file(&Url::parse("file:///test.ts").unwrap()));
-        assert!(!is_solidity_file(&Url::parse("file:///test.rs").unwrap()));
+        assert!(is_solidity_file(
+            &"file:///path/to/Contract.sol".parse::<Uri>().unwrap()
+        ));
+        assert!(!is_solidity_file(
+            &"file:///test.ts".parse::<Uri>().unwrap()
+        ));
+        assert!(!is_solidity_file(
+            &"file:///test.rs".parse::<Uri>().unwrap()
+        ));
     }
 
     #[test]
     fn test_uri_to_path() {
-        let uri = Url::parse("file:///home/user/test.sol").unwrap();
+        let uri: Uri = "file:///home/user/test.sol".parse().unwrap();
         let path = uri_to_path(&uri);
         assert_eq!(path, PathBuf::from("/home/user/test.sol"));
     }

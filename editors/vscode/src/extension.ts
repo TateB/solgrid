@@ -3,7 +3,6 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
-  TransportKind,
 } from "vscode-languageclient/node";
 import {
   SolgridConfig,
@@ -23,10 +22,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   const serverPath = getServerPath(solgridConfig);
 
+  // Note: don't set `transport: TransportKind.stdio` — it adds `--stdio` to
+  // the command args, which solgrid doesn't accept. Omitting transport defaults
+  // to stdio communication without adding extra flags.
   const serverOptions: ServerOptions = {
     command: serverPath,
     args: ["server"],
-    transport: TransportKind.stdio,
   };
 
   const clientOptions: LanguageClientOptions = {
@@ -78,6 +79,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   try {
     await client.start();
   } catch (error) {
+    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
     window.showErrorMessage(
       `Failed to start solgrid language server: ${error}`
     );
