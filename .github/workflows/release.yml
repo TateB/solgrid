@@ -11,8 +11,27 @@ env:
   BINARY_NAME: solgrid
 
 jobs:
+  validate-version:
+    name: Validate tag version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches Cargo.toml version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(grep -A5 '^\[workspace\.package\]' Cargo.toml | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Tag version:   $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "ERROR: Tag version ($TAG_VERSION) does not match Cargo.toml ($CARGO_VERSION)" >&2
+            exit 1
+          fi
+      - name: Verify all package versions are in sync
+        run: bash scripts/version.sh
+
   build:
     name: Build ${{ matrix.vscode-target }}
+    needs: validate-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -148,3 +167,38 @@ jobs:
           done
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+  npm-publish:
+    name: Publish Prettier Plugin to npm
+    needs: validate-version
+    runs-on: ubuntu-latest
+    if: ${{ vars.NPM_TOKEN != '' || secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the NAPI native addon
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install
+        working-directory: packages/prettier-plugin-solgrid
+
+      - run: pnpm run build:napi
+        working-directory: packages/prettier-plugin-solgrid
+
+      - run: pnpm test
+        working-directory: packages/prettier-plugin-solgrid
+
+      - name: Publish to npm
+        working-directory: packages/prettier-plugin-solgrid
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

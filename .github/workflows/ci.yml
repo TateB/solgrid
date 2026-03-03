@@ -145,3 +145,11 @@ jobs:
       # Run tests
       - run: pnpm test
         working-directory: packages/prettier-plugin-solgrid
+
+  version-check:
+    name: Version Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify versions are in sync
+        run: bash scripts/version.sh

@@ -2385,6 +2385,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "clap",
+ "criterion",
  "ignore",
  "rayon",
  "serde",
@@ -2510,6 +2511,19 @@ dependencies = [
  "solgrid_diagnostics",
  "solgrid_linter",
  "solgrid_parser",
+]
+
+[[package]]
+name = "solgrid_wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "solgrid_config",
+ "solgrid_diagnostics",
+ "solgrid_formatter",
+ "solgrid_linter",
+ "wasm-bindgen",
 ]
 
 [[package]]

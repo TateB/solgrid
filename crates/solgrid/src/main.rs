@@ -5,8 +5,24 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process;
 
+fn long_version() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (",
+        env!("SOLGRID_GIT_HASH"),
+        " ",
+        env!("SOLGRID_BUILD_DATE"),
+        ")"
+    )
+}
+
 #[derive(Parser)]
-#[command(name = "solgrid", version, about = "The Solidity linter and formatter")]
+#[command(
+    name = "solgrid",
+    version,
+    long_version = long_version(),
+    about = "The Solidity linter and formatter"
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
