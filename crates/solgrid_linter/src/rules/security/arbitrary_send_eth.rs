@@ -145,7 +145,7 @@ fn is_in_comment_or_string(source: &str, pos: usize) -> bool {
     }
     // Check if inside a string literal (simple heuristic)
     let double_quotes = before.matches('"').count();
-    if double_quotes % 2 != 0 {
+    if !double_quotes.is_multiple_of(2) {
         return true;
     }
     false
