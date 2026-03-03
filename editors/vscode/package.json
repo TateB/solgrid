@@ -85,7 +85,7 @@
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
-    "compile:tests": "tsc -p ./tsconfig.test.json",
+    "compile:tests": "tsc -p ./ && tsc -p ./tsconfig.test.json",
     "watch": "tsc -watch -p ./",
     "test": "vitest run --project unit",
     "test:unit": "vitest run --project unit",
