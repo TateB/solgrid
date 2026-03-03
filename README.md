@@ -103,7 +103,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
 ## Status
 
-**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. Prettier plugin with NAPI-RS bindings. Release workflow with platform-specific binaries and VSIX packages. 309+ tests passing. See [TODO.md](./TODO.md) for detailed progress.
+**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. Prettier plugin with NAPI-RS bindings and conformance test suite. WASM crate for browser/web playground use. Release workflow with platform-specific binaries and VSIX packages. Robust versioning with single source of truth. 350+ tests passing. See [TODO.md](./TODO.md) for detailed progress.
 
 ## Editor Integration
 
@@ -227,10 +227,61 @@ cargo bench --workspace
 # Run formatter benchmarks only
 cargo bench -p solgrid_formatter
 
-# Run linter benchmarks only
+# Run linter benchmarks only (includes cold lint corpus)
 cargo bench -p solgrid_linter
+
+# Run startup/initialization benchmarks
+cargo bench -p solgrid
 ```
 
 ### CI
 
-The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, VSCode e2e tests, and Prettier plugin tests.
+The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, VSCode e2e tests, Prettier plugin tests, and version sync validation.
+
+## WASM
+
+The `solgrid_wasm` crate provides WebAssembly bindings for browser and web playground use:
+
+- `lint(source, config_json)` — lint Solidity source, returns JSON diagnostics
+- `fix(source, config_json, include_unsafe)` — lint and auto-fix, returns fixed source + remaining diagnostics
+- `format(source, config_json)` — format Solidity source
+- `list_rules()` — list all available lint rules as JSON
+- `version()` — return the solgrid version string
+
+Build with `wasm-pack` for use in web applications.
+
+## Versioning
+
+solgrid uses a single source of truth for version management:
+
+1. **`Cargo.toml`** `[workspace.package] version` is the canonical version
+2. All Rust crates inherit the workspace version
+3. `editors/vscode/package.json` and `packages/prettier-plugin-solgrid/package.json` must match
+
+### Version management
+
+```bash
+# Check all versions are in sync
+./scripts/version.sh
+
+# Update all package.json files to match Cargo.toml
+./scripts/version.sh --write
+
+# Set a new version everywhere
+./scripts/version.sh --set 0.2.0
+```
+
+### Release process
+
+1. Bump version: `./scripts/version.sh --set X.Y.Z`
+2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
+3. Tag: `git tag vX.Y.Z`
+4. Push: `git push origin main --tags`
+5. CI builds all platforms, publishes VSIX to VS Marketplace, and publishes npm package
+
+The `--version` flag includes the git commit hash and build date:
+
+```
+$ solgrid --version
+solgrid 0.1.0 (abc1234 2026-03-03)
+```

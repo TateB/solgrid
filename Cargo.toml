@@ -12,6 +12,7 @@ members = [
     "crates/solgrid_parser",
     "crates/solgrid_server",
     "crates/solgrid_testing",
+    "crates/solgrid_wasm",
 ]
 
 [workspace.package]
@@ -74,6 +75,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 napi = { version = "2", features = ["napi8"] }
 napi-derive = "2"
 napi-build = "2"
+
+# WASM bindings
+wasm-bindgen = "0.2"
 
 [profile.release]
 strip = true

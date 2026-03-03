@@ -18,10 +18,14 @@
     "build:napi": "napi build --release --cargo-cwd ../../crates/solgrid_napi",
     "build:napi:debug": "napi build --cargo-cwd ../../crates/solgrid_napi",
     "test": "vitest run",
+    "test:conformance": "vitest run test/conformance/",
     "test:watch": "vitest"
   },
   "peerDependencies": {
     "prettier": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0",

@@ -142,5 +142,110 @@ fn bench_lint_and_fix(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_lint_contract, bench_lint_and_fix);
+/// Generate a varied Solidity contract for corpus benchmarking.
+fn generate_contract(index: usize) -> String {
+    format!(
+        r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+/// @title Contract{index}
+/// @author bench
+contract Contract{index} {{
+    uint256 public value{index};
+    address public owner{index};
+    mapping(address => uint256) public balances{index};
+    bool private _active{index};
+
+    event ValueChanged{index}(uint256 oldValue, uint256 newValue);
+    error Unauthorized{index}();
+
+    constructor(uint256 _initial) {{
+        value{index} = _initial;
+        owner{index} = msg.sender;
+        _active{index} = true;
+    }}
+
+    function setValue{index}(uint256 _value) external {{
+        require(_active{index}, "Not active");
+        uint256 old = value{index};
+        value{index} = _value;
+        emit ValueChanged{index}(old, _value);
+    }}
+
+    function deposit{index}() external payable {{
+        balances{index}[msg.sender] += msg.value;
+    }}
+
+    function withdraw{index}(uint256 amount) external {{
+        require(balances{index}[msg.sender] >= amount, "Insufficient");
+        balances{index}[msg.sender] -= amount;
+        payable(msg.sender).transfer(amount);
+    }}
+
+    function getBalance{index}(address user) external view returns (uint256) {{
+        return balances{index}[user];
+    }}
+
+    function _internal{index}(uint256 a, uint256 b) internal pure returns (uint256) {{
+        return a + b;
+    }}
+}}
+"#,
+        index = index
+    )
+}
+
+fn bench_cold_lint_corpus(c: &mut Criterion) {
+    let engine = LintEngine::new();
+    let config = Config::default();
+
+    // Generate a corpus of 50 contracts
+    let corpus: Vec<(String, String)> = (0..50)
+        .map(|i| {
+            let filename = format!("Contract{}.sol", i);
+            let source = generate_contract(i);
+            (filename, source)
+        })
+        .collect();
+
+    c.bench_function("cold_lint_50_contracts", |b| {
+        b.iter(|| {
+            let mut total_diagnostics = 0;
+            for (filename, source) in &corpus {
+                let result = engine.lint_source(source, Path::new(filename), &config);
+                total_diagnostics += result.diagnostics.len();
+            }
+            total_diagnostics
+        })
+    });
+}
+
+fn bench_cold_lint_and_fix_corpus(c: &mut Criterion) {
+    let engine = LintEngine::new();
+    let config = Config::default();
+
+    let corpus: Vec<(String, String)> = (0..50)
+        .map(|i| {
+            let filename = format!("Contract{}.sol", i);
+            let source = generate_contract(i);
+            (filename, source)
+        })
+        .collect();
+
+    c.bench_function("cold_fix_50_contracts", |b| {
+        b.iter(|| {
+            for (filename, source) in &corpus {
+                let _ = engine.fix_source(source, Path::new(filename), &config, false);
+            }
+        })
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_lint_contract,
+    bench_lint_and_fix,
+    bench_cold_lint_corpus,
+    bench_cold_lint_and_fix_corpus
+);
 criterion_main!(benches);
