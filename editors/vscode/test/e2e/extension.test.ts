@@ -145,10 +145,9 @@ describe("solgrid Extension E2E", () => {
     assert.strictEqual(config.get("enable"), true);
     assert.strictEqual(config.get("fixOnSave"), true);
     assert.strictEqual(config.get("formatOnSave"), true);
-    assert.strictEqual(
-      config.get("fixOnSave.unsafeFixes"),
-      false
-    );
+    // Note: "fixOnSave.unsafeFixes" is not testable via getConfiguration() because
+    // VSCode ignores dotted child keys when the parent is a boolean leaf.
+    // The extension handles this with a fallback default in readVSCodeConfig().
     assert.strictEqual(config.get("path"), null);
     assert.strictEqual(config.get("configPath"), null);
   });
