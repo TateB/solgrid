@@ -77,6 +77,8 @@ enum Commands {
         #[arg(long)]
         from: String,
     },
+    /// Start the LSP server (for editor integration)
+    Server,
 }
 
 fn main() {
@@ -98,6 +100,11 @@ fn main() {
         Some(Commands::ListRules) => commands::list_rules::run(),
         Some(Commands::Explain { rule }) => commands::explain::run(rule),
         Some(Commands::Migrate { from }) => commands::migrate::run(from),
+        Some(Commands::Server) => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            rt.block_on(solgrid_server::run_server());
+            0
+        }
         None => {
             // Default: check
             commands::check::run(&cli.paths, &cli)

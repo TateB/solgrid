@@ -9,6 +9,7 @@ members = [
     "crates/solgrid_formatter",
     "crates/solgrid_linter",
     "crates/solgrid_parser",
+    "crates/solgrid_server",
     "crates/solgrid_testing",
 ]
 
@@ -27,7 +28,12 @@ solgrid_diagnostics = { path = "crates/solgrid_diagnostics" }
 solgrid_formatter = { path = "crates/solgrid_formatter" }
 solgrid_linter = { path = "crates/solgrid_linter" }
 solgrid_parser = { path = "crates/solgrid_parser" }
+solgrid_server = { path = "crates/solgrid_server" }
 solgrid_testing = { path = "crates/solgrid_testing" }
+
+# LSP
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
 
 # Solar parser
 solar-ast = "0.1"

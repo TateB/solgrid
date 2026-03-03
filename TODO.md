@@ -175,18 +175,18 @@ _Performance and CI integration features._
 ### Chunk 12: LSP Server & VSCode Extension (Phase 3)
 _Editor integration._
 
-- [ ] Create `solgrid_server` crate with `tower-lsp` dependency
-- [ ] Implement textDocument/publishDiagnostics (real-time lint as user types)
-- [ ] Implement textDocument/codeAction (quick-fixes grouped by safety tier)
-- [ ] Implement textDocument/formatting (full-document formatting)
-- [ ] Implement textDocument/rangeFormatting (format selection)
-- [ ] Implement fix-on-save + format-on-save
-- [ ] Implement textDocument/hover (rule documentation on hover)
-- [ ] Implement suppression comment completion
-- [ ] Implement workspace/configuration (read solgrid.toml)
-- [ ] Create VSCode extension TypeScript client (vscode-languageclient)
-- [ ] Extension settings UI (fixOnSave, formatOnSave, solgrid.path)
-- [ ] Diagnostic presentation (severity icons, clickable rule IDs, disable actions)
+- [x] Create `solgrid_server` crate with `tower-lsp` dependency
+- [x] Implement textDocument/publishDiagnostics (real-time lint as user types)
+- [x] Implement textDocument/codeAction (quick-fixes grouped by safety tier)
+- [x] Implement textDocument/formatting (full-document formatting)
+- [x] Implement textDocument/rangeFormatting (format selection)
+- [x] Implement fix-on-save + format-on-save (willSaveWaitUntil)
+- [x] Implement textDocument/hover (rule documentation on hover)
+- [x] Implement suppression comment completion
+- [x] Implement workspace/configuration (read solgrid.toml)
+- [x] Create VSCode extension TypeScript client (vscode-languageclient)
+- [x] Extension settings UI (fixOnSave, formatOnSave, solgrid.path)
+- [x] Diagnostic presentation (severity icons, clickable rule IDs, disable actions)
 - [ ] Publish to VS Marketplace + Open VSX Registry
 
 ### Chunk 13: Prettier Plugin (Phase 4)
@@ -231,8 +231,8 @@ _Final polish._
 | 9. Style & Docs Rules | **Done** | +18 | Two new categories |
 | 10. Formatter | **Done** | — | Full chunk-based formatter |
 | 11. Caching & CI Formats | **Done** | — | Cache, SARIF, GitHub output |
-| 12. LSP & VSCode | TODO | — | Editor integration |
+| 12. LSP & VSCode | **Done** | — | LSP server + VSCode extension |
 | 13. Prettier Plugin | TODO | — | npm plugin |
 | 14. WASM & v1.0 | TODO | — | Final polish |
 
-**Current state:** 90/90 rules implemented, full formatter, caching, SARIF/GitHub output, working CLI, 258 tests passing.
+**Current state:** 90/90 rules implemented, full formatter, caching, SARIF/GitHub output, working CLI, LSP server with VSCode extension, 304 tests passing.

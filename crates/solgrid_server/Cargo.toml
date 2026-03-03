@@ -1,0 +1,17 @@
+[package]
+name = "solgrid_server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+solgrid_config = { workspace = true }
+solgrid_diagnostics = { workspace = true }
+solgrid_formatter = { workspace = true }
+solgrid_linter = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
