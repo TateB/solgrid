@@ -17,13 +17,14 @@ import { runTests } from "@vscode/test-electron";
 async function main() {
   try {
     // The path to the extension root (editors/vscode/)
-    const extensionDevelopmentPath = path.resolve(__dirname, "../../");
+    // __dirname at runtime is out/test/e2e/, so we need 3 levels up
+    const extensionDevelopmentPath = path.resolve(__dirname, "../../../");
 
     // The path to the test entry point (compiled from index.ts)
     const extensionTestsPath = path.resolve(__dirname, "./index");
 
-    // The workspace folder containing test fixtures
-    const testWorkspace = path.resolve(__dirname, "../fixtures");
+    // The workspace folder containing test fixtures (source, not compiled)
+    const testWorkspace = path.resolve(__dirname, "../../../test/fixtures");
 
     await runTests({
       extensionDevelopmentPath,

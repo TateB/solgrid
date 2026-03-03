@@ -13,7 +13,8 @@ import * as vscode from "vscode";
 import * as path from "path";
 
 describe("solgrid Extension E2E", () => {
-  const fixturesPath = path.resolve(__dirname, "../fixtures");
+  // __dirname at runtime is out/test/e2e/, so resolve to source fixtures
+  const fixturesPath = path.resolve(__dirname, "../../../test/fixtures");
 
   before(async function () {
     this.timeout(30000);
