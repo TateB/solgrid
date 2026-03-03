@@ -2,3 +2,10 @@
 node_modules/
 editors/vscode/out/
 editors/vscode/.vscode-test/
+editors/vscode/bin/
+
+# NAPI-RS artifacts
+*.node
+
+# Temporary plan files
+plan.md

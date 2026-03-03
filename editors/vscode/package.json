@@ -93,7 +93,8 @@
     "test:e2e": "pnpm run compile:tests && node out/test/e2e/run.js",
     "test:all": "pnpm test:unit && pnpm test:integration",
     "lint": "eslint src --ext ts",
-    "package": "vsce package",
+    "package": "vsce package --no-dependencies",
+    "package:target": "vsce package --no-dependencies --target",
     "publish": "vsce publish"
   },
   "dependencies": {

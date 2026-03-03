@@ -1,0 +1,17 @@
+[package]
+name = "solgrid_napi"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+solgrid_config = { workspace = true }
+solgrid_formatter = { workspace = true }
+solgrid_parser = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }
