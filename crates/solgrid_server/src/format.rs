@@ -2,19 +2,19 @@
 
 use crate::convert;
 use solgrid_config::FormatConfig;
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Format an entire document and return the text edits to apply.
 ///
 /// Returns a single edit that replaces the entire document content,
 /// or an empty vec if the document is already formatted.
-pub fn format_document(source: &str, config: &FormatConfig) -> Vec<lsp_types::TextEdit> {
+pub fn format_document(source: &str, config: &FormatConfig) -> Vec<ls_types::TextEdit> {
     match solgrid_formatter::format_source(source, config) {
         Ok(formatted) => {
             if formatted == source {
                 return Vec::new();
             }
-            vec![lsp_types::TextEdit {
+            vec![ls_types::TextEdit {
                 range: full_document_range(source),
                 new_text: formatted,
             }]
@@ -30,9 +30,9 @@ pub fn format_document(source: &str, config: &FormatConfig) -> Vec<lsp_types::Te
 /// If no changes fall within the range, we return an empty vec.
 pub fn format_range(
     source: &str,
-    range: &lsp_types::Range,
+    range: &ls_types::Range,
     config: &FormatConfig,
-) -> Vec<lsp_types::TextEdit> {
+) -> Vec<ls_types::TextEdit> {
     match solgrid_formatter::format_source(source, config) {
         Ok(formatted) => {
             if formatted == source {
@@ -57,10 +57,10 @@ pub fn format_range(
                 if line_end >= range_start && old_offset <= range_end {
                     if let Some(&new_line) = new_lines.get(i) {
                         if *old_line != new_line {
-                            edits.push(lsp_types::TextEdit {
-                                range: lsp_types::Range {
-                                    start: lsp_types::Position::new(i as u32, 0),
-                                    end: lsp_types::Position::new(i as u32, old_line.len() as u32),
+                            edits.push(ls_types::TextEdit {
+                                range: ls_types::Range {
+                                    start: ls_types::Position::new(i as u32, 0),
+                                    end: ls_types::Position::new(i as u32, old_line.len() as u32),
                                 },
                                 new_text: new_line.to_string(),
                             });
@@ -75,7 +75,7 @@ pub fn format_range(
             // If line-level diffing produced no edits but the file changed,
             // fall back to replacing the entire requested range
             if edits.is_empty() && formatted != source {
-                vec![lsp_types::TextEdit {
+                vec![ls_types::TextEdit {
                     range: full_document_range(source),
                     new_text: formatted,
                 }]
@@ -88,12 +88,12 @@ pub fn format_range(
 }
 
 /// Compute the LSP range covering the entire document.
-fn full_document_range(source: &str) -> lsp_types::Range {
+fn full_document_range(source: &str) -> ls_types::Range {
     let line_count = source.lines().count();
     let last_line_len = source.lines().last().map_or(0, |l| l.len());
-    lsp_types::Range {
-        start: lsp_types::Position::new(0, 0),
-        end: lsp_types::Position::new(line_count.saturating_sub(1) as u32, last_line_len as u32),
+    ls_types::Range {
+        start: ls_types::Position::new(0, 0),
+        end: ls_types::Position::new(line_count.saturating_sub(1) as u32, last_line_len as u32),
     }
 }
 
@@ -134,9 +134,9 @@ mod tests {
         let source =
             "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n}\n";
         let config = FormatConfig::default();
-        let range = lsp_types::Range {
-            start: lsp_types::Position::new(0, 0),
-            end: lsp_types::Position::new(1, 0),
+        let range = ls_types::Range {
+            start: ls_types::Position::new(0, 0),
+            end: ls_types::Position::new(1, 0),
         };
         let edits = format_range(source, &range, &config);
         // Should not crash
@@ -147,14 +147,14 @@ mod tests {
     fn test_full_document_range() {
         let source = "line1\nline2\nline3";
         let range = full_document_range(source);
-        assert_eq!(range.start, lsp_types::Position::new(0, 0));
-        assert_eq!(range.end, lsp_types::Position::new(2, 5));
+        assert_eq!(range.start, ls_types::Position::new(0, 0));
+        assert_eq!(range.end, ls_types::Position::new(2, 5));
     }
 
     #[test]
     fn test_full_document_range_empty() {
         let range = full_document_range("");
-        assert_eq!(range.start, lsp_types::Position::new(0, 0));
-        assert_eq!(range.end, lsp_types::Position::new(0, 0));
+        assert_eq!(range.start, ls_types::Position::new(0, 0));
+        assert_eq!(range.end, ls_types::Position::new(0, 0));
     }
 }

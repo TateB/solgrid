@@ -32,7 +32,7 @@ solgrid_server = { path = "crates/solgrid_server" }
 solgrid_testing = { path = "crates/solgrid_testing" }
 
 # LSP
-tower-lsp = "0.20"
+tower-lsp-server = "0.23"
 tokio = { version = "1", features = ["full"] }
 
 # Solar parser

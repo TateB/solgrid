@@ -1,14 +1,14 @@
 //! Type conversion between solgrid diagnostics and LSP types.
 
 use solgrid_diagnostics::{Diagnostic, FixSafety, Severity};
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Convert a byte offset to an LSP Position (0-based line and character).
 ///
 /// The LSP spec uses UTF-16 character offsets, but for Solidity (which is
 /// predominantly ASCII), byte offsets and UTF-16 offsets are typically identical.
 /// We handle multi-byte UTF-8 characters correctly by counting UTF-16 code units.
-pub fn offset_to_position(source: &str, offset: usize) -> lsp_types::Position {
+pub fn offset_to_position(source: &str, offset: usize) -> ls_types::Position {
     let offset = offset.min(source.len());
     let mut line = 0u32;
     let mut character = 0u32;
@@ -25,11 +25,11 @@ pub fn offset_to_position(source: &str, offset: usize) -> lsp_types::Position {
         }
     }
 
-    lsp_types::Position { line, character }
+    ls_types::Position { line, character }
 }
 
 /// Convert an LSP Position back to a byte offset in the source.
-pub fn position_to_offset(source: &str, position: lsp_types::Position) -> usize {
+pub fn position_to_offset(source: &str, position: ls_types::Position) -> usize {
     let mut current_line = 0u32;
     let mut current_char = 0u32;
 
@@ -53,28 +53,28 @@ pub fn position_to_offset(source: &str, position: lsp_types::Position) -> usize 
 }
 
 /// Convert a byte range to an LSP Range.
-pub fn span_to_range(source: &str, span: &std::ops::Range<usize>) -> lsp_types::Range {
-    lsp_types::Range {
+pub fn span_to_range(source: &str, span: &std::ops::Range<usize>) -> ls_types::Range {
+    ls_types::Range {
         start: offset_to_position(source, span.start),
         end: offset_to_position(source, span.end),
     }
 }
 
 /// Convert a solgrid Severity to an LSP DiagnosticSeverity.
-pub fn severity_to_lsp(severity: Severity) -> lsp_types::DiagnosticSeverity {
+pub fn severity_to_lsp(severity: Severity) -> ls_types::DiagnosticSeverity {
     match severity {
-        Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
-        Severity::Warning => lsp_types::DiagnosticSeverity::WARNING,
-        Severity::Info => lsp_types::DiagnosticSeverity::INFORMATION,
+        Severity::Error => ls_types::DiagnosticSeverity::ERROR,
+        Severity::Warning => ls_types::DiagnosticSeverity::WARNING,
+        Severity::Info => ls_types::DiagnosticSeverity::INFORMATION,
     }
 }
 
 /// Convert a solgrid Diagnostic to an LSP Diagnostic.
-pub fn diagnostic_to_lsp(source_text: &str, diag: &Diagnostic) -> lsp_types::Diagnostic {
-    lsp_types::Diagnostic {
+pub fn diagnostic_to_lsp(source_text: &str, diag: &Diagnostic) -> ls_types::Diagnostic {
+    ls_types::Diagnostic {
         range: span_to_range(source_text, &diag.span),
         severity: Some(severity_to_lsp(diag.severity)),
-        code: Some(lsp_types::NumberOrString::String(diag.rule_id.clone())),
+        code: Some(ls_types::NumberOrString::String(diag.rule_id.clone())),
         code_description: None,
         source: Some("solgrid".into()),
         message: diag.message.clone(),
@@ -85,11 +85,11 @@ pub fn diagnostic_to_lsp(source_text: &str, diag: &Diagnostic) -> lsp_types::Dia
 }
 
 /// Convert a FixSafety to a CodeActionKind.
-pub fn fix_safety_to_action_kind(safety: FixSafety) -> lsp_types::CodeActionKind {
+pub fn fix_safety_to_action_kind(safety: FixSafety) -> ls_types::CodeActionKind {
     match safety {
-        FixSafety::Safe => lsp_types::CodeActionKind::QUICKFIX,
-        FixSafety::Suggestion => lsp_types::CodeActionKind::REFACTOR,
-        FixSafety::Dangerous => lsp_types::CodeActionKind::REFACTOR_REWRITE,
+        FixSafety::Safe => ls_types::CodeActionKind::QUICKFIX,
+        FixSafety::Suggestion => ls_types::CodeActionKind::REFACTOR,
+        FixSafety::Dangerous => ls_types::CodeActionKind::REFACTOR_REWRITE,
     }
 }
 
@@ -103,7 +103,7 @@ mod tests {
         // Start of file
         assert_eq!(
             offset_to_position(source, 0),
-            lsp_types::Position {
+            ls_types::Position {
                 line: 0,
                 character: 0
             }
@@ -111,7 +111,7 @@ mod tests {
         // Start of "line two"
         assert_eq!(
             offset_to_position(source, 9),
-            lsp_types::Position {
+            ls_types::Position {
                 line: 1,
                 character: 0
             }
@@ -119,7 +119,7 @@ mod tests {
         // "two" in "line two"
         assert_eq!(
             offset_to_position(source, 14),
-            lsp_types::Position {
+            ls_types::Position {
                 line: 1,
                 character: 5
             }
@@ -129,16 +129,10 @@ mod tests {
     #[test]
     fn test_position_to_offset_simple() {
         let source = "line one\nline two\nline three";
+        assert_eq!(position_to_offset(source, ls_types::Position::new(0, 0)), 0);
+        assert_eq!(position_to_offset(source, ls_types::Position::new(1, 0)), 9);
         assert_eq!(
-            position_to_offset(source, lsp_types::Position::new(0, 0)),
-            0
-        );
-        assert_eq!(
-            position_to_offset(source, lsp_types::Position::new(1, 0)),
-            9
-        );
-        assert_eq!(
-            position_to_offset(source, lsp_types::Position::new(1, 5)),
+            position_to_offset(source, ls_types::Position::new(1, 5)),
             14
         );
     }
@@ -159,23 +153,23 @@ mod tests {
     fn test_span_to_range() {
         let source = "line one\nline two";
         let range = span_to_range(source, &(9..17));
-        assert_eq!(range.start, lsp_types::Position::new(1, 0));
-        assert_eq!(range.end, lsp_types::Position::new(1, 8));
+        assert_eq!(range.start, ls_types::Position::new(1, 0));
+        assert_eq!(range.end, ls_types::Position::new(1, 8));
     }
 
     #[test]
     fn test_severity_to_lsp() {
         assert_eq!(
             severity_to_lsp(Severity::Error),
-            lsp_types::DiagnosticSeverity::ERROR
+            ls_types::DiagnosticSeverity::ERROR
         );
         assert_eq!(
             severity_to_lsp(Severity::Warning),
-            lsp_types::DiagnosticSeverity::WARNING
+            ls_types::DiagnosticSeverity::WARNING
         );
         assert_eq!(
             severity_to_lsp(Severity::Info),
-            lsp_types::DiagnosticSeverity::INFORMATION
+            ls_types::DiagnosticSeverity::INFORMATION
         );
     }
 
@@ -185,15 +179,15 @@ mod tests {
         let diag = Diagnostic::new("test/rule", "test message", Severity::Warning, 9..17);
         let lsp_diag = diagnostic_to_lsp(source, &diag);
 
-        assert_eq!(lsp_diag.range.start, lsp_types::Position::new(1, 0));
-        assert_eq!(lsp_diag.range.end, lsp_types::Position::new(1, 8));
+        assert_eq!(lsp_diag.range.start, ls_types::Position::new(1, 0));
+        assert_eq!(lsp_diag.range.end, ls_types::Position::new(1, 8));
         assert_eq!(
             lsp_diag.severity,
-            Some(lsp_types::DiagnosticSeverity::WARNING)
+            Some(ls_types::DiagnosticSeverity::WARNING)
         );
         assert_eq!(
             lsp_diag.code,
-            Some(lsp_types::NumberOrString::String("test/rule".into()))
+            Some(ls_types::NumberOrString::String("test/rule".into()))
         );
         assert_eq!(lsp_diag.source, Some("solgrid".into()));
         assert_eq!(lsp_diag.message, "test message");

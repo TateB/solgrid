@@ -10,7 +10,7 @@ solgrid_formatter = { workspace = true }
 solgrid_linter = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tower-lsp = "0.20"
+tower-lsp-server = "0.23"
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]

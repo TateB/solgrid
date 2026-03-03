@@ -4,7 +4,7 @@ use solgrid_config::Config;
 use solgrid_linter::LintEngine;
 use solgrid_server::{actions, completion, convert, diagnostics, format, hover};
 use std::path::Path;
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Helper: create a standard test source with known issues.
 fn source_with_issues() -> &'static str {
@@ -38,11 +38,11 @@ fn test_offset_to_position_multiline() {
     let source = "pragma solidity ^0.8.0;\n\ncontract Test {\n    uint x;\n}\n";
     // "contract" starts at offset 25 (after "..;\n\n")
     let pos = convert::offset_to_position(source, 25);
-    assert_eq!(pos, lsp_types::Position::new(2, 0));
+    assert_eq!(pos, ls_types::Position::new(2, 0));
 
     // "uint" starts at offset 45 (line 3, col 4)
     let pos = convert::offset_to_position(source, 45);
-    assert_eq!(pos, lsp_types::Position::new(3, 4));
+    assert_eq!(pos, ls_types::Position::new(3, 4));
 }
 
 #[test]
@@ -62,16 +62,16 @@ fn test_offset_position_roundtrip_all_line_starts() {
 fn test_span_to_range_single_line() {
     let source = "hello world\ngoodbye world";
     let range = convert::span_to_range(source, &(6..11));
-    assert_eq!(range.start, lsp_types::Position::new(0, 6));
-    assert_eq!(range.end, lsp_types::Position::new(0, 11));
+    assert_eq!(range.start, ls_types::Position::new(0, 6));
+    assert_eq!(range.end, ls_types::Position::new(0, 11));
 }
 
 #[test]
 fn test_span_to_range_multiline() {
     let source = "hello\nworld";
     let range = convert::span_to_range(source, &(0..11));
-    assert_eq!(range.start, lsp_types::Position::new(0, 0));
-    assert_eq!(range.end, lsp_types::Position::new(1, 5));
+    assert_eq!(range.start, ls_types::Position::new(0, 0));
+    assert_eq!(range.end, ls_types::Position::new(1, 5));
 }
 
 // =============================================================================
@@ -92,7 +92,7 @@ fn test_lint_detects_tx_origin() {
     let tx_origin_diags: Vec<_> = diags
         .iter()
         .filter(|d| {
-            matches!(&d.code, Some(lsp_types::NumberOrString::String(id)) if id == "security/tx-origin")
+            matches!(&d.code, Some(ls_types::NumberOrString::String(id)) if id == "security/tx-origin")
         })
         .collect();
 
@@ -127,11 +127,11 @@ fn test_diagnostics_have_correct_structure() {
 fn test_code_actions_full_file_range() {
     let engine = LintEngine::new();
     let config = Config::default();
-    let uri = lsp_types::Url::parse("file:///test.sol").unwrap();
+    let uri = "file:///test.sol".parse::<ls_types::Uri>().unwrap();
 
-    let full_range = lsp_types::Range {
-        start: lsp_types::Position::new(0, 0),
-        end: lsp_types::Position::new(100, 0),
+    let full_range = ls_types::Range {
+        start: ls_types::Position::new(0, 0),
+        end: ls_types::Position::new(100, 0),
     };
 
     let result = actions::code_actions(
@@ -189,9 +189,9 @@ fn test_format_range_subset() {
     let config = solgrid_config::FormatConfig::default();
 
     // Format only the first line
-    let range = lsp_types::Range {
-        start: lsp_types::Position::new(0, 0),
-        end: lsp_types::Position::new(1, 0),
+    let range = ls_types::Range {
+        start: ls_types::Position::new(0, 0),
+        end: ls_types::Position::new(1, 0),
     };
 
     let edits = format::format_range(source, &range, &config);
@@ -207,13 +207,13 @@ fn test_format_range_subset() {
 fn test_hover_shows_rule_docs_for_known_rule() {
     let engine = LintEngine::new();
 
-    let diags = vec![lsp_types::Diagnostic {
-        range: lsp_types::Range {
-            start: lsp_types::Position::new(4, 8),
-            end: lsp_types::Position::new(4, 40),
+    let diags = vec![ls_types::Diagnostic {
+        range: ls_types::Range {
+            start: ls_types::Position::new(4, 8),
+            end: ls_types::Position::new(4, 40),
         },
-        severity: Some(lsp_types::DiagnosticSeverity::ERROR),
-        code: Some(lsp_types::NumberOrString::String(
+        severity: Some(ls_types::DiagnosticSeverity::ERROR),
+        code: Some(ls_types::NumberOrString::String(
             "security/tx-origin".into(),
         )),
         source: Some("solgrid".into()),
@@ -221,13 +221,13 @@ fn test_hover_shows_rule_docs_for_known_rule() {
         ..Default::default()
     }];
 
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &lsp_types::Position::new(4, 20));
+    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(4, 20));
     assert!(hover.is_some());
 
     let hover = hover.unwrap();
     match &hover.contents {
-        lsp_types::HoverContents::Markup(markup) => {
-            assert_eq!(markup.kind, lsp_types::MarkupKind::Markdown);
+        ls_types::HoverContents::Markup(markup) => {
+            assert_eq!(markup.kind, ls_types::MarkupKind::Markdown);
             assert!(markup.value.contains("tx-origin"));
             assert!(markup.value.contains("security"));
             assert!(markup.value.contains("solgrid-disable-next-line"));
@@ -240,13 +240,13 @@ fn test_hover_shows_rule_docs_for_known_rule() {
 fn test_hover_returns_none_for_non_diagnostic_position() {
     let engine = LintEngine::new();
 
-    let diags = vec![lsp_types::Diagnostic {
-        range: lsp_types::Range {
-            start: lsp_types::Position::new(4, 8),
-            end: lsp_types::Position::new(4, 40),
+    let diags = vec![ls_types::Diagnostic {
+        range: ls_types::Range {
+            start: ls_types::Position::new(4, 8),
+            end: ls_types::Position::new(4, 40),
         },
-        severity: Some(lsp_types::DiagnosticSeverity::ERROR),
-        code: Some(lsp_types::NumberOrString::String(
+        severity: Some(ls_types::DiagnosticSeverity::ERROR),
+        code: Some(ls_types::NumberOrString::String(
             "security/tx-origin".into(),
         )),
         source: Some("solgrid".into()),
@@ -255,7 +255,7 @@ fn test_hover_returns_none_for_non_diagnostic_position() {
     }];
 
     // Position on a different line — should return None
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &lsp_types::Position::new(0, 0));
+    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(0, 0));
     assert!(hover.is_none());
 }
 
@@ -267,7 +267,7 @@ fn test_hover_returns_none_for_non_diagnostic_position() {
 fn test_completion_after_disable_directive() {
     let engine = LintEngine::new();
     let source = "// solgrid-disable-next-line \ncontract Test {}\n";
-    let position = lsp_types::Position::new(0, 29);
+    let position = ls_types::Position::new(0, 29);
 
     let items = completion::suppression_completions(&engine, source, &position);
     assert!(!items.is_empty(), "should suggest rule IDs after directive");
@@ -282,7 +282,7 @@ fn test_completion_after_disable_directive() {
 fn test_completion_typing_solgrid_comment() {
     let engine = LintEngine::new();
     let source = "// sol\ncontract Test {}\n";
-    let position = lsp_types::Position::new(0, 6);
+    let position = ls_types::Position::new(0, 6);
 
     let items = completion::suppression_completions(&engine, source, &position);
     assert!(
@@ -300,7 +300,7 @@ fn test_completion_typing_solgrid_comment() {
 fn test_completion_not_in_code() {
     let engine = LintEngine::new();
     let source = "contract Test { uint x; }\n";
-    let position = lsp_types::Position::new(0, 10);
+    let position = ls_types::Position::new(0, 10);
 
     let items = completion::suppression_completions(&engine, source, &position);
     assert!(items.is_empty(), "should not suggest completions in code");
@@ -330,10 +330,10 @@ contract Test {
     assert!(!diags.is_empty());
 
     // Step 2: Get code actions
-    let uri = lsp_types::Url::parse("file:///test.sol").unwrap();
-    let full_range = lsp_types::Range {
-        start: lsp_types::Position::new(0, 0),
-        end: lsp_types::Position::new(100, 0),
+    let uri = "file:///test.sol".parse::<ls_types::Uri>().unwrap();
+    let full_range = ls_types::Range {
+        start: ls_types::Position::new(0, 0),
+        end: ls_types::Position::new(100, 0),
     };
     let code_actions = actions::code_actions(
         &engine,
@@ -350,7 +350,7 @@ contract Test {
     let _ = format_edits;
 
     // Step 4: Hover over a diagnostic
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &lsp_types::Position::new(4, 20));
+    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(4, 20));
     // May or may not find a diagnostic at this exact position depending on spans
     let _ = hover;
 }

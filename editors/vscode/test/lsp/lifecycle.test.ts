@@ -98,7 +98,7 @@ describe("LSP Server Lifecycle", () => {
     expect(result).toBeNull();
   });
 
-  it("handles shutdown + exit without crashing", async () => {
+  it("exits cleanly after shutdown + exit", async () => {
     await initializeServer(client);
 
     // Send shutdown request
@@ -108,20 +108,17 @@ describe("LSP Server Lifecycle", () => {
     // Send exit notification
     client.notify("exit", undefined);
 
-    // Wait briefly for the process to exit gracefully
+    // tower-lsp-server v0.21+ closes transport ~1s after exit notification.
+    // The server process should terminate on its own within 5s.
     const exited = await Promise.race([
       new Promise<boolean>((resolve) => {
         client.on("exit", () => resolve(true));
       }),
       new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 3000);
+        setTimeout(() => resolve(false), 5000);
       }),
     ]);
 
-    // If the server didn't exit on its own, that's OK for tower-lsp servers.
-    // The important thing is it accepted both messages without error.
-    if (!exited) {
-      client.kill();
-    }
+    expect(exited).toBe(true);
   });
 });

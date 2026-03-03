@@ -5,7 +5,7 @@ use solgrid_config::Config;
 use solgrid_diagnostics::FileResult;
 use solgrid_linter::LintEngine;
 use std::path::Path;
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Run the linter on source text and return LSP diagnostics.
 pub fn lint_to_lsp_diagnostics(
@@ -13,7 +13,7 @@ pub fn lint_to_lsp_diagnostics(
     source: &str,
     path: &Path,
     config: &Config,
-) -> Vec<lsp_types::Diagnostic> {
+) -> Vec<ls_types::Diagnostic> {
     let result = engine.lint_source(source, path, config);
     file_result_to_lsp_diagnostics(source, &result)
 }
@@ -22,7 +22,7 @@ pub fn lint_to_lsp_diagnostics(
 pub fn file_result_to_lsp_diagnostics(
     source: &str,
     result: &FileResult,
-) -> Vec<lsp_types::Diagnostic> {
+) -> Vec<ls_types::Diagnostic> {
     result
         .diagnostics
         .iter()

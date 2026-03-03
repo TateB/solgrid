@@ -1,13 +1,13 @@
 //! Document store — tracks open files and their content.
 
 use std::collections::HashMap;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 /// A tracked document with its content and version.
 #[derive(Debug, Clone)]
 pub struct Document {
     /// The document URI.
-    pub uri: Url,
+    pub uri: Uri,
     /// Current source text.
     pub content: String,
     /// LSP version number.
@@ -17,7 +17,7 @@ pub struct Document {
 /// In-memory store for open documents.
 #[derive(Debug, Default)]
 pub struct DocumentStore {
-    documents: HashMap<Url, Document>,
+    documents: HashMap<Uri, Document>,
 }
 
 impl DocumentStore {
@@ -26,7 +26,7 @@ impl DocumentStore {
     }
 
     /// Open or update a document.
-    pub fn open(&mut self, uri: Url, content: String, version: i32) {
+    pub fn open(&mut self, uri: Uri, content: String, version: i32) {
         self.documents.insert(
             uri.clone(),
             Document {
@@ -38,7 +38,7 @@ impl DocumentStore {
     }
 
     /// Update a document's content (full sync).
-    pub fn update(&mut self, uri: &Url, content: String, version: i32) {
+    pub fn update(&mut self, uri: &Uri, content: String, version: i32) {
         if let Some(doc) = self.documents.get_mut(uri) {
             doc.content = content;
             doc.version = version;
@@ -46,17 +46,17 @@ impl DocumentStore {
     }
 
     /// Close a document.
-    pub fn close(&mut self, uri: &Url) {
+    pub fn close(&mut self, uri: &Uri) {
         self.documents.remove(uri);
     }
 
     /// Get a document by URI.
-    pub fn get(&self, uri: &Url) -> Option<&Document> {
+    pub fn get(&self, uri: &Uri) -> Option<&Document> {
         self.documents.get(uri)
     }
 
     /// Get all open document URIs.
-    pub fn uris(&self) -> impl Iterator<Item = &Url> {
+    pub fn uris(&self) -> impl Iterator<Item = &Uri> {
         self.documents.keys()
     }
 }
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_document_store_open_get_close() {
         let mut store = DocumentStore::new();
-        let uri = Url::parse("file:///test.sol").unwrap();
+        let uri: Uri = "file:///test.sol".parse().unwrap();
 
         store.open(uri.clone(), "contract Test {}".into(), 1);
         assert!(store.get(&uri).is_some());
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn test_document_store_update() {
         let mut store = DocumentStore::new();
-        let uri = Url::parse("file:///test.sol").unwrap();
+        let uri: Uri = "file:///test.sol".parse().unwrap();
 
         store.open(uri.clone(), "v1".into(), 1);
         store.update(&uri, "v2".into(), 2);

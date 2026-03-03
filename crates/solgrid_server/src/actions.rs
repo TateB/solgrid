@@ -5,7 +5,7 @@ use solgrid_config::Config;
 use solgrid_diagnostics::FixSafety;
 use solgrid_linter::LintEngine;
 use std::path::Path;
-use tower_lsp::lsp_types;
+use tower_lsp_server::ls_types;
 
 /// Generate code actions for a given range in a document.
 ///
@@ -16,9 +16,9 @@ pub fn code_actions(
     source: &str,
     path: &Path,
     config: &Config,
-    range: &lsp_types::Range,
-    uri: &lsp_types::Url,
-) -> Vec<lsp_types::CodeActionOrCommand> {
+    range: &ls_types::Range,
+    uri: &ls_types::Uri,
+) -> Vec<ls_types::CodeActionOrCommand> {
     let result = engine.lint_source(source, path, config);
     let range_start = convert::position_to_offset(source, range.start);
     let range_end = convert::position_to_offset(source, range.end);
@@ -36,10 +36,10 @@ pub fn code_actions(
         };
 
         // Build LSP text edits from the fix
-        let edits: Vec<lsp_types::TextEdit> = fix
+        let edits: Vec<ls_types::TextEdit> = fix
             .edits
             .iter()
-            .map(|edit| lsp_types::TextEdit {
+            .map(|edit| ls_types::TextEdit {
                 range: convert::span_to_range(source, &edit.range),
                 new_text: edit.replacement.clone(),
             })
@@ -58,11 +58,11 @@ pub fn code_actions(
             FixSafety::Dangerous => " (dangerous)",
         };
 
-        let action = lsp_types::CodeAction {
+        let action = ls_types::CodeAction {
             title: format!("{}{}", fix.message, safety_label),
             kind: Some(convert::fix_safety_to_action_kind(fix.safety)),
             diagnostics: Some(vec![convert::diagnostic_to_lsp(source, diag)]),
-            edit: Some(lsp_types::WorkspaceEdit {
+            edit: Some(ls_types::WorkspaceEdit {
                 changes: Some(changes),
                 document_changes: None,
                 change_annotations: None,
@@ -73,7 +73,7 @@ pub fn code_actions(
             data: None,
         };
 
-        actions.push(lsp_types::CodeActionOrCommand::CodeAction(action));
+        actions.push(ls_types::CodeActionOrCommand::CodeAction(action));
     }
 
     // Add "fix all safe fixes" action if there are multiple safe fixes
@@ -84,13 +84,13 @@ pub fn code_actions(
         .count();
 
     if safe_fix_count > 1 {
-        let all_edits: Vec<lsp_types::TextEdit> = result
+        let all_edits: Vec<ls_types::TextEdit> = result
             .diagnostics
             .iter()
             .filter_map(|d| {
                 d.fix.as_ref().and_then(|f| {
                     if f.safety == FixSafety::Safe {
-                        Some(f.edits.iter().map(|edit| lsp_types::TextEdit {
+                        Some(f.edits.iter().map(|edit| ls_types::TextEdit {
                             range: convert::span_to_range(source, &edit.range),
                             new_text: edit.replacement.clone(),
                         }))
@@ -106,11 +106,11 @@ pub fn code_actions(
             let mut changes = std::collections::HashMap::new();
             changes.insert(uri.clone(), all_edits);
 
-            let action = lsp_types::CodeAction {
+            let action = ls_types::CodeAction {
                 title: format!("Fix all safe issues ({safe_fix_count} fixes)"),
-                kind: Some(lsp_types::CodeActionKind::SOURCE_FIX_ALL),
+                kind: Some(ls_types::CodeActionKind::SOURCE_FIX_ALL),
                 diagnostics: None,
-                edit: Some(lsp_types::WorkspaceEdit {
+                edit: Some(ls_types::WorkspaceEdit {
                     changes: Some(changes),
                     document_changes: None,
                     change_annotations: None,
@@ -121,7 +121,7 @@ pub fn code_actions(
                 data: None,
             };
 
-            actions.push(lsp_types::CodeActionOrCommand::CodeAction(action));
+            actions.push(ls_types::CodeActionOrCommand::CodeAction(action));
         }
     }
 
@@ -134,7 +134,7 @@ pub fn safe_fix_edits(
     source: &str,
     path: &Path,
     config: &Config,
-) -> Vec<lsp_types::TextEdit> {
+) -> Vec<ls_types::TextEdit> {
     let result = engine.lint_source(source, path, config);
 
     result
@@ -143,7 +143,7 @@ pub fn safe_fix_edits(
         .filter_map(|d| {
             d.fix.as_ref().and_then(|f| {
                 if f.safety == FixSafety::Safe {
-                    Some(f.edits.iter().map(|edit| lsp_types::TextEdit {
+                    Some(f.edits.iter().map(|edit| ls_types::TextEdit {
                         range: convert::span_to_range(source, &edit.range),
                         new_text: edit.replacement.clone(),
                     }))
@@ -174,12 +174,12 @@ contract Test {
 "#;
         let engine = LintEngine::new();
         let config = Config::default();
-        let uri = lsp_types::Url::parse("file:///test.sol").unwrap();
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
 
         // Request code actions for the entire file
-        let range = lsp_types::Range {
-            start: lsp_types::Position::new(0, 0),
-            end: lsp_types::Position::new(10, 0),
+        let range = ls_types::Range {
+            start: ls_types::Position::new(0, 0),
+            end: ls_types::Position::new(10, 0),
         };
 
         let actions = code_actions(
@@ -199,11 +199,11 @@ contract Test {
         let source = "";
         let engine = LintEngine::new();
         let config = Config::default();
-        let uri = lsp_types::Url::parse("file:///empty.sol").unwrap();
+        let uri: ls_types::Uri = "file:///empty.sol".parse().unwrap();
 
-        let range = lsp_types::Range {
-            start: lsp_types::Position::new(0, 0),
-            end: lsp_types::Position::new(0, 0),
+        let range = ls_types::Range {
+            start: ls_types::Position::new(0, 0),
+            end: ls_types::Position::new(0, 0),
         };
 
         let actions = code_actions(
