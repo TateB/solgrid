@@ -14,6 +14,7 @@ A blazing-fast, Rust-native Solidity linter and formatter. One tool to replace s
 - **Stdin/stdout support** — pipe Solidity through solgrid for editor integrations
 - **LSP server** — real-time linting, code actions, formatting, hover docs, and suppression completions
 - **VSCode extension** — first-class editor integration with fix-on-save and format-on-save
+- **Prettier plugin** — drop-in integration for teams using Prettier (`prettier-plugin-solgrid`)
 - **Sub-second performance** on entire projects, powered by the Solar parser
 
 ## Quick Start
@@ -90,7 +91,7 @@ exclude = ["lib/**", "node_modules/**"]
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
-- Multi-crate Rust workspace structure (10 crates)
+- Multi-crate Rust workspace structure (11 crates)
 - Rule engine design with two-pass analysis (syntactic + semantic)
 - Complete rule set with 90 rules across 6 categories
 - Formatter with chunk-based intermediate representation
@@ -102,7 +103,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
 
 ## Status
 
-**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. 304 tests passing. See [TODO.md](./TODO.md) for detailed progress.
+**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. Prettier plugin with NAPI-RS bindings. Release workflow with platform-specific binaries and VSIX packages. 309+ tests passing. See [TODO.md](./TODO.md) for detailed progress.
 
 ## Editor Integration
 
@@ -141,6 +142,30 @@ solgrid server
 ```
 
 The server communicates via stdio and supports the standard LSP protocol.
+
+## Prettier Plugin
+
+The `prettier-plugin-solgrid` package lets teams already using Prettier adopt solgrid's formatter without changing their workflow. The plugin delegates all formatting to solgrid's Rust formatter via NAPI-RS bindings.
+
+```bash
+# Install
+npm install --save-dev prettier prettier-plugin-solgrid
+
+# Format with Prettier
+npx prettier --write "**/*.sol"
+```
+
+Standard Prettier options (`printWidth`, `tabWidth`, `useTabs`, `singleQuote`, `bracketSpacing`) are automatically mapped to solgrid equivalents. Additional solgrid-specific options are available:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `solidityNumberUnderscore` | `"preserve"` | Number literal underscores: `"preserve"`, `"thousands"`, `"remove"` |
+| `solidityUintType` | `"long"` | Uint representation: `"long"` (uint256), `"short"` (uint), `"preserve"` |
+| `soliditySortImports` | `false` | Sort import statements alphabetically |
+| `solidityMultilineFuncHeader` | `"attributes_first"` | Multiline function header style |
+| `solidityOverrideSpacing` | `true` | Space in override specifiers |
+| `solidityWrapComments` | `false` | Wrap comments to fit within printWidth |
+| `solidityContractNewLines` | `false` | Newlines at start/end of contract body |
 
 ## Development & Testing
 
@@ -181,6 +206,31 @@ cd editors/vscode
 SOLGRID_BIN=../../target/debug/solgrid pnpm test:e2e
 ```
 
+### Prettier plugin tests
+
+```bash
+# Build the NAPI native addon first
+cd packages/prettier-plugin-solgrid
+pnpm install
+pnpm build:napi
+
+# Run tests
+pnpm test
+```
+
+### Benchmarks
+
+```bash
+# Run all benchmarks
+cargo bench --workspace
+
+# Run formatter benchmarks only
+cargo bench -p solgrid_formatter
+
+# Run linter benchmarks only
+cargo bench -p solgrid_linter
+```
+
 ### CI
 
-The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, and VSCode e2e tests.
+The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, VSCode e2e tests, and Prettier plugin tests.

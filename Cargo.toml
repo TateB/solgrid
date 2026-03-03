@@ -8,6 +8,7 @@ members = [
     "crates/solgrid_diagnostics",
     "crates/solgrid_formatter",
     "crates/solgrid_linter",
+    "crates/solgrid_napi",
     "crates/solgrid_parser",
     "crates/solgrid_server",
     "crates/solgrid_testing",
@@ -65,3 +66,17 @@ ariadne = "0.5"
 
 # Testing
 insta = { version = "1", features = ["yaml"] }
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# NAPI-RS bindings
+napi = { version = "2", features = ["napi8"] }
+napi-derive = "2"
+napi-build = "2"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = 3

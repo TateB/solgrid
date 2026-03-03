@@ -1,0 +1,31 @@
+{
+  "name": "prettier-plugin-solgrid",
+  "version": "0.1.0",
+  "description": "Prettier plugin for Solidity — powered by solgrid's Rust formatter",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TateB/solgrid",
+    "directory": "packages/prettier-plugin-solgrid"
+  },
+  "type": "module",
+  "main": "src/index.mjs",
+  "files": [
+    "src",
+    "*.node"
+  ],
+  "scripts": {
+    "build:napi": "napi build --release --cargo-cwd ../../crates/solgrid_napi",
+    "build:napi:debug": "napi build --cargo-cwd ../../crates/solgrid_napi",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "prettier": "^3.0.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0",
+    "prettier": "^3.0.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -121,3 +121,27 @@ jobs:
         working-directory: editors/vscode
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
+
+  prettier-plugin:
+    name: Prettier Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build the NAPI native addon
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Setup Node.js + pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install
+        working-directory: packages/prettier-plugin-solgrid
+      # Build native addon
+      - run: pnpm run build:napi
+        working-directory: packages/prettier-plugin-solgrid
+      # Run tests
+      - run: pnpm test
+        working-directory: packages/prettier-plugin-solgrid

@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: solgrid
+
+jobs:
+  build:
+    name: Build ${{ matrix.vscode-target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - vscode-target: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary-ext: ""
+          - vscode-target: darwin-x64
+            rust-target: x86_64-apple-darwin
+            os: macos-13
+            binary-ext: ""
+          - vscode-target: darwin-arm64
+            rust-target: aarch64-apple-darwin
+            os: macos-14
+            binary-ext: ""
+          - vscode-target: win32-x64
+            rust-target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary-ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Build the Rust binary
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.rust-target }} -p ${{ env.BINARY_NAME }}
+
+      # Stage standalone binary
+      - name: Stage binary
+        shell: bash
+        run: |
+          mkdir -p staging
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" \
+               "staging/${{ env.BINARY_NAME }}-${{ matrix.vscode-target }}${{ matrix.binary-ext }}"
+          else
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" \
+               "staging/${{ env.BINARY_NAME }}-${{ matrix.vscode-target }}"
+            chmod +x "staging/${{ env.BINARY_NAME }}-${{ matrix.vscode-target }}"
+          fi
+
+      # Stage binary into extension for VSIX packaging
+      - name: Stage extension binary
+        shell: bash
+        run: |
+          mkdir -p editors/vscode/bin
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" editors/vscode/bin/
+          else
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" editors/vscode/bin/
+            chmod +x "editors/vscode/bin/${{ env.BINARY_NAME }}"
+          fi
+
+      # Build and package VSCode extension
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: editors/vscode
+      - run: pnpm run compile
+        working-directory: editors/vscode
+      - name: Package VSIX
+        working-directory: editors/vscode
+        run: npx @vscode/vsce package --no-dependencies --target ${{ matrix.vscode-target }}
+
+      # Upload standalone binary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.vscode-target }}
+          path: staging/${{ env.BINARY_NAME }}-*
+
+      # Upload VSIX
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.vscode-target }}
+          path: editors/vscode/*.vsix
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "{binary-*,vsix-*}"
+          merge-multiple: true
+          path: release/
+
+      # Generate checksums
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum solgrid-* > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      # Create GitHub Release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/solgrid-*
+            release/checksums-sha256.txt
+            release/*.vsix
+          generate_release_notes: true
+
+      # Publish to VS Code Marketplace (requires VSCE_PAT secret)
+      - name: Publish to VS Marketplace
+        if: env.VSCE_PAT != ''
+        run: npx @vscode/vsce publish --packagePath release/*.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Publish to Open VSX (requires OVSX_PAT secret)
+      - name: Publish to Open VSX
+        if: env.OVSX_PAT != ''
+        run: |
+          for vsix in release/*.vsix; do
+            npx ovsx publish "$vsix" -p "$OVSX_PAT"
+          done
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
