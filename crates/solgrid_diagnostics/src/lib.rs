@@ -221,6 +221,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// Create a new diagnostic without an auto-fix.
     pub fn new(
         rule_id: impl Into<String>,
         message: impl Into<String>,
@@ -236,6 +237,7 @@ impl Diagnostic {
         }
     }
 
+    /// Attach an auto-fix to this diagnostic.
     pub fn with_fix(mut self, fix: Fix) -> Self {
         self.fix = Some(fix);
         self

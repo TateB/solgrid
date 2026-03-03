@@ -13,16 +13,19 @@ pub struct LintEngine {
 }
 
 impl LintEngine {
+    /// Create a new lint engine with all built-in rules.
     pub fn new() -> Self {
         Self {
             registry: RuleRegistry::new(),
         }
     }
 
+    /// Create a lint engine with a custom rule registry.
     pub fn with_registry(registry: RuleRegistry) -> Self {
         Self { registry }
     }
 
+    /// Get a reference to the underlying rule registry.
     pub fn registry(&self) -> &RuleRegistry {
         &self.registry
     }

@@ -41,6 +41,7 @@ pub struct SolgridServer {
 }
 
 impl SolgridServer {
+    /// Create a new server instance connected to the given LSP client.
     pub fn new(client: Client) -> Self {
         Self {
             client,
