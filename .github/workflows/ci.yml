@@ -67,3 +67,57 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run compile
       - run: pnpm test
+
+  vscode-integration-tests:
+    name: VSCode Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build solgrid binary
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p solgrid
+      # Setup Node.js + pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+      # Run LSP protocol integration tests
+      - run: pnpm install --frozen-lockfile
+        working-directory: editors/vscode
+      - run: pnpm test:integration
+        working-directory: editors/vscode
+        env:
+          SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
+
+  vscode-e2e-tests:
+    name: VSCode E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Build solgrid binary
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p solgrid
+      # Setup Node.js + pnpm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+      # Build and run e2e tests
+      - run: pnpm install --frozen-lockfile
+        working-directory: editors/vscode
+      - run: pnpm run compile:tests
+        working-directory: editors/vscode
+      - run: xvfb-run -a node out/test/e2e/run.js
+        working-directory: editors/vscode
+        env:
+          SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid

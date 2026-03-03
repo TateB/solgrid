@@ -85,8 +85,13 @@
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
+    "compile:tests": "tsc -p ./tsconfig.test.json",
     "watch": "tsc -watch -p ./",
-    "test": "vitest run",
+    "test": "vitest run --project unit",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project lsp-integration",
+    "test:e2e": "pnpm run compile:tests && node out/test/e2e/run.js",
+    "test:all": "pnpm test:unit && pnpm test:integration",
     "lint": "eslint src --ext ts",
     "package": "vsce package",
     "publish": "vsce publish"
@@ -95,8 +100,10 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.0.0",
     "vitest": "^4.0.18"
