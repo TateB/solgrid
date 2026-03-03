@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.rust-target }}
 
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # Build the NAPI native addon
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
 
       - uses: pnpm/action-setup@v4
