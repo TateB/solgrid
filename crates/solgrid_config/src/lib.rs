@@ -99,17 +99,29 @@ impl LintConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FormatConfig {
+    /// Maximum line length before wrapping (default: 120).
     pub line_length: usize,
+    /// Number of spaces per indentation level (default: 4).
     pub tab_width: usize,
+    /// Use tabs instead of spaces for indentation.
     pub use_tabs: bool,
+    /// Use single quotes instead of double quotes for strings.
     pub single_quote: bool,
+    /// Add spaces inside curly braces `{ }`.
     pub bracket_spacing: bool,
+    /// How to handle underscores in number literals.
     pub number_underscore: NumberUnderscore,
+    /// How to normalize uint/int type aliases.
     pub uint_type: UintType,
+    /// Add space in override specifiers.
     pub override_spacing: bool,
+    /// Wrap comments to fit within line length.
     pub wrap_comments: bool,
+    /// Sort import statements alphabetically.
     pub sort_imports: bool,
+    /// Style for multiline function headers.
     pub multiline_func_header: MultilineFuncHeader,
+    /// Add newlines at the start and end of contract bodies.
     pub contract_new_lines: bool,
 }
 
@@ -135,8 +147,11 @@ impl Default for FormatConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NumberUnderscore {
+    /// Keep underscores as-is.
     Preserve,
+    /// Insert underscores every three digits.
     Thousands,
+    /// Remove all underscores from number literals.
     Remove,
 }
 
@@ -154,8 +169,11 @@ pub enum UintType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MultilineFuncHeader {
+    /// Break after attributes (visibility, modifiers) first.
     AttributesFirst,
+    /// Break after parameters first.
     ParamsFirst,
+    /// Break after each element.
     All,
 }
 
@@ -163,11 +181,17 @@ pub enum MultilineFuncHeader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfig {
+    /// Solidity version hint (auto-detected from pragma if omitted).
     pub solidity_version: Option<String>,
+    /// File glob patterns to include.
     pub include: Vec<String>,
+    /// File glob patterns to exclude.
     pub exclude: Vec<String>,
+    /// Whether to honor `.gitignore` patterns.
     pub respect_gitignore: bool,
+    /// Number of parallel threads (0 = auto-detect).
     pub threads: usize,
+    /// Directory for the incremental cache.
     pub cache_dir: String,
 }
 
@@ -312,4 +336,130 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
     }
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.lint.preset, RulePreset::Recommended);
+        assert_eq!(config.format.line_length, 120);
+        assert_eq!(config.format.tab_width, 4);
+        assert!(!config.format.use_tabs);
+        assert!(!config.format.single_quote);
+        assert!(!config.format.bracket_spacing);
+        assert!(config.global.respect_gitignore);
+        assert_eq!(config.global.threads, 0);
+    }
+
+    #[test]
+    fn test_parse_minimal_toml() {
+        let toml_str = r#"
+[lint]
+preset = "recommended"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.lint.preset, RulePreset::Recommended);
+        assert_eq!(config.format.line_length, 120); // default
+    }
+
+    #[test]
+    fn test_parse_full_toml() {
+        let toml_str = r#"
+[lint]
+preset = "all"
+
+[lint.rules]
+"security/tx-origin" = "error"
+"gas/custom-errors" = "off"
+
+[format]
+line_length = 80
+tab_width = 2
+use_tabs = true
+single_quote = true
+bracket_spacing = true
+
+[global]
+exclude = ["lib/**"]
+respect_gitignore = false
+threads = 4
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.lint.preset, RulePreset::All);
+        assert_eq!(config.lint.rules.get("security/tx-origin"), Some(&RuleLevel::Error));
+        assert_eq!(config.lint.rules.get("gas/custom-errors"), Some(&RuleLevel::Off));
+        assert_eq!(config.format.line_length, 80);
+        assert_eq!(config.format.tab_width, 2);
+        assert!(config.format.use_tabs);
+        assert!(config.format.single_quote);
+        assert!(config.format.bracket_spacing);
+        assert!(!config.global.respect_gitignore);
+        assert_eq!(config.global.threads, 4);
+    }
+
+    #[test]
+    fn test_rule_severity_default() {
+        let config = LintConfig::default();
+        // Security rules default to Error
+        assert_eq!(
+            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            Some(Severity::Error)
+        );
+        // Best practices default to Warning
+        assert_eq!(
+            config.rule_severity("best-practices/no-console", RuleCategory::BestPractices),
+            Some(Severity::Warning)
+        );
+    }
+
+    #[test]
+    fn test_rule_severity_override() {
+        let mut config = LintConfig::default();
+        config.rules.insert("security/tx-origin".to_string(), RuleLevel::Warn);
+        assert_eq!(
+            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            Some(Severity::Warning)
+        );
+    }
+
+    #[test]
+    fn test_rule_disabled() {
+        let mut config = LintConfig::default();
+        config.rules.insert("security/tx-origin".to_string(), RuleLevel::Off);
+        assert!(!config.is_rule_enabled("security/tx-origin", RuleCategory::Security));
+        assert_eq!(
+            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            None
+        );
+    }
+
+    #[test]
+    fn test_format_config_defaults() {
+        let config = FormatConfig::default();
+        assert_eq!(config.line_length, 120);
+        assert_eq!(config.tab_width, 4);
+        assert!(!config.use_tabs);
+        assert!(!config.single_quote);
+        assert!(!config.bracket_spacing);
+        assert_eq!(config.number_underscore, NumberUnderscore::Preserve);
+        assert_eq!(config.uint_type, UintType::Long);
+        assert!(config.override_spacing);
+        assert!(!config.wrap_comments);
+        assert!(!config.sort_imports);
+        assert_eq!(config.multiline_func_header, MultilineFuncHeader::AttributesFirst);
+        assert!(!config.contract_new_lines);
+    }
+
+    #[test]
+    fn test_config_roundtrip() {
+        let config = Config::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.format.line_length, config.format.line_length);
+        assert_eq!(parsed.format.tab_width, config.format.tab_width);
+    }
 }

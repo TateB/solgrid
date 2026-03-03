@@ -2,6 +2,9 @@
 name = "solgrid_server"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LSP server for solgrid editor integration"
 
 [dependencies]
 solgrid_config = { workspace = true }
@@ -15,3 +18,6 @@ tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[lints]
+workspace = true

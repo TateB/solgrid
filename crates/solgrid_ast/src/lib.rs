@@ -108,3 +108,42 @@ pub fn contract_items<'a>(items: &'a [Item<'a>]) -> impl Iterator<Item = &'a Ite
             }
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_pascal_case() {
+        assert!(is_pascal_case("MyContract"));
+        assert!(is_pascal_case("ERC20Token"));
+        assert!(is_pascal_case("A"));
+        assert!(!is_pascal_case("myContract"));
+        assert!(!is_pascal_case("my_contract"));
+        assert!(!is_pascal_case("MY_CONTRACT"));
+        assert!(!is_pascal_case(""));
+    }
+
+    #[test]
+    fn test_is_camel_case() {
+        assert!(is_camel_case("myFunction"));
+        assert!(is_camel_case("getValue"));
+        assert!(is_camel_case("x"));
+        assert!(!is_camel_case("MyFunction"));
+        assert!(!is_camel_case("my_function"));
+        assert!(!is_camel_case("MY_FUNCTION"));
+        assert!(!is_camel_case(""));
+    }
+
+    #[test]
+    fn test_is_upper_snake_case() {
+        assert!(is_upper_snake_case("MAX_VALUE"));
+        assert!(is_upper_snake_case("MY_CONST"));
+        assert!(is_upper_snake_case("X"));
+        assert!(is_upper_snake_case("ERC20"));
+        assert!(!is_upper_snake_case("myValue"));
+        assert!(!is_upper_snake_case("my_value"));
+        assert!(!is_upper_snake_case("MyValue"));
+        assert!(!is_upper_snake_case(""));
+    }
+}

@@ -1,3 +1,8 @@
+//! Diagnostic types and reporting for solgrid.
+//!
+//! Provides core types used across the solgrid workspace: [`Diagnostic`],
+//! [`Severity`], [`Fix`], [`TextEdit`], [`RuleMeta`], and [`FileResult`].
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::ops::Range;
@@ -6,8 +11,11 @@ use std::ops::Range;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    /// A hard error that must be fixed.
     Error,
+    /// A warning that should be addressed.
     Warning,
+    /// An informational suggestion.
     Info,
 }
 
@@ -53,6 +61,7 @@ pub struct TextEdit {
 }
 
 impl TextEdit {
+    /// Create a new text edit replacing the given byte range.
     pub fn new(range: Range<usize>, replacement: impl Into<String>) -> Self {
         Self {
             range,
@@ -88,6 +97,7 @@ pub struct Fix {
 }
 
 impl Fix {
+    /// Create a new fix with the given safety tier, message, and edits.
     pub fn new(safety: FixSafety, message: impl Into<String>, edits: Vec<TextEdit>) -> Self {
         Self {
             safety,
@@ -96,14 +106,17 @@ impl Fix {
         }
     }
 
+    /// Create a safe fix (applied with `--fix`).
     pub fn safe(message: impl Into<String>, edits: Vec<TextEdit>) -> Self {
         Self::new(FixSafety::Safe, message, edits)
     }
 
+    /// Create a suggestion fix (applied with `--fix --unsafe-fixes`).
     pub fn suggestion(message: impl Into<String>, edits: Vec<TextEdit>) -> Self {
         Self::new(FixSafety::Suggestion, message, edits)
     }
 
+    /// Create a dangerous fix (shown as editor code actions only).
     pub fn dangerous(message: impl Into<String>, edits: Vec<TextEdit>) -> Self {
         Self::new(FixSafety::Dangerous, message, edits)
     }
@@ -113,15 +126,22 @@ impl Fix {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuleCategory {
+    /// Security vulnerabilities and unsafe patterns.
     Security,
+    /// Community-accepted best practices.
     BestPractices,
+    /// Naming convention enforcement.
     Naming,
+    /// Gas optimization opportunities.
     Gas,
+    /// Code style and layout.
     Style,
+    /// NatSpec and documentation completeness.
     Docs,
 }
 
 impl RuleCategory {
+    /// Return the category as a kebab-case string.
     pub fn as_str(&self) -> &'static str {
         match self {
             RuleCategory::Security => "security",
@@ -133,6 +153,7 @@ impl RuleCategory {
         }
     }
 
+    /// Return the default severity for this category.
     pub fn default_severity(&self) -> Severity {
         match self {
             RuleCategory::Security => Severity::Error,
@@ -178,6 +199,7 @@ pub struct RuleMeta {
 }
 
 impl RuleMeta {
+    /// Return the full rule ID in `category/name` format.
     pub fn full_id(&self) -> String {
         format!("{}/{}", self.category, self.name)
     }
@@ -255,4 +277,107 @@ pub fn apply_fixes(source: &str, fixes: &[&Fix]) -> String {
     result.push_str(&source[last_end..]);
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_apply_single_fix() {
+        let source = "hello world";
+        let fix = Fix::safe(
+            "replace hello",
+            vec![TextEdit::replace(0..5, "goodbye")],
+        );
+        let result = apply_fixes(source, &[&fix]);
+        assert_eq!(result, "goodbye world");
+    }
+
+    #[test]
+    fn test_apply_multiple_non_overlapping_fixes() {
+        let source = "aaa bbb ccc";
+        let fix1 = Fix::safe("fix1", vec![TextEdit::replace(0..3, "xxx")]);
+        let fix2 = Fix::safe("fix2", vec![TextEdit::replace(8..11, "zzz")]);
+        let result = apply_fixes(source, &[&fix1, &fix2]);
+        assert_eq!(result, "xxx bbb zzz");
+    }
+
+    #[test]
+    fn test_apply_overlapping_fixes_returns_original() {
+        let source = "hello world";
+        let fix1 = Fix::safe("fix1", vec![TextEdit::replace(0..7, "aaa")]);
+        let fix2 = Fix::safe("fix2", vec![TextEdit::replace(5..11, "bbb")]);
+        let result = apply_fixes(source, &[&fix1, &fix2]);
+        assert_eq!(result, "hello world"); // unchanged due to overlap
+    }
+
+    #[test]
+    fn test_text_edit_delete() {
+        let source = "hello world";
+        let fix = Fix::safe("delete", vec![TextEdit::delete(5..6)]);
+        let result = apply_fixes(source, &[&fix]);
+        assert_eq!(result, "helloworld");
+    }
+
+    #[test]
+    fn test_text_edit_insert() {
+        let source = "helloworld";
+        let fix = Fix::safe("insert", vec![TextEdit::insert(5, " ")]);
+        let result = apply_fixes(source, &[&fix]);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn test_diagnostic_with_fix() {
+        let diag = Diagnostic::new(
+            "security/tx-origin",
+            "use of tx.origin",
+            Severity::Error,
+            10..20,
+        )
+        .with_fix(Fix::dangerous(
+            "replace with msg.sender",
+            vec![TextEdit::replace(10..20, "msg.sender")],
+        ));
+
+        assert_eq!(diag.rule_id, "security/tx-origin");
+        assert_eq!(diag.severity, Severity::Error);
+        assert!(diag.fix.is_some());
+        assert_eq!(diag.fix.unwrap().safety, FixSafety::Dangerous);
+    }
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(format!("{}", Severity::Error), "error");
+        assert_eq!(format!("{}", Severity::Warning), "warning");
+        assert_eq!(format!("{}", Severity::Info), "info");
+    }
+
+    #[test]
+    fn test_rule_category_display() {
+        assert_eq!(RuleCategory::Security.as_str(), "security");
+        assert_eq!(RuleCategory::BestPractices.as_str(), "best-practices");
+        assert_eq!(RuleCategory::Gas.as_str(), "gas");
+    }
+
+    #[test]
+    fn test_rule_category_default_severity() {
+        assert_eq!(
+            RuleCategory::Security.default_severity(),
+            Severity::Error
+        );
+        assert_eq!(
+            RuleCategory::BestPractices.default_severity(),
+            Severity::Warning
+        );
+        assert_eq!(RuleCategory::Gas.default_severity(), Severity::Info);
+    }
+
+    #[test]
+    fn test_fix_safety_display() {
+        assert_eq!(format!("{}", FixSafety::Safe), "safe");
+        assert_eq!(format!("{}", FixSafety::Suggestion), "suggestion");
+        assert_eq!(format!("{}", FixSafety::Dangerous), "dangerous");
+    }
 }

@@ -79,4 +79,4 @@ See the [Configuration Guide](docs/configuration.md) for the full reference incl
 
 ## License
 
-MIT OR Apache-2.0
+MIT

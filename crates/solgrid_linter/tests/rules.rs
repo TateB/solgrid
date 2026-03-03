@@ -2636,3 +2636,121 @@ fn test_registry_lookup() {
     assert!(registry.get("docs/license-identifier").is_some());
     assert!(registry.get("nonexistent/rule").is_none());
 }
+
+// =============================================================================
+// Additional security rules
+// =============================================================================
+
+#[test]
+fn test_state_visibility_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 x;
+}
+"#;
+    assert_diagnostic_count(source, "security/state-visibility", 1);
+}
+
+#[test]
+fn test_state_visibility_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public x;
+}
+"#;
+    assert_no_diagnostics(source, "security/state-visibility");
+}
+
+#[test]
+fn test_unchecked_transfer_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface IERC20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+contract Test {
+    function bad(IERC20 token, address to, uint256 amount) public {
+        token.transfer(to, amount);
+    }
+}
+"#;
+    assert_diagnostic_count(source, "security/unchecked-transfer", 1);
+}
+
+#[test]
+fn test_unchecked_transfer_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface IERC20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+contract Test {
+    function good(IERC20 token, address to, uint256 amount) public {
+        require(token.transfer(to, amount));
+    }
+}
+"#;
+    assert_no_diagnostics(source, "security/unchecked-transfer");
+}
+
+// =============================================================================
+// Additional best practices rules
+// =============================================================================
+
+#[test]
+fn test_no_empty_blocks_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() public {}
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/no-empty-blocks", 1);
+}
+
+#[test]
+fn test_no_empty_blocks_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    receive() external payable {}
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-empty-blocks");
+}
+
+// =============================================================================
+// Additional gas rules
+// =============================================================================
+
+#[test]
+fn test_use_bytes32_constant_string_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    string constant NAME = "hello";
+}
+"#;
+    assert_diagnostic_count(source, "gas/use-bytes32", 1);
+}
+
+#[test]
+fn test_use_bytes32_non_constant_string_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    string public name;
+}
+"#;
+    assert_no_diagnostics(source, "gas/use-bytes32");
+}

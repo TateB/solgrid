@@ -50,3 +50,23 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     }
     (line, col)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_offset_to_line_col() {
+        let source = "first\nsecond\nthird";
+        assert_eq!(offset_to_line_col(source, 0), (1, 1));
+        assert_eq!(offset_to_line_col(source, 5), (1, 6));
+        assert_eq!(offset_to_line_col(source, 6), (2, 1));
+        assert_eq!(offset_to_line_col(source, 13), (3, 1));
+    }
+
+    #[test]
+    fn test_offset_at_end() {
+        let source = "abc";
+        assert_eq!(offset_to_line_col(source, 3), (1, 4));
+    }
+}
