@@ -78,6 +78,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   try {
     await client.start();
   } catch (error) {
+    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
     window.showErrorMessage(
       `Failed to start solgrid language server: ${error}`
     );
