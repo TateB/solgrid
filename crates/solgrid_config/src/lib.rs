@@ -390,8 +390,14 @@ threads = 4
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.lint.preset, RulePreset::All);
-        assert_eq!(config.lint.rules.get("security/tx-origin"), Some(&RuleLevel::Error));
-        assert_eq!(config.lint.rules.get("gas/custom-errors"), Some(&RuleLevel::Off));
+        assert_eq!(
+            config.lint.rules.get("security/tx-origin"),
+            Some(&RuleLevel::Error)
+        );
+        assert_eq!(
+            config.lint.rules.get("gas/custom-errors"),
+            Some(&RuleLevel::Off)
+        );
         assert_eq!(config.format.line_length, 80);
         assert_eq!(config.format.tab_width, 2);
         assert!(config.format.use_tabs);
@@ -419,7 +425,9 @@ threads = 4
     #[test]
     fn test_rule_severity_override() {
         let mut config = LintConfig::default();
-        config.rules.insert("security/tx-origin".to_string(), RuleLevel::Warn);
+        config
+            .rules
+            .insert("security/tx-origin".to_string(), RuleLevel::Warn);
         assert_eq!(
             config.rule_severity("security/tx-origin", RuleCategory::Security),
             Some(Severity::Warning)
@@ -429,7 +437,9 @@ threads = 4
     #[test]
     fn test_rule_disabled() {
         let mut config = LintConfig::default();
-        config.rules.insert("security/tx-origin".to_string(), RuleLevel::Off);
+        config
+            .rules
+            .insert("security/tx-origin".to_string(), RuleLevel::Off);
         assert!(!config.is_rule_enabled("security/tx-origin", RuleCategory::Security));
         assert_eq!(
             config.rule_severity("security/tx-origin", RuleCategory::Security),
@@ -450,7 +460,10 @@ threads = 4
         assert!(config.override_spacing);
         assert!(!config.wrap_comments);
         assert!(!config.sort_imports);
-        assert_eq!(config.multiline_func_header, MultilineFuncHeader::AttributesFirst);
+        assert_eq!(
+            config.multiline_func_header,
+            MultilineFuncHeader::AttributesFirst
+        );
         assert!(!config.contract_new_lines);
     }
 

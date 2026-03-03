@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_sarif_structure() {
-        let results = vec![FileResult {
+        let results = [FileResult {
             path: "test.sol".to_string(),
             diagnostics: vec![Diagnostic::new(
                 "security/tx-origin",

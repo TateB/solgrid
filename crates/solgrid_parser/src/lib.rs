@@ -122,8 +122,7 @@ contract Test {
     uint256 public value;
 }
 "#;
-        let count =
-            with_parsed_ast_sequential(source, "test.sol", |ast| ast.items.len()).unwrap();
+        let count = with_parsed_ast_sequential(source, "test.sol", |ast| ast.items.len()).unwrap();
         assert!(count > 0);
     }
 

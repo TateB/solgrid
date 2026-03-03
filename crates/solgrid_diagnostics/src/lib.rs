@@ -288,10 +288,7 @@ mod tests {
     #[test]
     fn test_apply_single_fix() {
         let source = "hello world";
-        let fix = Fix::safe(
-            "replace hello",
-            vec![TextEdit::replace(0..5, "goodbye")],
-        );
+        let fix = Fix::safe("replace hello", vec![TextEdit::replace(0..5, "goodbye")]);
         let result = apply_fixes(source, &[&fix]);
         assert_eq!(result, "goodbye world");
     }
@@ -365,10 +362,7 @@ mod tests {
 
     #[test]
     fn test_rule_category_default_severity() {
-        assert_eq!(
-            RuleCategory::Security.default_severity(),
-            Severity::Error
-        );
+        assert_eq!(RuleCategory::Security.default_severity(), Severity::Error);
         assert_eq!(
             RuleCategory::BestPractices.default_severity(),
             Severity::Warning
