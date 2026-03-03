@@ -12,21 +12,21 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 import * as path from "path";
 
-suite("solgrid Extension E2E", () => {
+describe("solgrid Extension E2E", () => {
   const fixturesPath = path.resolve(__dirname, "../fixtures");
 
-  suiteSetup(async function () {
+  before(async function () {
     this.timeout(30000);
     // Wait for any pending extension activation
     await new Promise((resolve) => setTimeout(resolve, 2000));
   });
 
-  test("extension is registered", () => {
+  it("extension is registered", () => {
     const ext = vscode.extensions.getExtension("solgrid.solgrid");
     assert.ok(ext, "solgrid extension should be registered");
   });
 
-  test("extension activates when opening a .sol file", async function () {
+  it("extension activates when opening a .sol file", async function () {
     this.timeout(30000);
 
     const solFile = path.join(fixturesPath, "clean.sol");
@@ -43,7 +43,7 @@ suite("solgrid Extension E2E", () => {
     }
   });
 
-  test("diagnostics appear for file with issues", async function () {
+  it("diagnostics appear for file with issues", async function () {
     this.timeout(30000);
 
     const solFile = path.join(fixturesPath, "with_issues.sol");
@@ -66,7 +66,7 @@ suite("solgrid Extension E2E", () => {
     }
   });
 
-  test("clean file has fewer diagnostics than file with issues", async function () {
+  it("clean file has fewer diagnostics than file with issues", async function () {
     this.timeout(30000);
 
     const issuesFile = path.join(fixturesPath, "with_issues.sol");
@@ -87,7 +87,7 @@ suite("solgrid Extension E2E", () => {
     );
   });
 
-  test("format document command works", async function () {
+  it("format document command works", async function () {
     this.timeout(30000);
 
     const solFile = path.join(fixturesPath, "needs_formatting.sol");
@@ -114,7 +114,7 @@ suite("solgrid Extension E2E", () => {
     assert.ok(typeof formattedText === "string");
   });
 
-  test("code actions available for file with issues", async function () {
+  it("code actions available for file with issues", async function () {
     this.timeout(30000);
 
     const solFile = path.join(fixturesPath, "with_issues.sol");
@@ -138,7 +138,7 @@ suite("solgrid Extension E2E", () => {
     assert.ok(actions === undefined || Array.isArray(actions));
   });
 
-  test("extension contributes expected settings", () => {
+  it("extension contributes expected settings", () => {
     const config = vscode.workspace.getConfiguration("solgrid");
     // Verify settings exist with correct defaults
     assert.strictEqual(config.get("enable"), true);
@@ -152,7 +152,7 @@ suite("solgrid Extension E2E", () => {
     assert.strictEqual(config.get("configPath"), null);
   });
 
-  test("extension deactivates without errors", async function () {
+  it("extension deactivates without errors", async function () {
     this.timeout(10000);
 
     // Close all editors

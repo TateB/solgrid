@@ -19,8 +19,8 @@ async function main() {
     // The path to the extension root (editors/vscode/)
     const extensionDevelopmentPath = path.resolve(__dirname, "../../");
 
-    // The path to the test entry point (compiled from extension.test.ts)
-    const extensionTestsPath = path.resolve(__dirname, "./extension.test");
+    // The path to the test entry point (compiled from index.ts)
+    const extensionTestsPath = path.resolve(__dirname, "./index");
 
     // The workspace folder containing test fixtures
     const testWorkspace = path.resolve(__dirname, "../fixtures");
