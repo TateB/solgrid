@@ -1,3 +1,8 @@
+//! solgrid CLI — the Solidity linter and formatter.
+//!
+//! Provides the `solgrid` binary with subcommands: `check`, `fix`, `fmt`,
+//! `list-rules`, `explain`, `migrate`, and `server`.
+
 mod commands;
 mod output;
 

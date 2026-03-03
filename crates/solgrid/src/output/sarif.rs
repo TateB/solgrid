@@ -155,3 +155,82 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     }
     (line, col)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solgrid_diagnostics::{Diagnostic, Severity};
+
+    #[test]
+    fn test_offset_to_line_col_first_line() {
+        let source = "pragma solidity ^0.8.0;";
+        assert_eq!(offset_to_line_col(source, 0), (1, 1));
+        assert_eq!(offset_to_line_col(source, 7), (1, 8));
+    }
+
+    #[test]
+    fn test_offset_to_line_col_multiline() {
+        let source = "line one\nline two\nline three";
+        assert_eq!(offset_to_line_col(source, 0), (1, 1));
+        assert_eq!(offset_to_line_col(source, 9), (2, 1));
+        assert_eq!(offset_to_line_col(source, 18), (3, 1));
+    }
+
+    #[test]
+    fn test_sarif_structure() {
+        let results = [FileResult {
+            path: "test.sol".to_string(),
+            diagnostics: vec![Diagnostic::new(
+                "security/tx-origin",
+                "use of tx.origin",
+                Severity::Error,
+                10..20,
+            )],
+        }];
+
+        // Build SARIF manually to verify structure
+        let sarif_results: Vec<SarifResult> = results
+            .iter()
+            .flat_map(|r| {
+                r.diagnostics.iter().map(|d| SarifResult {
+                    rule_id: d.rule_id.clone(),
+                    level: "error",
+                    message: SarifMessage {
+                        text: d.message.clone(),
+                    },
+                    locations: vec![SarifLocation {
+                        physical_location: SarifPhysicalLocation {
+                            artifact_location: SarifArtifactLocation {
+                                uri: r.path.clone(),
+                            },
+                            region: SarifRegion {
+                                start_line: 1,
+                                start_column: 1,
+                            },
+                        },
+                    }],
+                })
+            })
+            .collect();
+
+        let report = SarifReport {
+            schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+            version: "2.1.0",
+            runs: vec![SarifRun {
+                tool: SarifTool {
+                    driver: SarifDriver {
+                        name: "solgrid",
+                        version: env!("CARGO_PKG_VERSION"),
+                        information_uri: "https://github.com/TateB/solgrid",
+                    },
+                },
+                results: sarif_results,
+            }],
+        };
+
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"version\":\"2.1.0\""));
+        assert!(json.contains("security/tx-origin"));
+        assert!(json.contains("test.sol"));
+    }
+}

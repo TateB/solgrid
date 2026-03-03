@@ -108,3 +108,51 @@ where
 pub fn check_syntax(source: &str, filename: &str) -> Result<(), ParseError> {
     with_parsed_ast(source, filename, |_| ())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_valid_solidity() {
+        let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 public value;
+}
+"#;
+        let count = with_parsed_ast_sequential(source, "test.sol", |ast| ast.items.len()).unwrap();
+        assert!(count > 0);
+    }
+
+    #[test]
+    fn test_parse_syntax_error() {
+        let source = "contract {{{ invalid";
+        let result = check_syntax(source, "bad.sol");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ParseError::SyntaxErrors(_)));
+    }
+
+    #[test]
+    fn test_check_syntax_valid() {
+        let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract A {}";
+        assert!(check_syntax(source, "test.sol").is_ok());
+    }
+
+    #[test]
+    fn test_parse_empty_source() {
+        let result = with_parsed_ast_sequential("", "empty.sol", |ast| ast.items.len());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_error_display() {
+        let err = ParseError::SyntaxErrors("test error".to_string());
+        assert_eq!(format!("{err}"), "test error");
+
+        let err = ParseError::Internal("internal".to_string());
+        assert_eq!(format!("{err}"), "internal parser error: internal");
+    }
+}

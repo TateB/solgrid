@@ -1,3 +1,8 @@
+//! WebAssembly bindings for solgrid.
+//!
+//! Exposes lint, fix, format, and rule listing functions for use in
+//! browser environments and web playgrounds via `wasm-bindgen`.
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use wasm_bindgen::prelude::*;

@@ -2,6 +2,9 @@
 name = "solgrid"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A blazing-fast Solidity linter and formatter"
 
 [[bin]]
 name = "solgrid"
@@ -29,3 +32,6 @@ criterion = { workspace = true }
 [[bench]]
 name = "startup_bench"
 harness = false
+
+[lints]
+workspace = true

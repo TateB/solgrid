@@ -17,6 +17,7 @@ pub struct LintContext<'a> {
 }
 
 impl<'a> LintContext<'a> {
+    /// Create a new lint context for the given source, path, and config.
     pub fn new(source: &'a str, path: &'a Path, config: &'a Config) -> Self {
         Self {
             source,

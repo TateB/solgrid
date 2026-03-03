@@ -21,6 +21,7 @@ pub struct DocumentStore {
 }
 
 impl DocumentStore {
+    /// Create an empty document store.
     pub fn new() -> Self {
         Self::default()
     }

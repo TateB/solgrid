@@ -63,6 +63,7 @@ impl RuleRegistry {
         self.rules.len()
     }
 
+    /// Returns `true` if no rules are registered.
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }

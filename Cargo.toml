@@ -18,8 +18,18 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+rust-version = "1.74"
+license = "MIT"
 repository = "https://github.com/TateB/solgrid"
+homepage = "https://github.com/TateB/solgrid"
+keywords = ["solidity", "linter", "formatter", "ethereum", "security"]
+categories = ["development-tools", "command-line-utilities"]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 # Internal crates

@@ -2,8 +2,14 @@
 name = "solgrid_config"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration parsing for solgrid (solgrid.toml)"
 
 [dependencies]
 solgrid_diagnostics = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+
+[lints]
+workspace = true
