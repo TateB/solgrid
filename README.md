@@ -11,7 +11,6 @@ A blazing-fast, Rust-native Solidity linter and formatter. One tool to replace s
 - **Multiple output formats** — text (colored), JSON, GitHub Actions annotations, SARIF 2.1.0
 - **Foundry.toml fallback** — reads `[fmt]` section when no `solgrid.toml` is found
 - **Migration support** — `solgrid migrate --from solhint` converts `.solhint.json` to `solgrid.toml`
-- **Stdin/stdout support** — pipe Solidity through solgrid for editor integrations
 - **LSP server** — real-time linting, code actions, formatting, hover docs, and suppression completions
 - **VSCode extension** — first-class editor integration with fix-on-save and format-on-save
 - **Prettier plugin** — drop-in integration for teams using Prettier (`prettier-plugin-solgrid`)
@@ -31,18 +30,6 @@ solgrid fmt
 
 # Format check (dry run)
 solgrid fmt --diff
-
-# Lint from stdin
-echo 'pragma solidity ^0.8.0; contract T {}' | solgrid check --stdin
-
-# Format from stdin
-echo 'pragma solidity ^0.8.0; contract T {}' | solgrid fmt --stdin
-
-# GitHub Actions output
-solgrid check --output-format github
-
-# SARIF output (for CodeQL, etc.)
-solgrid check --output-format sarif
 
 # Migrate from solhint
 solgrid migrate --from solhint
@@ -70,218 +57,26 @@ tab_width = 4
 use_tabs = false
 single_quote = false
 bracket_spacing = false
-number_underscore = "preserve"
-uint_type = "long"
-sort_imports = false
 
 [global]
 exclude = ["lib/**", "node_modules/**"]
 ```
 
-## Output Formats
+See the [Configuration Guide](docs/configuration.md) for the full reference including rule-specific settings, presets, and config resolution order.
 
-| Format | Flag | Description |
-|--------|------|-------------|
-| Text | `--output-format text` | Colored terminal output (default) |
-| JSON | `--output-format json` | Machine-readable JSON |
-| GitHub | `--output-format github` | GitHub Actions `::error`/`::warning` annotations |
-| SARIF | `--output-format sarif` | OASIS SARIF 2.1.0 for CodeQL and security tools |
+## Documentation
 
-## Architecture
+| Resource | Description |
+|----------|-------------|
+| [Configuration Guide](docs/configuration.md) | Full `solgrid.toml` reference, presets, resolution order |
+| [Editor Integration](docs/editor-integration.md) | VSCode, Cursor, and LSP setup for other editors |
+| [Prettier Plugin](docs/prettier-plugin.md) | Using solgrid as a Prettier plugin |
+| [Output Formats](docs/output-formats.md) | Text, JSON, GitHub Actions, and SARIF output |
+| [WASM Bindings](docs/wasm.md) | Browser and web playground API |
+| [Architecture](ARCHITECTURE.md) | Full technical design document |
+| [Contributing](CONTRIBUTING.md) | Development setup, testing, and release process |
+| [Changelog](CHANGELOG.md) | Release notes |
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design document covering:
+## License
 
-- Multi-crate Rust workspace structure (11 crates)
-- Rule engine design with two-pass analysis (syntactic + semantic)
-- Complete rule set with 90 rules across 6 categories
-- Formatter with chunk-based intermediate representation
-- LSP server and VSCode extension design
-- Configuration system (`solgrid.toml`)
-- CLI interface and output formats
-- Performance goals and strategies
-- Phased development roadmap
-
-## Status
-
-**In development** — 90/90 lint rules implemented across 6 categories (security, best practices, naming, gas optimization, style, documentation). Full chunk-based formatter with comment preservation and idempotency verification. Incremental caching, GitHub Actions/SARIF output, foundry.toml fallback, and solhint migration support. LSP server with real-time linting, code actions, formatting, hover docs, and suppression completions. VSCode extension with fix-on-save and format-on-save. Prettier plugin with NAPI-RS bindings and conformance test suite. WASM crate for browser/web playground use. Release workflow with platform-specific binaries and VSIX packages. Robust versioning with single source of truth. 350+ tests passing. See [TODO.md](./TODO.md) for detailed progress.
-
-## Editor Integration
-
-### VSCode
-
-The `editors/vscode/` directory contains a VSCode extension that provides:
-
-- Real-time linting as you type
-- Quick-fix code actions grouped by safety tier (safe, suggestion, dangerous)
-- Document and range formatting
-- Fix-on-save and format-on-save
-- Rule documentation on hover
-- Suppression comment completion (`// solgrid-disable-next-line ...`)
-
-**Extension settings:**
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `solgrid.enable` | `true` | Enable solgrid |
-| `solgrid.path` | `null` | Path to solgrid binary (auto-detected from PATH) |
-| `solgrid.fixOnSave` | `true` | Auto-fix safe issues on save |
-| `solgrid.fixOnSave.unsafeFixes` | `false` | Also apply suggestion-level fixes |
-| `solgrid.formatOnSave` | `true` | Format on save |
-| `solgrid.configPath` | `null` | Path to solgrid.toml (auto-discovered) |
-
-### Cursor
-
-Cursor uses the same Extension Host and LSP protocol as VSCode. The solgrid extension works in Cursor without modification. The LSP integration tests verify protocol-level behavior that applies to both editors.
-
-### Other Editors
-
-Any editor with LSP support can use solgrid as a language server:
-
-```bash
-solgrid server
-```
-
-The server communicates via stdio and supports the standard LSP protocol.
-
-## Prettier Plugin
-
-The `prettier-plugin-solgrid` package lets teams already using Prettier adopt solgrid's formatter without changing their workflow. The plugin delegates all formatting to solgrid's Rust formatter via NAPI-RS bindings.
-
-```bash
-# Install
-npm install --save-dev prettier prettier-plugin-solgrid
-
-# Format with Prettier
-npx prettier --write "**/*.sol"
-```
-
-Standard Prettier options (`printWidth`, `tabWidth`, `useTabs`, `singleQuote`, `bracketSpacing`) are automatically mapped to solgrid equivalents. Additional solgrid-specific options are available:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `solidityNumberUnderscore` | `"preserve"` | Number literal underscores: `"preserve"`, `"thousands"`, `"remove"` |
-| `solidityUintType` | `"long"` | Uint representation: `"long"` (uint256), `"short"` (uint), `"preserve"` |
-| `soliditySortImports` | `false` | Sort import statements alphabetically |
-| `solidityMultilineFuncHeader` | `"attributes_first"` | Multiline function header style |
-| `solidityOverrideSpacing` | `true` | Space in override specifiers |
-| `solidityWrapComments` | `false` | Wrap comments to fit within printWidth |
-| `solidityContractNewLines` | `false` | Newlines at start/end of contract body |
-
-## Development & Testing
-
-### Rust tests
-
-```bash
-cargo test --workspace
-```
-
-### VSCode extension — unit tests
-
-```bash
-cd editors/vscode
-pnpm install
-pnpm test:unit
-```
-
-### VSCode extension — LSP integration tests
-
-These tests spawn the `solgrid server` binary and verify all LSP features (diagnostics, code actions, formatting, hover, completion, configuration, fix-on-save) via the protocol. They apply to any LSP-compatible editor, including both VSCode and Cursor.
-
-```bash
-# Build the solgrid binary first
-cargo build -p solgrid
-
-# Run integration tests
-cd editors/vscode
-SOLGRID_BIN=../../target/debug/solgrid pnpm test:integration
-```
-
-### VSCode extension — e2e tests
-
-These tests launch a real VSCode instance with the extension installed and verify activation, diagnostics, and editor commands.
-
-```bash
-cargo build -p solgrid
-cd editors/vscode
-SOLGRID_BIN=../../target/debug/solgrid pnpm test:e2e
-```
-
-### Prettier plugin tests
-
-```bash
-# Build the NAPI native addon first
-cd packages/prettier-plugin-solgrid
-pnpm install
-pnpm build:napi
-
-# Run tests
-pnpm test
-```
-
-### Benchmarks
-
-```bash
-# Run all benchmarks
-cargo bench --workspace
-
-# Run formatter benchmarks only
-cargo bench -p solgrid_formatter
-
-# Run linter benchmarks only (includes cold lint corpus)
-cargo bench -p solgrid_linter
-
-# Run startup/initialization benchmarks
-cargo bench -p solgrid
-```
-
-### CI
-
-The GitHub Actions workflow runs the full test suite: Rust checks (check, test, fmt, clippy), VSCode extension unit tests, LSP integration tests, VSCode e2e tests, Prettier plugin tests, and version sync validation.
-
-## WASM
-
-The `solgrid_wasm` crate provides WebAssembly bindings for browser and web playground use:
-
-- `lint(source, config_json)` — lint Solidity source, returns JSON diagnostics
-- `fix(source, config_json, include_unsafe)` — lint and auto-fix, returns fixed source + remaining diagnostics
-- `format(source, config_json)` — format Solidity source
-- `list_rules()` — list all available lint rules as JSON
-- `version()` — return the solgrid version string
-
-Build with `wasm-pack` for use in web applications.
-
-## Versioning
-
-solgrid uses a single source of truth for version management:
-
-1. **`Cargo.toml`** `[workspace.package] version` is the canonical version
-2. All Rust crates inherit the workspace version
-3. `editors/vscode/package.json` and `packages/prettier-plugin-solgrid/package.json` must match
-
-### Version management
-
-```bash
-# Check all versions are in sync
-./scripts/version.sh
-
-# Update all package.json files to match Cargo.toml
-./scripts/version.sh --write
-
-# Set a new version everywhere
-./scripts/version.sh --set 0.2.0
-```
-
-### Release process
-
-1. Bump version: `./scripts/version.sh --set X.Y.Z`
-2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
-3. Tag: `git tag vX.Y.Z`
-4. Push: `git push origin main --tags`
-5. CI builds all platforms, publishes VSIX to VS Marketplace, and publishes npm package
-
-The `--version` flag includes the git commit hash and build date:
-
-```
-$ solgrid --version
-solgrid 0.1.0 (abc1234 2026-03-03)
-```
+MIT OR Apache-2.0
