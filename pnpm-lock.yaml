@@ -39,6 +39,14 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.19.35)
 
+  packages/cli-darwin-arm64: {}
+
+  packages/cli-darwin-x64: {}
+
+  packages/cli-linux-x64: {}
+
+  packages/cli-win32-x64: {}
+
   packages/prettier-plugin-solgrid:
     devDependencies:
       '@napi-rs/cli':
@@ -50,6 +58,8 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@20.19.35)
+
+  packages/solgrid: {}
 
 packages:
 

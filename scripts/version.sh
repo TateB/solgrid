@@ -17,6 +17,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CARGO_TOML="$REPO_ROOT/Cargo.toml"
 VSCODE_PKG="$REPO_ROOT/editors/vscode/package.json"
 PRETTIER_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/package.json"
+SOLGRID_PKG="$REPO_ROOT/packages/solgrid/package.json"
+CLI_DARWIN_ARM64_PKG="$REPO_ROOT/packages/cli-darwin-arm64/package.json"
+CLI_DARWIN_X64_PKG="$REPO_ROOT/packages/cli-darwin-x64/package.json"
+CLI_LINUX_X64_PKG="$REPO_ROOT/packages/cli-linux-x64/package.json"
+CLI_WIN32_X64_PKG="$REPO_ROOT/packages/cli-win32-x64/package.json"
 
 # Extract version from Cargo.toml [workspace.package] section
 get_cargo_version() {
@@ -37,6 +42,13 @@ set_json_version() {
   sed -i "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
 }
 
+# Update optionalDependencies versions in the main solgrid package
+set_optional_dep_versions() {
+  local file="$1"
+  local version="$2"
+  sed -i "s/\"@solgrid\/cli-\([^\"]*\)\": \"[^\"]*\"/\"@solgrid\/cli-\1\": \"$version\"/g" "$file"
+}
+
 # Update version in Cargo.toml workspace
 set_cargo_version() {
   local version="$1"
@@ -53,8 +65,16 @@ case "$MODE" in
     echo "Syncing all package versions to Cargo.toml version: $CARGO_VERSION"
     set_json_version "$VSCODE_PKG" "$CARGO_VERSION"
     set_json_version "$PRETTIER_PKG" "$CARGO_VERSION"
+    set_json_version "$SOLGRID_PKG" "$CARGO_VERSION"
+    set_optional_dep_versions "$SOLGRID_PKG" "$CARGO_VERSION"
+    set_json_version "$CLI_DARWIN_ARM64_PKG" "$CARGO_VERSION"
+    set_json_version "$CLI_DARWIN_X64_PKG" "$CARGO_VERSION"
+    set_json_version "$CLI_LINUX_X64_PKG" "$CARGO_VERSION"
+    set_json_version "$CLI_WIN32_X64_PKG" "$CARGO_VERSION"
     echo "  Updated editors/vscode/package.json -> $CARGO_VERSION"
     echo "  Updated packages/prettier-plugin-solgrid/package.json -> $CARGO_VERSION"
+    echo "  Updated packages/solgrid/package.json -> $CARGO_VERSION"
+    echo "  Updated packages/cli-*/package.json -> $CARGO_VERSION"
     echo "Done."
     ;;
 
@@ -69,9 +89,17 @@ case "$MODE" in
     set_cargo_version "$NEW_VERSION"
     set_json_version "$VSCODE_PKG" "$NEW_VERSION"
     set_json_version "$PRETTIER_PKG" "$NEW_VERSION"
+    set_json_version "$SOLGRID_PKG" "$NEW_VERSION"
+    set_optional_dep_versions "$SOLGRID_PKG" "$NEW_VERSION"
+    set_json_version "$CLI_DARWIN_ARM64_PKG" "$NEW_VERSION"
+    set_json_version "$CLI_DARWIN_X64_PKG" "$NEW_VERSION"
+    set_json_version "$CLI_LINUX_X64_PKG" "$NEW_VERSION"
+    set_json_version "$CLI_WIN32_X64_PKG" "$NEW_VERSION"
     echo "  Updated Cargo.toml -> $NEW_VERSION"
     echo "  Updated editors/vscode/package.json -> $NEW_VERSION"
     echo "  Updated packages/prettier-plugin-solgrid/package.json -> $NEW_VERSION"
+    echo "  Updated packages/solgrid/package.json -> $NEW_VERSION"
+    echo "  Updated packages/cli-*/package.json -> $NEW_VERSION"
     echo ""
     echo "Next steps:"
     echo "  1. git add -A && git commit -m 'chore: bump version to $NEW_VERSION'"
@@ -82,11 +110,21 @@ case "$MODE" in
   check|*)
     VSCODE_VERSION=$(get_json_version "$VSCODE_PKG")
     PRETTIER_VERSION=$(get_json_version "$PRETTIER_PKG")
+    SOLGRID_VERSION=$(get_json_version "$SOLGRID_PKG")
+    CLI_DARWIN_ARM64_VERSION=$(get_json_version "$CLI_DARWIN_ARM64_PKG")
+    CLI_DARWIN_X64_VERSION=$(get_json_version "$CLI_DARWIN_X64_PKG")
+    CLI_LINUX_X64_VERSION=$(get_json_version "$CLI_LINUX_X64_PKG")
+    CLI_WIN32_X64_VERSION=$(get_json_version "$CLI_WIN32_X64_PKG")
 
     echo "Version check:"
     echo "  Cargo.toml (source of truth):              $CARGO_VERSION"
     echo "  editors/vscode/package.json:                $VSCODE_VERSION"
     echo "  packages/prettier-plugin-solgrid/package.json: $PRETTIER_VERSION"
+    echo "  packages/solgrid/package.json:              $SOLGRID_VERSION"
+    echo "  packages/cli-darwin-arm64/package.json:     $CLI_DARWIN_ARM64_VERSION"
+    echo "  packages/cli-darwin-x64/package.json:       $CLI_DARWIN_X64_VERSION"
+    echo "  packages/cli-linux-x64/package.json:        $CLI_LINUX_X64_VERSION"
+    echo "  packages/cli-win32-x64/package.json:        $CLI_WIN32_X64_VERSION"
 
     MISMATCH=0
     if [ "$VSCODE_VERSION" != "$CARGO_VERSION" ]; then
@@ -99,6 +137,20 @@ case "$MODE" in
       echo "ERROR: Prettier plugin version ($PRETTIER_VERSION) does not match Cargo.toml ($CARGO_VERSION)" >&2
       MISMATCH=1
     fi
+    if [ "$SOLGRID_VERSION" != "$CARGO_VERSION" ]; then
+      echo ""
+      echo "ERROR: solgrid npm package version ($SOLGRID_VERSION) does not match Cargo.toml ($CARGO_VERSION)" >&2
+      MISMATCH=1
+    fi
+    for pkg_var in CLI_DARWIN_ARM64 CLI_DARWIN_X64 CLI_LINUX_X64 CLI_WIN32_X64; do
+      ver_var="${pkg_var}_VERSION"
+      ver="${!ver_var}"
+      if [ "$ver" != "$CARGO_VERSION" ]; then
+        echo ""
+        echo "ERROR: ${pkg_var} version ($ver) does not match Cargo.toml ($CARGO_VERSION)" >&2
+        MISMATCH=1
+      fi
+    done
 
     if [ "$MISMATCH" -eq 1 ]; then
       echo ""

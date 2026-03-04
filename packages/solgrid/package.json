@@ -1,0 +1,20 @@
+{
+  "name": "solgrid",
+  "version": "0.1.0",
+  "description": "A blazing-fast Solidity linter and formatter",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TateB/solgrid",
+    "directory": "packages/solgrid"
+  },
+  "bin": { "solgrid": "bin/solgrid.js" },
+  "files": ["bin"],
+  "publishConfig": { "access": "public" },
+  "optionalDependencies": {
+    "@solgrid/cli-darwin-arm64": "0.1.0",
+    "@solgrid/cli-darwin-x64": "0.1.0",
+    "@solgrid/cli-linux-x64": "0.1.0",
+    "@solgrid/cli-win32-x64": "0.1.0"
+  }
+}

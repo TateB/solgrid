@@ -41,18 +41,26 @@ jobs:
             rust-target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary-ext: ""
+            npm-pkg: cli-linux-x64
+            npm-binary: solgrid
           - vscode-target: darwin-x64
             rust-target: x86_64-apple-darwin
             os: macos-13
             binary-ext: ""
+            npm-pkg: cli-darwin-x64
+            npm-binary: solgrid
           - vscode-target: darwin-arm64
             rust-target: aarch64-apple-darwin
             os: macos-14
             binary-ext: ""
+            npm-pkg: cli-darwin-arm64
+            npm-binary: solgrid
           - vscode-target: win32-x64
             rust-target: x86_64-pc-windows-msvc
             os: windows-latest
             binary-ext: ".exe"
+            npm-pkg: cli-win32-x64
+            npm-binary: solgrid.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +125,22 @@ jobs:
         with:
           name: vsix-${{ matrix.vscode-target }}
           path: editors/vscode/*.vsix
+
+      # Stage binary into npm platform package
+      - name: Stage npm platform binary
+        shell: bash
+        run: |
+          cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}${{ matrix.binary-ext }}" \
+             "packages/${{ matrix.npm-pkg }}/${{ matrix.npm-binary }}"
+          if [ "${{ matrix.os }}" != "windows-latest" ]; then
+            chmod +x "packages/${{ matrix.npm-pkg }}/${{ matrix.npm-binary }}"
+          fi
+
+      # Upload npm platform package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.npm-pkg }}
+          path: packages/${{ matrix.npm-pkg }}/
 
   publish:
     name: Publish
@@ -192,6 +216,58 @@ jobs:
 
       - name: Publish to npm
         working-directory: packages/prettier-plugin-solgrid
-        run: npm publish --access public
+        run: pnpm publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  npm-publish-cli:
+    name: Publish CLI to npm
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ vars.NPM_TOKEN != '' || secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      # Download all platform package artifacts
+      - name: Download npm platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "npm-cli-*"
+          path: packages/
+
+      # Restore artifact directory structure (download-artifact nests under artifact name)
+      - name: Flatten artifact directories
+        run: |
+          for dir in packages/npm-cli-*; do
+            pkg_name="${dir#packages/npm-}"
+            if [ -d "packages/$pkg_name" ] && [ -d "$dir" ]; then
+              cp "$dir"/* "packages/$pkg_name/"
+              rm -rf "$dir"
+            fi
+          done
+
+      # Publish platform packages first (must exist before the main package)
+      - name: Publish platform packages
+        run: |
+          for pkg in cli-darwin-arm64 cli-darwin-x64 cli-linux-x64 cli-win32-x64; do
+            echo "Publishing @solgrid/$pkg..."
+            pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Publish main solgrid package
+      - name: Publish solgrid
+        run: pnpm --filter solgrid publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

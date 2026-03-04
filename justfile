@@ -124,6 +124,12 @@ version action="" ver="":
         *) echo "Usage: just version [check|write|set X.Y.Z]" >&2; exit 1 ;;
     esac
 
+# --- npm CLI ---
+
+# Test the npm CLI shim locally (requires a prior `just build`)
+npm-shim-test:
+    SOLGRID_BINARY={{justfile_directory()}}/target/release/solgrid node packages/solgrid/bin/solgrid.js --help
+
 # --- CI ---
 
 # Run all Rust CI checks

@@ -9,3 +9,7 @@ editors/vscode/bin/
 
 # Temporary plan files
 plan.md
+
+# npm CLI platform binaries (injected by CI before publish)
+packages/cli-*/solgrid
+packages/cli-*/solgrid.exe
