@@ -1,5 +1,5 @@
-use crate::Cli;
 use crate::cache::Cache;
+use crate::Cli;
 use solgrid_config::{resolve_config, Config};
 use solgrid_formatter::{check_formatted, format_source};
 use std::path::{Path, PathBuf};

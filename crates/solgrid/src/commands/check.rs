@@ -1,7 +1,7 @@
+use crate::cache::Cache;
 use crate::output;
 use crate::Cli;
 use rayon::prelude::*;
-use crate::cache::Cache;
 use solgrid_config::{resolve_config, Config};
 use solgrid_diagnostics::{FileResult, Severity};
 use solgrid_linter::LintEngine;
