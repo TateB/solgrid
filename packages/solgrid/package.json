@@ -12,9 +12,9 @@
   "files": ["bin"],
   "publishConfig": { "access": "public" },
   "optionalDependencies": {
-    "@solgrid/cli-darwin-arm64": "0.1.0",
-    "@solgrid/cli-darwin-x64": "0.1.0",
-    "@solgrid/cli-linux-x64": "0.1.0",
-    "@solgrid/cli-win32-x64": "0.1.0"
+    "@solgrid/cli-darwin-arm64": "workspace:*",
+    "@solgrid/cli-darwin-x64": "workspace:*",
+    "@solgrid/cli-linux-x64": "workspace:*",
+    "@solgrid/cli-win32-x64": "workspace:*"
   }
 }

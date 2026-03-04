@@ -42,13 +42,6 @@ set_json_version() {
   sed -i "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
 }
 
-# Update optionalDependencies versions in the main solgrid package
-set_optional_dep_versions() {
-  local file="$1"
-  local version="$2"
-  sed -i "s/\"@solgrid\/cli-\([^\"]*\)\": \"[^\"]*\"/\"@solgrid\/cli-\1\": \"$version\"/g" "$file"
-}
-
 # Update version in Cargo.toml workspace
 set_cargo_version() {
   local version="$1"
@@ -66,7 +59,7 @@ case "$MODE" in
     set_json_version "$VSCODE_PKG" "$CARGO_VERSION"
     set_json_version "$PRETTIER_PKG" "$CARGO_VERSION"
     set_json_version "$SOLGRID_PKG" "$CARGO_VERSION"
-    set_optional_dep_versions "$SOLGRID_PKG" "$CARGO_VERSION"
+
     set_json_version "$CLI_DARWIN_ARM64_PKG" "$CARGO_VERSION"
     set_json_version "$CLI_DARWIN_X64_PKG" "$CARGO_VERSION"
     set_json_version "$CLI_LINUX_X64_PKG" "$CARGO_VERSION"
@@ -90,7 +83,7 @@ case "$MODE" in
     set_json_version "$VSCODE_PKG" "$NEW_VERSION"
     set_json_version "$PRETTIER_PKG" "$NEW_VERSION"
     set_json_version "$SOLGRID_PKG" "$NEW_VERSION"
-    set_optional_dep_versions "$SOLGRID_PKG" "$NEW_VERSION"
+
     set_json_version "$CLI_DARWIN_ARM64_PKG" "$NEW_VERSION"
     set_json_version "$CLI_DARWIN_X64_PKG" "$NEW_VERSION"
     set_json_version "$CLI_LINUX_X64_PKG" "$NEW_VERSION"

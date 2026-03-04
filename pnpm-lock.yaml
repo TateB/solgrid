@@ -59,7 +59,20 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@20.19.35)
 
-  packages/solgrid: {}
+  packages/solgrid:
+    optionalDependencies:
+      '@solgrid/cli-darwin-arm64':
+        specifier: workspace:*
+        version: link:../cli-darwin-arm64
+      '@solgrid/cli-darwin-x64':
+        specifier: workspace:*
+        version: link:../cli-darwin-x64
+      '@solgrid/cli-linux-x64':
+        specifier: workspace:*
+        version: link:../cli-linux-x64
+      '@solgrid/cli-win32-x64':
+        specifier: workspace:*
+        version: link:../cli-win32-x64
 
 packages:
 
