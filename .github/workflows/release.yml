@@ -101,7 +101,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @solgrid/vscode run compile
+      - run: pnpm --filter solgrid-vscode run compile
       - name: Package VSIX
         working-directory: editors/vscode
         run: npx @vscode/vsce package --no-dependencies --target ${{ matrix.vscode-target }}

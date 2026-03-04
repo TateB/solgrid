@@ -67,32 +67,32 @@ install:
 
 # Compile the VSCode extension
 vscode-compile: install
-    pnpm --filter @solgrid/vscode run compile
+    pnpm --filter solgrid-vscode run compile
 
 # Run VSCode unit tests
 vscode-test: install
-    pnpm --filter @solgrid/vscode run compile
-    pnpm --filter @solgrid/vscode test
+    pnpm --filter solgrid-vscode run compile
+    pnpm --filter solgrid-vscode test
 
 # Run LSP integration tests (builds debug binary)
 vscode-integration: dev install
-    SOLGRID_BIN={{justfile_directory()}}/target/debug/solgrid pnpm --filter @solgrid/vscode run test:integration
+    SOLGRID_BIN={{justfile_directory()}}/target/debug/solgrid pnpm --filter solgrid-vscode run test:integration
 
 # Run VSCode e2e tests (builds debug binary)
 vscode-e2e: dev install
-    pnpm --filter @solgrid/vscode run compile:tests
+    pnpm --filter solgrid-vscode run compile:tests
     SOLGRID_BIN={{justfile_directory()}}/target/debug/solgrid node editors/vscode/out/test/e2e/run.js
 
 # Run all VSCode tests
 vscode-test-all: dev install
-    pnpm --filter @solgrid/vscode run compile
-    pnpm --filter @solgrid/vscode test
-    SOLGRID_BIN={{justfile_directory()}}/target/debug/solgrid pnpm --filter @solgrid/vscode run test:integration
+    pnpm --filter solgrid-vscode run compile
+    pnpm --filter solgrid-vscode test
+    SOLGRID_BIN={{justfile_directory()}}/target/debug/solgrid pnpm --filter solgrid-vscode run test:integration
 
 # Package VSIX (release build)
 vscode-package: build install
-    pnpm --filter @solgrid/vscode run compile
-    pnpm --filter @solgrid/vscode run package
+    pnpm --filter solgrid-vscode run compile
+    pnpm --filter solgrid-vscode run package
 
 # --- Prettier plugin ---
 

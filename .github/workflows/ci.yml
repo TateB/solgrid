@@ -88,8 +88,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @solgrid/vscode run compile
-      - run: pnpm --filter @solgrid/vscode test
+      - run: pnpm --filter solgrid-vscode run compile
+      - run: pnpm --filter solgrid-vscode test
 
   vscode-integration-tests:
     name: VSCode Integration Tests
@@ -109,7 +109,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       # Run LSP protocol integration tests
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @solgrid/vscode run test:integration
+      - run: pnpm --filter solgrid-vscode run test:integration
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
@@ -131,7 +131,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       # Build and run e2e tests
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @solgrid/vscode run compile:tests
+      - run: pnpm --filter solgrid-vscode run compile:tests
       - run: xvfb-run -a node editors/vscode/out/test/e2e/run.js
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid

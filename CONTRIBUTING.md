@@ -48,8 +48,8 @@ just vscode-test
 
 # Or directly:
 pnpm install
-pnpm --filter @solgrid/vscode run compile
-pnpm --filter @solgrid/vscode test
+pnpm --filter solgrid-vscode run compile
+pnpm --filter solgrid-vscode test
 ```
 
 ### VSCode extension — LSP integration tests
@@ -61,7 +61,7 @@ just vscode-integration
 
 # Or directly:
 cargo build -p solgrid
-SOLGRID_BIN=target/debug/solgrid pnpm --filter @solgrid/vscode run test:integration
+SOLGRID_BIN=target/debug/solgrid pnpm --filter solgrid-vscode run test:integration
 ```
 
 ### VSCode extension — e2e tests
@@ -73,7 +73,7 @@ just vscode-e2e
 
 # Or directly:
 cargo build -p solgrid
-pnpm --filter @solgrid/vscode run compile:tests
+pnpm --filter solgrid-vscode run compile:tests
 SOLGRID_BIN=target/debug/solgrid node editors/vscode/out/test/e2e/run.js
 ```
 
