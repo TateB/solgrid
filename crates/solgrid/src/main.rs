@@ -3,6 +3,7 @@
 //! Provides the `solgrid` binary with subcommands: `check`, `fix`, `fmt`,
 //! `list-rules`, `explain`, `migrate`, and `server`.
 
+mod cache;
 mod commands;
 mod output;
 

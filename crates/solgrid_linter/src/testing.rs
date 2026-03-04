@@ -2,12 +2,10 @@
 //!
 //! Provides helpers for writing concise rule tests.
 
+use crate::LintEngine;
 use solgrid_config::Config;
 use solgrid_diagnostics::Diagnostic;
-use solgrid_linter::LintEngine;
 use std::path::Path;
-
-pub use solgrid_diagnostics;
 
 /// Lint a source string using the default engine and return diagnostics.
 pub fn lint_source(source: &str) -> Vec<Diagnostic> {

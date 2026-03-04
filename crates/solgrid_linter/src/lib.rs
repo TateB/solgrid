@@ -8,6 +8,8 @@ pub mod rule;
 pub mod rules;
 pub mod suppression;
 
+pub mod testing;
+
 pub use context::LintContext;
 pub use engine::LintEngine;
 pub use registry::RuleRegistry;

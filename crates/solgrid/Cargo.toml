@@ -11,7 +11,6 @@ name = "solgrid"
 path = "src/main.rs"
 
 [dependencies]
-solgrid_cache = { workspace = true }
 solgrid_config = { workspace = true }
 solgrid_diagnostics = { workspace = true }
 solgrid_formatter = { workspace = true }
@@ -24,6 +23,7 @@ ignore = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
