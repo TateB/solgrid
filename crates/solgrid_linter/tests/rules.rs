@@ -1,6 +1,6 @@
 //! Integration tests for lint rules.
 
-use solgrid_testing::{
+use solgrid_linter::testing::{
     assert_diagnostic_count, assert_no_diagnostics, fix_source, lint_source_for_rule,
 };
 

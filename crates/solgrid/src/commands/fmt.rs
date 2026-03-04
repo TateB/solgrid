@@ -1,5 +1,5 @@
+use crate::cache::Cache;
 use crate::Cli;
-use solgrid_cache::Cache;
 use solgrid_config::{resolve_config, Config};
 use solgrid_formatter::{check_formatted, format_source};
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     }
 
     // Load cache unless --no-cache
-    let config_hash = solgrid_cache::sha256_hex(&format!("{:?}", config));
+    let config_hash = crate::cache::sha256_hex(&format!("{:?}", config));
     let mut cache = if !cli.no_cache {
         Some(Cache::load(
             Path::new(&config.global.cache_dir),

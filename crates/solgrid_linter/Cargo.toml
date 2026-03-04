@@ -19,7 +19,6 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
-solgrid_testing = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]
