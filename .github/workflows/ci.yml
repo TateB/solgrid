@@ -79,9 +79,6 @@ jobs:
   vscode-extension:
     name: VSCode Extension
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: editors/vscode
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -91,10 +88,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run compile
-      - run: pnpm test
+      - run: pnpm --filter @solgrid/vscode run compile
+      - run: pnpm --filter @solgrid/vscode test
 
   vscode-integration-tests:
     name: VSCode Integration Tests
@@ -113,12 +110,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       # Run LSP protocol integration tests
       - run: pnpm install --frozen-lockfile
-        working-directory: editors/vscode
-      - run: pnpm test:integration
-        working-directory: editors/vscode
+      - run: pnpm --filter @solgrid/vscode run test:integration
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
@@ -139,14 +134,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       # Build and run e2e tests
       - run: pnpm install --frozen-lockfile
-        working-directory: editors/vscode
-      - run: pnpm run compile:tests
-        working-directory: editors/vscode
-      - run: xvfb-run -a node out/test/e2e/run.js
-        working-directory: editors/vscode
+      - run: pnpm --filter @solgrid/vscode run compile:tests
+      - run: xvfb-run -a node editors/vscode/out/test/e2e/run.js
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
@@ -165,14 +157,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install
-        working-directory: packages/prettier-plugin-solgrid
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       # Build native addon
-      - run: pnpm run build:napi
-        working-directory: packages/prettier-plugin-solgrid
+      - run: pnpm --filter prettier-plugin-solgrid run build:napi
       # Run tests
-      - run: pnpm test
-        working-directory: packages/prettier-plugin-solgrid
+      - run: pnpm --filter prettier-plugin-solgrid test
 
   version-check:
     name: Version Sync

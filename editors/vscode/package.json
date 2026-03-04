@@ -1,5 +1,5 @@
 {
-  "name": "solgrid",
+  "name": "@solgrid/vscode",
   "displayName": "solgrid",
   "description": "Solidity linter and formatter — powered by solgrid",
   "version": "0.1.0",

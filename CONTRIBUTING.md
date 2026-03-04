@@ -4,15 +4,28 @@
 
 - Rust (stable toolchain, pinned via `rust-toolchain.toml`)
 - Node.js 22+ and pnpm 10+ (for VSCode extension and Prettier plugin)
+- [just](https://github.com/casey/just) task runner (`cargo install just`)
 - wasm-pack (for WASM builds only)
+
+## Quick Start
+
+```bash
+just --list        # Show all available commands
+just check         # Verify workspace compiles
+just test          # Run all Rust tests
+just vscode-test   # Run VSCode extension tests
+just prettier-test # Run Prettier plugin tests
+just ci            # Run all CI checks locally
+```
 
 ## Building from Source
 
 ```bash
-# Build the CLI binary
-cargo build -p solgrid
+just dev           # Build debug binary
+just build         # Build release binary
 
-# Build in release mode
+# Or directly:
+cargo build -p solgrid
 cargo build --release -p solgrid
 ```
 
@@ -21,15 +34,22 @@ cargo build --release -p solgrid
 ### Rust tests
 
 ```bash
+just test          # Run all tests
+just test-doc      # Run doc tests
+
+# Or directly:
 cargo test --workspace
 ```
 
 ### VSCode extension — unit tests
 
 ```bash
-cd editors/vscode
+just vscode-test
+
+# Or directly:
 pnpm install
-pnpm test:unit
+pnpm --filter @solgrid/vscode run compile
+pnpm --filter @solgrid/vscode test
 ```
 
 ### VSCode extension — LSP integration tests
@@ -37,12 +57,11 @@ pnpm test:unit
 These tests spawn the `solgrid server` binary and verify all LSP features (diagnostics, code actions, formatting, hover, completion, configuration, fix-on-save) via the protocol. They apply to any LSP-compatible editor, including both VSCode and Cursor.
 
 ```bash
-# Build the solgrid binary first
-cargo build -p solgrid
+just vscode-integration
 
-# Run integration tests
-cd editors/vscode
-SOLGRID_BIN=../../target/debug/solgrid pnpm test:integration
+# Or directly:
+cargo build -p solgrid
+SOLGRID_BIN=target/debug/solgrid pnpm --filter @solgrid/vscode run test:integration
 ```
 
 ### VSCode extension — e2e tests
@@ -50,37 +69,35 @@ SOLGRID_BIN=../../target/debug/solgrid pnpm test:integration
 These tests launch a real VSCode instance with the extension installed and verify activation, diagnostics, and editor commands.
 
 ```bash
+just vscode-e2e
+
+# Or directly:
 cargo build -p solgrid
-cd editors/vscode
-SOLGRID_BIN=../../target/debug/solgrid pnpm test:e2e
+pnpm --filter @solgrid/vscode run compile:tests
+SOLGRID_BIN=target/debug/solgrid node editors/vscode/out/test/e2e/run.js
 ```
 
 ### Prettier plugin tests
 
 ```bash
-# Build the NAPI native addon first
-cd packages/prettier-plugin-solgrid
-pnpm install
-pnpm build:napi
+just prettier-test
 
-# Run tests
-pnpm test
+# Or directly:
+pnpm install
+pnpm --filter prettier-plugin-solgrid run build:napi
+pnpm --filter prettier-plugin-solgrid test
 ```
 
 ### Benchmarks
 
 ```bash
-# Run all benchmarks
+just bench                        # Run all benchmarks
+just bench solgrid_formatter      # Run formatter benchmarks only
+just bench solgrid_linter         # Run linter benchmarks only
+
+# Or directly:
 cargo bench --workspace
-
-# Run formatter benchmarks only
 cargo bench -p solgrid_formatter
-
-# Run linter benchmarks only (includes cold lint corpus)
-cargo bench -p solgrid_linter
-
-# Run startup/initialization benchmarks
-cargo bench -p solgrid
 ```
 
 ## CI
@@ -97,6 +114,12 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the full test suit
 - Prettier plugin build + tests
 - Version sync validation (`scripts/version.sh`)
 
+Run all CI checks locally with:
+
+```bash
+just ci
+```
+
 ## Versioning
 
 solgrid uses a single source of truth for version management:
@@ -108,19 +131,19 @@ solgrid uses a single source of truth for version management:
 ### Version management
 
 ```bash
-# Check all versions are in sync
+just version              # Check all versions are in sync
+just version write        # Update all package.json files to match Cargo.toml
+just version set 0.2.0    # Set a new version everywhere
+
+# Or directly:
 ./scripts/version.sh
-
-# Update all package.json files to match Cargo.toml
 ./scripts/version.sh --write
-
-# Set a new version everywhere
 ./scripts/version.sh --set 0.2.0
 ```
 
 ## Release Process
 
-1. Bump version: `./scripts/version.sh --set X.Y.Z`
+1. Bump version: `just version set X.Y.Z`
 2. Commit: `git commit -am "chore: bump version to X.Y.Z"`
 3. Tag: `git tag vX.Y.Z`
 4. Push: `git push origin main --tags`

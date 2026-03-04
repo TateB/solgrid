@@ -101,11 +101,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        working-directory: editors/vscode
-      - run: pnpm run compile
-        working-directory: editors/vscode
+      - run: pnpm --filter @solgrid/vscode run compile
       - name: Package VSIX
         working-directory: editors/vscode
         run: npx @vscode/vsce package --no-dependencies --target ${{ matrix.vscode-target }}
@@ -186,16 +184,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
 
-      - run: pnpm install
-        working-directory: packages/prettier-plugin-solgrid
+      - run: pnpm install --frozen-lockfile
 
-      - run: pnpm run build:napi
-        working-directory: packages/prettier-plugin-solgrid
+      - run: pnpm --filter prettier-plugin-solgrid run build:napi
 
-      - run: pnpm test
-        working-directory: packages/prettier-plugin-solgrid
+      - run: pnpm --filter prettier-plugin-solgrid test
 
       - name: Publish to npm
         working-directory: packages/prettier-plugin-solgrid
