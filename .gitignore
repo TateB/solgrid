@@ -13,3 +13,6 @@ plan.md
 # npm CLI platform binaries (injected by CI before publish)
 packages/cli-*/solgrid
 packages/cli-*/solgrid.exe
+
+# npm NAPI platform binaries (injected by CI before publish)
+packages/napi-*/solgrid_napi.node

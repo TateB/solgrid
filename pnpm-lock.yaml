@@ -47,6 +47,14 @@ importers:
 
   packages/cli-win32-x64: {}
 
+  packages/napi-darwin-arm64: {}
+
+  packages/napi-darwin-x64: {}
+
+  packages/napi-linux-x64: {}
+
+  packages/napi-win32-x64: {}
+
   packages/prettier-plugin-solgrid:
     devDependencies:
       '@napi-rs/cli':
@@ -58,6 +66,19 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@20.19.35)
+    optionalDependencies:
+      '@solgrid/napi-darwin-arm64':
+        specifier: workspace:*
+        version: link:../napi-darwin-arm64
+      '@solgrid/napi-darwin-x64':
+        specifier: workspace:*
+        version: link:../napi-darwin-x64
+      '@solgrid/napi-linux-x64':
+        specifier: workspace:*
+        version: link:../napi-linux-x64
+      '@solgrid/napi-win32-x64':
+        specifier: workspace:*
+        version: link:../napi-win32-x64
 
   packages/solgrid:
     optionalDependencies:

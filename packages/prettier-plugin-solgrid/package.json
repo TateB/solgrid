@@ -12,7 +12,7 @@
   "main": "src/index.mjs",
   "files": [
     "src",
-    "*.node"
+    "index.d.ts"
   ],
   "scripts": {
     "build:napi": "napi build --release --cargo-cwd ../../crates/solgrid_napi",
@@ -26,6 +26,12 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "optionalDependencies": {
+    "@solgrid/napi-darwin-arm64": "workspace:*",
+    "@solgrid/napi-darwin-x64": "workspace:*",
+    "@solgrid/napi-linux-x64": "workspace:*",
+    "@solgrid/napi-win32-x64": "workspace:*"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.0",

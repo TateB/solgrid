@@ -43,24 +43,28 @@ jobs:
             binary-ext: ""
             npm-pkg: cli-linux-x64
             npm-binary: solgrid
+            napi-pkg: napi-linux-x64
           - vscode-target: darwin-x64
             rust-target: x86_64-apple-darwin
             os: macos-13
             binary-ext: ""
             npm-pkg: cli-darwin-x64
             npm-binary: solgrid
+            napi-pkg: napi-darwin-x64
           - vscode-target: darwin-arm64
             rust-target: aarch64-apple-darwin
             os: macos-14
             binary-ext: ""
             npm-pkg: cli-darwin-arm64
             npm-binary: solgrid
+            napi-pkg: napi-darwin-arm64
           - vscode-target: win32-x64
             rust-target: x86_64-pc-windows-msvc
             os: windows-latest
             binary-ext: ".exe"
             npm-pkg: cli-win32-x64
             npm-binary: solgrid.exe
+            napi-pkg: napi-win32-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -142,6 +146,21 @@ jobs:
           name: npm-${{ matrix.npm-pkg }}
           path: packages/${{ matrix.npm-pkg }}/
 
+      # Build NAPI native addon for prettier-plugin-solgrid
+      - name: Build NAPI addon
+        shell: bash
+        run: npx napi build --release --cargo-cwd crates/solgrid_napi --target ${{ matrix.rust-target }}
+
+      - name: Stage NAPI addon into platform package
+        shell: bash
+        run: cp solgrid_napi.node "packages/${{ matrix.napi-pkg }}/solgrid_napi.node"
+
+      # Upload napi platform package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.napi-pkg }}
+          path: packages/${{ matrix.napi-pkg }}/
+
   publish:
     name: Publish
     needs: build
@@ -190,15 +209,11 @@ jobs:
 
   npm-publish:
     name: Publish Prettier Plugin to npm
-    needs: validate-version
+    needs: build
     runs-on: ubuntu-latest
     if: ${{ vars.NPM_TOKEN != '' || secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
-
-      # Build the NAPI native addon
-      - uses: dtolnay/rust-toolchain@1.93
-      - uses: Swatinem/rust-cache@v2
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -210,13 +225,37 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm --filter prettier-plugin-solgrid run build:napi
+      # Download all napi platform package artifacts
+      - name: Download napi platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "npm-napi-*"
+          path: packages/
 
-      - run: pnpm --filter prettier-plugin-solgrid test
+      # Restore artifact directory structure (download-artifact nests under artifact name)
+      - name: Flatten artifact directories
+        run: |
+          for dir in packages/npm-napi-*; do
+            pkg_name="${dir#packages/npm-}"
+            if [ -d "packages/$pkg_name" ] && [ -d "$dir" ]; then
+              cp "$dir"/* "packages/$pkg_name/"
+              rm -rf "$dir"
+            fi
+          done
 
-      - name: Publish to npm
-        working-directory: packages/prettier-plugin-solgrid
-        run: pnpm publish --access public --no-git-checks
+      # Publish napi platform packages first (must exist before the main package)
+      - name: Publish napi platform packages
+        run: |
+          for pkg in napi-darwin-arm64 napi-darwin-x64 napi-linux-x64 napi-win32-x64; do
+            echo "Publishing @solgrid/$pkg..."
+            pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Publish prettier-plugin-solgrid
+      - name: Publish prettier-plugin-solgrid
+        run: pnpm --filter prettier-plugin-solgrid publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
