@@ -1,0 +1,5 @@
+packages:
+  - "editors/vscode"
+  - "packages/*"
+
+useNodeVersion: 24.14.0

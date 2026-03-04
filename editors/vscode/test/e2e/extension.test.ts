@@ -23,7 +23,7 @@ describe("solgrid Extension E2E", () => {
   });
 
   it("extension is registered", () => {
-    const ext = vscode.extensions.getExtension("solgrid.solgrid");
+    const ext = vscode.extensions.getExtension("solgrid.solgrid-vscode");
     assert.ok(ext, "solgrid extension should be registered");
   });
 
@@ -37,7 +37,7 @@ describe("solgrid Extension E2E", () => {
     // Wait for activation
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const ext = vscode.extensions.getExtension("solgrid.solgrid");
+    const ext = vscode.extensions.getExtension("solgrid.solgrid-vscode");
     if (ext) {
       // The extension should be active after opening a .sol file
       assert.ok(ext.isActive, "extension should be active after opening .sol");
@@ -162,7 +162,7 @@ describe("solgrid Extension E2E", () => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Extension should still be available (it deactivates when VSCode closes)
-    const ext = vscode.extensions.getExtension("solgrid.solgrid");
+    const ext = vscode.extensions.getExtension("solgrid.solgrid-vscode");
     assert.ok(ext, "extension should still be registered");
   });
 });
