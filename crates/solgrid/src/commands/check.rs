@@ -1,7 +1,7 @@
 use crate::output;
 use crate::Cli;
 use rayon::prelude::*;
-use solgrid_cache::Cache;
+use crate::cache::Cache;
 use solgrid_config::{resolve_config, Config};
 use solgrid_diagnostics::{FileResult, Severity};
 use solgrid_linter::LintEngine;
@@ -24,7 +24,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     }
 
     // Load cache unless --no-cache
-    let config_hash = solgrid_cache::sha256_hex(&format!("{:?}", config));
+    let config_hash = crate::cache::sha256_hex(&format!("{:?}", config));
     let cache = if !cli.no_cache {
         Some(Cache::load(
             Path::new(&config.global.cache_dir),

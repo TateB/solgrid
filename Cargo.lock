@@ -2390,7 +2390,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "solgrid_cache",
+ "sha2",
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_formatter",
@@ -2407,15 +2407,6 @@ dependencies = [
  "solar-ast",
  "solar-interface",
  "solgrid_parser",
-]
-
-[[package]]
-name = "solgrid_cache"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -2463,7 +2454,6 @@ dependencies = [
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_parser",
- "solgrid_testing",
 ]
 
 [[package]]
@@ -2500,17 +2490,6 @@ dependencies = [
  "solgrid_linter",
  "tokio",
  "tower-lsp-server",
-]
-
-[[package]]
-name = "solgrid_testing"
-version = "0.1.0"
-dependencies = [
- "insta",
- "solgrid_config",
- "solgrid_diagnostics",
- "solgrid_linter",
- "solgrid_parser",
 ]
 
 [[package]]
