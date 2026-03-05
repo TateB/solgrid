@@ -39,22 +39,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.19.35)
 
-  packages/cli-darwin-arm64: {}
-
-  packages/cli-darwin-x64: {}
-
-  packages/cli-linux-x64: {}
-
-  packages/cli-win32-x64: {}
-
-  packages/napi-darwin-arm64: {}
-
-  packages/napi-darwin-x64: {}
-
-  packages/napi-linux-x64: {}
-
-  packages/napi-win32-x64: {}
-
   packages/prettier-plugin-solgrid:
     devDependencies:
       '@napi-rs/cli':
@@ -69,31 +53,47 @@ importers:
     optionalDependencies:
       '@solgrid/napi-darwin-arm64':
         specifier: workspace:*
-        version: link:../napi-darwin-arm64
+        version: link:npm/napi-darwin-arm64
       '@solgrid/napi-darwin-x64':
         specifier: workspace:*
-        version: link:../napi-darwin-x64
+        version: link:npm/napi-darwin-x64
       '@solgrid/napi-linux-x64':
         specifier: workspace:*
-        version: link:../napi-linux-x64
+        version: link:npm/napi-linux-x64
       '@solgrid/napi-win32-x64':
         specifier: workspace:*
-        version: link:../napi-win32-x64
+        version: link:npm/napi-win32-x64
+
+  packages/prettier-plugin-solgrid/npm/napi-darwin-arm64: {}
+
+  packages/prettier-plugin-solgrid/npm/napi-darwin-x64: {}
+
+  packages/prettier-plugin-solgrid/npm/napi-linux-x64: {}
+
+  packages/prettier-plugin-solgrid/npm/napi-win32-x64: {}
 
   packages/solgrid:
     optionalDependencies:
       '@solgrid/cli-darwin-arm64':
         specifier: workspace:*
-        version: link:../cli-darwin-arm64
+        version: link:npm/cli-darwin-arm64
       '@solgrid/cli-darwin-x64':
         specifier: workspace:*
-        version: link:../cli-darwin-x64
+        version: link:npm/cli-darwin-x64
       '@solgrid/cli-linux-x64':
         specifier: workspace:*
-        version: link:../cli-linux-x64
+        version: link:npm/cli-linux-x64
       '@solgrid/cli-win32-x64':
         specifier: workspace:*
-        version: link:../cli-win32-x64
+        version: link:npm/cli-win32-x64
+
+  packages/solgrid/npm/cli-darwin-arm64: {}
+
+  packages/solgrid/npm/cli-darwin-x64: {}
+
+  packages/solgrid/npm/cli-linux-x64: {}
+
+  packages/solgrid/npm/cli-win32-x64: {}
 
 packages:
 

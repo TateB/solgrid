@@ -1,14 +1,15 @@
 {
-  "name": "@solgrid/cli-win32-x64",
+  "name": "@solgrid/napi-win32-x64",
   "version": "0.1.0",
-  "description": "solgrid CLI binary for Windows x64",
+  "description": "solgrid NAPI native binding for Windows x64",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/TateB/solgrid",
-    "directory": "packages/cli-win32-x64"
+    "directory": "packages/prettier-plugin-solgrid/npm/napi-win32-x64"
   },
   "os": ["win32"],
   "cpu": ["x64"],
+  "files": ["solgrid_napi.node"],
   "publishConfig": { "access": "public" }
 }

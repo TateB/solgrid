@@ -41,30 +41,38 @@ jobs:
             rust-target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary-ext: ""
-            npm-pkg: cli-linux-x64
+            npm-pkg: solgrid/npm/cli-linux-x64
+            npm-pkg-name: cli-linux-x64
             npm-binary: solgrid
-            napi-pkg: napi-linux-x64
+            napi-pkg: prettier-plugin-solgrid/npm/napi-linux-x64
+            napi-pkg-name: napi-linux-x64
           - vscode-target: darwin-x64
             rust-target: x86_64-apple-darwin
             os: macos-13
             binary-ext: ""
-            npm-pkg: cli-darwin-x64
+            npm-pkg: solgrid/npm/cli-darwin-x64
+            npm-pkg-name: cli-darwin-x64
             npm-binary: solgrid
-            napi-pkg: napi-darwin-x64
+            napi-pkg: prettier-plugin-solgrid/npm/napi-darwin-x64
+            napi-pkg-name: napi-darwin-x64
           - vscode-target: darwin-arm64
             rust-target: aarch64-apple-darwin
             os: macos-14
             binary-ext: ""
-            npm-pkg: cli-darwin-arm64
+            npm-pkg: solgrid/npm/cli-darwin-arm64
+            npm-pkg-name: cli-darwin-arm64
             npm-binary: solgrid
-            napi-pkg: napi-darwin-arm64
+            napi-pkg: prettier-plugin-solgrid/npm/napi-darwin-arm64
+            napi-pkg-name: napi-darwin-arm64
           - vscode-target: win32-x64
             rust-target: x86_64-pc-windows-msvc
             os: windows-latest
             binary-ext: ".exe"
-            npm-pkg: cli-win32-x64
+            npm-pkg: solgrid/npm/cli-win32-x64
+            npm-pkg-name: cli-win32-x64
             npm-binary: solgrid.exe
-            napi-pkg: napi-win32-x64
+            napi-pkg: prettier-plugin-solgrid/npm/napi-win32-x64
+            napi-pkg-name: napi-win32-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -143,7 +151,7 @@ jobs:
       # Upload npm platform package
       - uses: actions/upload-artifact@v4
         with:
-          name: npm-${{ matrix.npm-pkg }}
+          name: npm-${{ matrix.npm-pkg-name }}
           path: packages/${{ matrix.npm-pkg }}/
 
       # Build NAPI native addon for prettier-plugin-solgrid
@@ -158,7 +166,7 @@ jobs:
       # Upload napi platform package
       - uses: actions/upload-artifact@v4
         with:
-          name: npm-${{ matrix.napi-pkg }}
+          name: npm-${{ matrix.napi-pkg-name }}
           path: packages/${{ matrix.napi-pkg }}/
 
   publish:
@@ -230,15 +238,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: "npm-napi-*"
-          path: packages/
+          path: artifacts/napi/
 
       # Restore artifact directory structure (download-artifact nests under artifact name)
       - name: Flatten artifact directories
         run: |
-          for dir in packages/npm-napi-*; do
-            pkg_name="${dir#packages/npm-}"
-            if [ -d "packages/$pkg_name" ] && [ -d "$dir" ]; then
-              cp "$dir"/* "packages/$pkg_name/"
+          for dir in artifacts/napi/npm-napi-*; do
+            pkg_name="${dir#artifacts/napi/npm-}"
+            if [ -d "packages/prettier-plugin-solgrid/npm/$pkg_name" ] && [ -d "$dir" ]; then
+              cp "$dir"/* "packages/prettier-plugin-solgrid/npm/$pkg_name/"
               rm -rf "$dir"
             fi
           done
@@ -282,15 +290,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: "npm-cli-*"
-          path: packages/
+          path: artifacts/cli/
 
       # Restore artifact directory structure (download-artifact nests under artifact name)
       - name: Flatten artifact directories
         run: |
-          for dir in packages/npm-cli-*; do
-            pkg_name="${dir#packages/npm-}"
-            if [ -d "packages/$pkg_name" ] && [ -d "$dir" ]; then
-              cp "$dir"/* "packages/$pkg_name/"
+          for dir in artifacts/cli/npm-cli-*; do
+            pkg_name="${dir#artifacts/cli/npm-}"
+            if [ -d "packages/solgrid/npm/$pkg_name" ] && [ -d "$dir" ]; then
+              cp "$dir"/* "packages/solgrid/npm/$pkg_name/"
               rm -rf "$dir"
             fi
           done

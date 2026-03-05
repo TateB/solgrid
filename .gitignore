@@ -11,8 +11,8 @@ editors/vscode/bin/
 plan.md
 
 # npm CLI platform binaries (injected by CI before publish)
-packages/cli-*/solgrid
-packages/cli-*/solgrid.exe
+packages/solgrid/npm/cli-*/solgrid
+packages/solgrid/npm/cli-*/solgrid.exe
 
 # npm NAPI platform binaries (injected by CI before publish)
-packages/napi-*/solgrid_napi.node
+packages/prettier-plugin-solgrid/npm/napi-*/solgrid_napi.node

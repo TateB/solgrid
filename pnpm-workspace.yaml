@@ -1,5 +1,6 @@
 packages:
   - "editors/vscode"
   - "packages/*"
+  - "packages/*/npm/*"
 
 useNodeVersion: 24.14.0
