@@ -24,9 +24,7 @@
     "smart-contracts",
     "ethereum"
   ],
-  "activationEvents": [
-    "onLanguage:solidity"
-  ],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
@@ -78,15 +76,24 @@
         ],
         "aliases": [
           "Solidity"
-        ]
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "solidity",
+        "scopeName": "source.solidity",
+        "path": "./syntaxes/solidity.tmLanguage.json"
       }
     ]
   },
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
-    "compile": "tsc -p ./",
+    "compile": "node esbuild.mjs --production",
+    "compile:dev": "node esbuild.mjs",
     "compile:tests": "tsc -p ./ && tsc -p ./tsconfig.test.json",
-    "watch": "tsc -watch -p ./",
+    "watch": "node esbuild.mjs --watch",
     "test": "vitest run --project unit",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project lsp-integration",
@@ -106,7 +113,8 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^2.4.0",
-    "@vscode/vsce": "^2.22.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
     "typescript": "^5.0.0",
     "vitest": "^4.0.18"
   }
