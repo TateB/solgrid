@@ -184,14 +184,10 @@ fn collect_contract_members(items: &[Item<'_>]) -> Vec<Declaration> {
                     };
                     (n.to_string(), DeclKind::Function)
                 };
-                let name_range = func
-                    .header
-                    .name
-                    .map(|n| span(n.span))
-                    .unwrap_or_else(|| {
-                        let start = span(item.span).start;
-                        start..start + name.len()
-                    });
+                let name_range = func.header.name.map(|n| span(n.span)).unwrap_or_else(|| {
+                    let start = span(item.span).start;
+                    start..start + name.len()
+                });
                 members.push(Declaration {
                     name,
                     name_range,
@@ -429,7 +425,14 @@ fn find_in_stmt(
     enclosing: Option<&str>,
     locals: &[Declaration],
 ) -> Option<ResolvedSymbol> {
-    find_in_stmts(source, offset, std::slice::from_ref(stmt), decls, enclosing, locals)
+    find_in_stmts(
+        source,
+        offset,
+        std::slice::from_ref(stmt),
+        decls,
+        enclosing,
+        locals,
+    )
 }
 
 fn find_in_stmts(
@@ -521,14 +524,9 @@ fn find_in_stmts(
                     return Some(r);
                 }
                 for clause in try_stmt.clauses.iter() {
-                    if let Some(r) = find_in_stmts(
-                        source,
-                        offset,
-                        clause.block.stmts,
-                        decls,
-                        enclosing,
-                        locals,
-                    ) {
+                    if let Some(r) =
+                        find_in_stmts(source, offset, clause.block.stmts, decls, enclosing, locals)
+                    {
                         return Some(r);
                     }
                 }
@@ -559,8 +557,7 @@ fn find_in_call_args(
         }
         CallArgsKind::Named(named) => {
             for arg in named.iter() {
-                if let Some(r) = find_in_expr(source, offset, arg.value, decls, enclosing, locals)
-                {
+                if let Some(r) = find_in_expr(source, offset, arg.value, decls, enclosing, locals) {
                     return Some(r);
                 }
             }
@@ -601,9 +598,7 @@ fn find_in_expr(
         ExprKind::Member(base, member) => {
             let mr = span(member.span);
             if offset >= mr.start && offset < mr.end {
-                if let Some(base_type) =
-                    resolve_expr_type(source, base, decls, enclosing, locals)
-                {
+                if let Some(base_type) = resolve_expr_type(source, base, decls, enclosing, locals) {
                     return lookup_member(member.as_str(), &base_type, decls);
                 }
             }
@@ -620,8 +615,7 @@ fn find_in_expr(
                 return Some(r);
             }
             for opt in options.iter() {
-                if let Some(r) = find_in_expr(source, offset, opt.value, decls, enclosing, locals)
-                {
+                if let Some(r) = find_in_expr(source, offset, opt.value, decls, enclosing, locals) {
                     return Some(r);
                 }
             }
@@ -730,7 +724,13 @@ fn resolve_expr_type(
 
 fn extract_type_from_var_decl(decl_text: &str) -> Option<String> {
     let first_word = decl_text.split_whitespace().next()?;
-    Some(first_word.split('[').next().unwrap_or(first_word).to_string())
+    Some(
+        first_word
+            .split('[')
+            .next()
+            .unwrap_or(first_word)
+            .to_string(),
+    )
 }
 
 // -- Lookup helpers --
