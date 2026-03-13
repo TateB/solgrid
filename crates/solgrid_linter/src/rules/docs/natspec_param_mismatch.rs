@@ -80,7 +80,7 @@ impl Rule for NatspecParamMismatchRule {
                             // Check each documented @param against actual params
                             for doc_param in &documented_params {
                                 if !actual_params.contains(doc_param) {
-                                    let range = solgrid_ast::span_to_range(body_item.span);
+                                    let range = solgrid_ast::item_name_range(body_item);
                                     let func_name = func
                                         .header
                                         .name

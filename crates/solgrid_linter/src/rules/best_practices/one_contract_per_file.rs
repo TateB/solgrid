@@ -34,7 +34,7 @@ impl Rule for OneContractPerFileRule {
                     contract_count += 1;
                     if contract_count > 1 {
                         let name = contract.name.as_str();
-                        let range = solgrid_ast::span_to_range(item.span);
+                        let range = solgrid_ast::item_name_range(item);
                         diagnostics.push(Diagnostic::new(
                             META.id,
                             format!(

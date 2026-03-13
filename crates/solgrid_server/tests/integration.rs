@@ -221,7 +221,7 @@ fn test_hover_shows_rule_docs_for_known_rule() {
         ..Default::default()
     }];
 
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(4, 20));
+    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(4, 20), "");
     assert!(hover.is_some());
 
     let hover = hover.unwrap();
@@ -255,7 +255,7 @@ fn test_hover_returns_none_for_non_diagnostic_position() {
     }];
 
     // Position on a different line — should return None
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(0, 0));
+    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(0, 0), "");
     assert!(hover.is_none());
 }
 
@@ -350,7 +350,7 @@ contract Test {
     let _ = format_edits;
 
     // Step 4: Hover over a diagnostic
-    let hover = hover::hover_for_diagnostic(&engine, &diags, &ls_types::Position::new(4, 20));
+    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(4, 20), "");
     // May or may not find a diagnostic at this exact position depending on spans
     let _ = hover;
 }

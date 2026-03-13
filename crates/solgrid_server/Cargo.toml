@@ -7,10 +7,12 @@ repository.workspace = true
 description = "LSP server for solgrid editor integration"
 
 [dependencies]
+solgrid_ast = { workspace = true }
 solgrid_config = { workspace = true }
 solgrid_diagnostics = { workspace = true }
 solgrid_formatter = { workspace = true }
 solgrid_linter = { workspace = true }
+solgrid_parser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tower-lsp-server = "0.23"

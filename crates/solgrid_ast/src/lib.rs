@@ -5,7 +5,7 @@
 pub use solgrid_parser::solar_ast;
 pub use solgrid_parser::solar_interface;
 
-use solar_ast::{ExprKind, Item, ItemKind, Stmt, StmtKind, VariableDefinition};
+use solar_ast::{ExprKind, FunctionKind, Item, ItemKind, Stmt, StmtKind, VariableDefinition};
 use solar_interface::Span;
 
 /// Extract the byte offset range from a Solar Span.
@@ -19,6 +19,41 @@ pub fn span_to_range(span: Span) -> std::ops::Range<usize> {
 pub fn span_text(source: &str, span: Span) -> &str {
     let range = span_to_range(span);
     &source[range]
+}
+
+/// Get the narrowest meaningful range for an item (typically just the name).
+/// Use this for diagnostic spans instead of `item.span` to avoid highlighting
+/// entire function/contract bodies.
+pub fn item_name_range(item: &Item<'_>) -> std::ops::Range<usize> {
+    match &item.kind {
+        ItemKind::Contract(c) => span_to_range(c.name.span),
+        ItemKind::Function(f) => {
+            if let Some(name) = f.header.name {
+                span_to_range(name.span)
+            } else {
+                // constructor/fallback/receive — highlight the keyword
+                let full = span_to_range(item.span);
+                let keyword_len = match f.kind {
+                    FunctionKind::Constructor => "constructor".len(),
+                    FunctionKind::Fallback => "fallback".len(),
+                    FunctionKind::Receive => "receive".len(),
+                    FunctionKind::Modifier => "modifier".len(),
+                    _ => "function".len(),
+                };
+                full.start..full.start + keyword_len
+            }
+        }
+        ItemKind::Event(e) => span_to_range(e.name.span),
+        ItemKind::Error(e) => span_to_range(e.name.span),
+        ItemKind::Struct(s) => span_to_range(s.name.span),
+        ItemKind::Enum(e) => span_to_range(e.name.span),
+        ItemKind::Udvt(u) => span_to_range(u.name.span),
+        ItemKind::Variable(v) => match v.name {
+            Some(name) => span_to_range(name.span),
+            None => span_to_range(item.span),
+        },
+        _ => span_to_range(item.span),
+    }
 }
 
 /// Check if a string is PascalCase (CapWords).

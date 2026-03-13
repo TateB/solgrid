@@ -46,7 +46,7 @@ impl Rule for NatspecModifierRule {
 
                             let span_start = solgrid_ast::span_to_range(body_item.span).start;
                             if extract_natspec(ctx.source, span_start).is_none() {
-                                let range = solgrid_ast::span_to_range(body_item.span);
+                                let range = solgrid_ast::item_name_range(body_item);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,
                                     format!("modifier `{name}` is missing NatSpec documentation"),

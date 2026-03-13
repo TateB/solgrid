@@ -61,7 +61,7 @@ impl Rule for ContractLayoutRule {
                     for body_item in contract.body.iter() {
                         let priority = body_item_priority(&body_item.kind);
                         if priority < max_priority {
-                            let range = solgrid_ast::span_to_range(body_item.span);
+                            let range = solgrid_ast::item_name_range(body_item);
                             let label = priority_label(priority);
                             diagnostics.push(Diagnostic::new(
                                 META.id,

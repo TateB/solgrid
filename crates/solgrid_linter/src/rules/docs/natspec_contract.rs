@@ -35,7 +35,7 @@ impl Rule for NatspecContractRule {
                     let name = contract.name.as_str().to_string();
 
                     let span_start = solgrid_ast::span_to_range(item.span).start;
-                    let range = solgrid_ast::span_to_range(item.span);
+                    let range = solgrid_ast::item_name_range(item);
 
                     match extract_natspec(ctx.source, span_start) {
                         None => {

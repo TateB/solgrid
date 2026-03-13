@@ -36,7 +36,7 @@ impl Rule for PayableFallbackRule {
                                 && func.header.state_mutability() != StateMutability::Payable
                             {
                                 let kind_str = func.kind.to_str();
-                                let range = solgrid_ast::span_to_range(body_item.span);
+                                let range = solgrid_ast::item_name_range(body_item);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,
                                     format!("`{kind_str}` function should be marked `payable`"),

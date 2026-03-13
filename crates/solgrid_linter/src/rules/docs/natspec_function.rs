@@ -56,7 +56,7 @@ impl Rule for NatspecFunctionRule {
                             }
 
                             let span_start = solgrid_ast::span_to_range(body_item.span).start;
-                            let range = solgrid_ast::span_to_range(body_item.span);
+                            let range = solgrid_ast::item_name_range(body_item);
 
                             match extract_natspec(ctx.source, span_start) {
                                 None => {

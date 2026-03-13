@@ -48,7 +48,7 @@ impl Rule for OrderingRule {
             for item in source_unit.items.iter() {
                 if let Some(priority) = item_priority(&item.kind) {
                     if priority < max_priority {
-                        let range = solgrid_ast::span_to_range(item.span);
+                        let range = solgrid_ast::item_name_range(item);
                         let kind_name = match &item.kind {
                             ItemKind::Pragma(_) => "pragma",
                             ItemKind::Import(_) => "import",
