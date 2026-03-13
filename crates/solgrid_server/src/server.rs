@@ -1,7 +1,7 @@
 //! LSP server — main server implementation using tower-lsp-server.
 
 use crate::document::DocumentStore;
-use crate::{actions, completion, convert, diagnostics, format, hover};
+use crate::{actions, completion, convert, definition, diagnostics, format, hover};
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
 use std::path::PathBuf;
@@ -171,6 +171,7 @@ impl LanguageServer for SolgridServer {
                         work_done_progress_options: Default::default(),
                     },
                 )),
+                definition_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -439,15 +440,58 @@ impl LanguageServer for SolgridServer {
         > = self.published_diagnostics.read().await;
         let lsp_diags: Vec<Diagnostic> = match cache.get(uri) {
             Some(diags) => diags.clone(),
-            None => return Ok(None),
+            None => vec![],
         };
         drop(cache);
 
-        Ok(hover::hover_for_diagnostic(
+        let documents = self.documents.read().await;
+        let source = documents.get(uri).map(|d| d.content.clone());
+        drop(documents);
+
+        let source = source.unwrap_or_default();
+
+        Ok(hover::hover_at_position(
             &self.engine,
             &lsp_diags,
             position,
+            &source,
         ))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if !is_solidity_file(uri) {
+            return Ok(None);
+        }
+
+        let position = params.text_document_position_params.position;
+
+        let documents = self.documents.read().await;
+        let doc = match documents.get(uri) {
+            Some(doc) => doc,
+            None => return Ok(None),
+        };
+
+        let source = doc.content.clone();
+        drop(documents);
+
+        let offset = convert::position_to_offset(&source, position);
+
+        let resolved = match definition::find_definition(&source, offset) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let start = convert::offset_to_position(&source, resolved.name_range.start);
+        let end = convert::offset_to_position(&source, resolved.name_range.end);
+
+        Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: uri.clone(),
+            range: Range { start, end },
+        })))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

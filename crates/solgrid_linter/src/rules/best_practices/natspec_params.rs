@@ -71,7 +71,7 @@ impl Rule for NatspecParamsRule {
                                 if let Some(name) = param.name {
                                     let param_name = name.as_str();
                                     if !documented_params.iter().any(|p| p == param_name) {
-                                        let range = solgrid_ast::span_to_range(body_item.span);
+                                        let range = solgrid_ast::item_name_range(body_item);
                                         let func_name = func
                                             .header
                                             .name

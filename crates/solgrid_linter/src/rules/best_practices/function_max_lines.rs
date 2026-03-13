@@ -43,7 +43,7 @@ impl Rule for FunctionMaxLinesRule {
                                         .name
                                         .map(|n| n.as_str().to_string())
                                         .unwrap_or_else(|| func.kind.to_string());
-                                    let range = solgrid_ast::span_to_range(body_item.span);
+                                    let range = solgrid_ast::item_name_range(body_item);
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
                                         format!(

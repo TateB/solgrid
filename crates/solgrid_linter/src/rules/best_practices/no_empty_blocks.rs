@@ -40,7 +40,7 @@ impl Rule for NoEmptyBlocksRule {
                             // Check if function has an empty body
                             if let Some(body) = &func.body {
                                 if body.is_empty() {
-                                    let range = solgrid_ast::span_to_range(body_item.span);
+                                    let range = solgrid_ast::item_name_range(body_item);
                                     let name = func
                                         .header
                                         .name
@@ -59,7 +59,7 @@ impl Rule for NoEmptyBlocksRule {
 
                     // Also check if the contract itself is empty
                     if contract.body.is_empty() {
-                        let range = solgrid_ast::span_to_range(item.span);
+                        let range = solgrid_ast::item_name_range(item);
                         let name = contract.name.as_str().to_string();
                         diagnostics.push(Diagnostic::new(
                             META.id,

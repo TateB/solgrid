@@ -2484,10 +2484,12 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "solgrid_ast",
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_formatter",
  "solgrid_linter",
+ "solgrid_parser",
  "tokio",
  "tower-lsp-server",
 ]

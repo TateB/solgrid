@@ -65,7 +65,7 @@ impl Rule for FuncOrderRule {
 
                             let priority = func_priority(func.kind, func.header.visibility());
                             if priority < max_priority {
-                                let range = solgrid_ast::span_to_range(body_item.span);
+                                let range = solgrid_ast::item_name_range(body_item);
                                 let name = func
                                     .header
                                     .name

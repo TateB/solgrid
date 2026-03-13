@@ -42,7 +42,8 @@ impl Rule for ConstructorSyntaxRule {
                             ) {
                                 if let Some(name) = func.header.name {
                                     if name.as_str() == contract_name {
-                                        let range = solgrid_ast::span_to_range(body_item.span);
+                                        let name_range = solgrid_ast::item_name_range(body_item);
+                                        let full_range = solgrid_ast::span_to_range(body_item.span);
                                         let func_text =
                                             solgrid_ast::span_text(ctx.source, body_item.span);
 
@@ -52,13 +53,13 @@ impl Rule for ConstructorSyntaxRule {
                                                 "use `constructor` keyword instead of `function {contract_name}`"
                                             ),
                                             META.default_severity,
-                                            range.clone(),
+                                            name_range,
                                         );
 
                                         // Provide a safe fix: replace `function ContractName` with `constructor`
                                         let old_pattern = format!("function {contract_name}");
                                         if let Some(offset) = func_text.find(&old_pattern) {
-                                            let abs_start = range.start + offset;
+                                            let abs_start = full_range.start + offset;
                                             let abs_end = abs_start + old_pattern.len();
                                             diag = diag.with_fix(Fix::safe(
                                                 format!("replace `function {contract_name}` with `constructor`"),
