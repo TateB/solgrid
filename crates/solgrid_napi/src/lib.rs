@@ -236,7 +236,7 @@ mod tests {
                 sort_imports: None,
                 multiline_func_header: None,
                 contract_body_spacing: None,
-            inheritance_brace_new_line: None,
+                inheritance_brace_new_line: None,
             };
             let config = map_options(Some(opts));
             assert_eq!(config.number_underscore, expected, "input: {input}");
@@ -266,7 +266,7 @@ mod tests {
                 sort_imports: None,
                 multiline_func_header: None,
                 contract_body_spacing: None,
-            inheritance_brace_new_line: None,
+                inheritance_brace_new_line: None,
             };
             let config = map_options(Some(opts));
             assert_eq!(config.uint_type, expected, "input: {input}");
