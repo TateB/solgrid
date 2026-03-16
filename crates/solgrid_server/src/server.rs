@@ -1,6 +1,7 @@
 //! LSP server — main server implementation using tower-lsp-server.
 
 use crate::document::DocumentStore;
+use crate::resolve::ImportResolver;
 use crate::{actions, completion, convert, definition, diagnostics, format, hover};
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
@@ -38,6 +39,8 @@ pub struct SolgridServer {
     settings: Arc<RwLock<ServerSettings>>,
     /// Cache of last-published LSP diagnostics per URI, for hover lookups.
     published_diagnostics: Arc<RwLock<std::collections::HashMap<Uri, Vec<Diagnostic>>>>,
+    /// Import path resolver for cross-file go-to-definition.
+    resolver: Arc<RwLock<ImportResolver>>,
 }
 
 impl SolgridServer {
@@ -50,6 +53,7 @@ impl SolgridServer {
             config: Arc::new(RwLock::new(Config::default())),
             settings: Arc::new(RwLock::new(ServerSettings::default())),
             published_diagnostics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            resolver: Arc::new(RwLock::new(ImportResolver::new(None))),
         }
     }
 
@@ -143,6 +147,10 @@ impl LanguageServer for SolgridServer {
                 let resolved = solgrid_config::resolve_config(&root_path);
                 let mut config = self.config.write().await;
                 *config = resolved;
+
+                // Initialize import resolver with workspace root.
+                let mut resolver = self.resolver.write().await;
+                *resolver = ImportResolver::new(Some(root_path));
             }
         }
 
@@ -185,6 +193,7 @@ impl LanguageServer for SolgridServer {
                 name: "solgrid".into(),
                 version: Some(env!("CARGO_PKG_VERSION").into()),
             }),
+            offset_encoding: None,
         })
     }
 
@@ -434,14 +443,8 @@ impl LanguageServer for SolgridServer {
 
         let position = &params.text_document_position_params.position;
 
-        let cache: tokio::sync::RwLockReadGuard<
-            '_,
-            std::collections::HashMap<Uri, Vec<Diagnostic>>,
-        > = self.published_diagnostics.read().await;
-        let lsp_diags: Vec<Diagnostic> = match cache.get(uri) {
-            Some(diags) => diags.clone(),
-            None => vec![],
-        };
+        let cache = self.published_diagnostics.read().await;
+        let lsp_diags: Vec<Diagnostic> = cache.get(uri).cloned().unwrap_or_default();
         drop(cache);
 
         let documents = self.documents.read().await;
@@ -456,42 +459,6 @@ impl LanguageServer for SolgridServer {
             position,
             &source,
         ))
-    }
-
-    async fn goto_definition(
-        &self,
-        params: GotoDefinitionParams,
-    ) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        if !is_solidity_file(uri) {
-            return Ok(None);
-        }
-
-        let position = params.text_document_position_params.position;
-
-        let documents = self.documents.read().await;
-        let doc = match documents.get(uri) {
-            Some(doc) => doc,
-            None => return Ok(None),
-        };
-
-        let source = doc.content.clone();
-        drop(documents);
-
-        let offset = convert::position_to_offset(&source, position);
-
-        let resolved = match definition::find_definition(&source, offset) {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-
-        let start = convert::offset_to_position(&source, resolved.name_range.start);
-        let end = convert::offset_to_position(&source, resolved.name_range.end);
-
-        Ok(Some(GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range: Range { start, end },
-        })))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -517,6 +484,51 @@ impl LanguageServer for SolgridServer {
         } else {
             Ok(Some(CompletionResponse::Array(items)))
         }
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if !is_solidity_file(uri) {
+            return Ok(None);
+        }
+
+        let documents = self.documents.read().await;
+        let doc = match documents.get(uri) {
+            Some(doc) => doc,
+            None => return Ok(None),
+        };
+
+        let source = doc.content.clone();
+        // Collect open document contents for cross-file lookups.
+        let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
+            .uris()
+            .filter_map(|u| {
+                let path = uri_to_path(u);
+                let content = documents.get(u).map(|d| d.content.clone())?;
+                Some((path, content))
+            })
+            .collect();
+        drop(documents);
+
+        let resolver = self.resolver.read().await;
+        let get_source = |path: &std::path::Path| -> Option<String> {
+            // Check open documents first, then fall back to disk.
+            if let Some(content) = open_docs.get(path) {
+                return Some(content.clone());
+            }
+            std::fs::read_to_string(path).ok()
+        };
+
+        Ok(definition::goto_definition(
+            &source,
+            &params.text_document_position_params.position,
+            uri,
+            &get_source,
+            &resolver,
+        ))
     }
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {

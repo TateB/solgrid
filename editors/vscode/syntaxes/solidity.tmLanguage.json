@@ -1,465 +1,1202 @@
 {
-  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Solidity",
-  "scopeName": "source.solidity",
-  "patterns": [
-    { "include": "#comments" },
-    { "include": "#natspec" },
-    { "include": "#pragma" },
-    { "include": "#import" },
-    { "include": "#declaration" },
-    { "include": "#expression" }
-  ],
-  "repository": {
-    "comments": {
-      "patterns": [
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "fileTypes": [
+        "sol"
+    ],
+    "name": "Solidity",
+    "patterns": [
         {
-          "name": "comment.line.double-slash.solidity",
-          "match": "//.*$"
+            "include": "#natspec"
         },
         {
-          "name": "comment.block.solidity",
-          "begin": "/\\*",
-          "end": "\\*/"
+            "include": "#declaration-userType"
+        },
+        {
+            "include": "#comment"
+        },
+        {
+            "include": "#operator"
+        },
+        {
+            "include": "#global"
+        },
+        {
+            "include": "#control"
+        },
+        {
+            "include": "#constant"
+        },
+        {
+            "include": "#primitive"
+        },
+        {
+            "include": "#type-primitive"
+        },
+        {
+            "include": "#type-modifier-extended-scope"
+        },
+        {
+            "include": "#declaration"
+        },
+        {
+            "include": "#function-call"
+        },
+        {
+            "include": "#assembly"
+        },
+        {
+            "include": "#punctuation"
         }
-      ]
-    },
-    "natspec": {
-      "patterns": [
-        {
-          "name": "comment.block.documentation.solidity",
-          "begin": "/\\*\\*",
-          "end": "\\*/",
-          "patterns": [
-            {
-              "name": "storage.type.annotation.solidity",
-              "match": "(@title|@author|@notice|@dev|@param|@return|@inheritdoc|@custom:\\w+)"
-            }
-          ]
-        },
-        {
-          "name": "comment.line.documentation.solidity",
-          "match": "(///)(.*$)",
-          "captures": {
-            "1": { "name": "comment.line.documentation.solidity" },
-            "2": {
-              "patterns": [
+    ],
+    "repository": {
+        "natspec": {
+            "patterns": [
                 {
-                  "name": "storage.type.annotation.solidity",
-                  "match": "(@title|@author|@notice|@dev|@param|@return|@inheritdoc|@custom:\\w+)"
+                    "begin": "/\\*\\*",
+                    "end": "\\*/",
+                    "name": "comment.block.documentation",
+                    "patterns": [
+                        {
+                            "include": "#natspec-tags"
+                        }
+                    ]
                 },
                 {
-                  "name": "comment.line.documentation.solidity",
-                  "match": "."
+                    "begin": "///",
+                    "end": "$",
+                    "name": "comment.block.documentation",
+                    "patterns": [
+                        {
+                            "include": "#natspec-tags"
+                        }
+                    ]
                 }
-              ]
+            ]
+        },
+        "natspec-tags": {
+            "patterns": [
+                {
+                    "include": "#comment-todo"
+                },
+                {
+                    "include": "#natspec-tag-title"
+                },
+                {
+                    "include": "#natspec-tag-author"
+                },
+                {
+                    "include": "#natspec-tag-notice"
+                },
+                {
+                    "include": "#natspec-tag-dev"
+                },
+                {
+                    "include": "#natspec-tag-param"
+                },
+                {
+                    "include": "#natspec-tag-return"
+                },
+                {
+                    "include": "#natspec-tag-custom"
+                },
+                {
+                    "include": "#natspec-tag-inheritdoc"
+                }
+            ]
+        },
+        "natspec-tag-title": {
+            "match": "(@title)\\b",
+            "name": "storage.type.title.natspec"
+        },
+        "natspec-tag-author": {
+            "match": "(@author)\\b",
+            "name": "storage.type.author.natspec"
+        },
+        "natspec-tag-notice": {
+            "match": "(@notice)\\b",
+            "name": "storage.type.dev.natspec"
+        },
+        "natspec-tag-custom": {
+            "match": "(@custom:\\w*)\\b",
+            "name": "storage.type.dev.natspec"
+        },
+        "natspec-tag-inheritdoc": {
+            "match": "(@inheritdoc)\\b",
+            "name": "storage.type.author.natspec"
+        },
+        "natspec-tag-dev": {
+            "match": "(@dev)\\b",
+            "name": "storage.type.dev.natspec"
+        },
+        "natspec-tag-param": {
+            "match": "(@param)(\\s+([A-Za-z_]\\w*))?\\b",
+            "captures": {
+                "1": {
+                    "name": "storage.type.param.natspec"
+                },
+                "3": {
+                    "name": "variable.other.natspec"
+                }
             }
-          }
-        }
-      ]
-    },
-    "pragma": {
-      "patterns": [
-        {
-          "name": "meta.pragma.solidity",
-          "match": "\\b(pragma)\\s+(solidity|abicoder|experimental)\\b([^;]*)(;)",
-          "captures": {
-            "1": { "name": "keyword.control.pragma.solidity" },
-            "2": { "name": "entity.name.tag.pragma.solidity" },
-            "3": { "name": "string.unquoted.pragma.solidity" },
-            "4": { "name": "punctuation.terminator.solidity" }
-          }
-        }
-      ]
-    },
-    "import": {
-      "patterns": [
-        {
-          "name": "keyword.control.import.solidity",
-          "match": "\\b(import)\\b"
         },
-        {
-          "name": "keyword.control.from.solidity",
-          "match": "\\b(from)\\b"
-        },
-        {
-          "name": "keyword.other.as.solidity",
-          "match": "\\b(as)\\b"
-        }
-      ]
-    },
-    "declaration": {
-      "patterns": [
-        { "include": "#contract-declaration" },
-        { "include": "#function-declaration" },
-        { "include": "#event-declaration" },
-        { "include": "#error-declaration" },
-        { "include": "#enum-declaration" },
-        { "include": "#struct-declaration" },
-        { "include": "#modifier-declaration" },
-        { "include": "#type-declaration" },
-        { "include": "#using-declaration" },
-        { "include": "#storage-keywords" },
-        { "include": "#control-flow" },
-        { "include": "#type-keywords" },
-        { "include": "#modifiers" },
-        { "include": "#assembly" }
-      ]
-    },
-    "contract-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(contract|library|interface|abstract)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.contract.solidity" },
-            "2": { "name": "entity.name.type.contract.solidity" }
-          }
-        },
-        {
-          "name": "keyword.other.inheritance.solidity",
-          "match": "\\b(is)\\b"
-        }
-      ]
-    },
-    "function-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(function)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.function.solidity" },
-            "2": { "name": "entity.name.function.solidity" }
-          }
-        },
-        {
-          "match": "\\b(constructor|receive|fallback)\\b",
-          "name": "keyword.declaration.function.solidity"
-        }
-      ]
-    },
-    "event-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(event)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.event.solidity" },
-            "2": { "name": "entity.name.type.event.solidity" }
-          }
-        },
-        {
-          "name": "keyword.other.emit.solidity",
-          "match": "\\b(emit)\\b"
-        }
-      ]
-    },
-    "error-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(error)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.error.solidity" },
-            "2": { "name": "entity.name.type.error.solidity" }
-          }
-        }
-      ]
-    },
-    "enum-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(enum)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.enum.solidity" },
-            "2": { "name": "entity.name.type.enum.solidity" }
-          }
-        }
-      ]
-    },
-    "struct-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(struct)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.struct.solidity" },
-            "2": { "name": "entity.name.type.struct.solidity" }
-          }
-        }
-      ]
-    },
-    "modifier-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(modifier)\\s+([A-Za-z_]\\w*)",
-          "captures": {
-            "1": { "name": "keyword.declaration.modifier.solidity" },
-            "2": { "name": "entity.name.function.modifier.solidity" }
-          }
-        }
-      ]
-    },
-    "type-declaration": {
-      "patterns": [
-        {
-          "match": "\\b(type)\\s+([A-Za-z_]\\w*)\\s+(is)\\b",
-          "captures": {
-            "1": { "name": "keyword.declaration.type.solidity" },
-            "2": { "name": "entity.name.type.solidity" },
-            "3": { "name": "keyword.other.is.solidity" }
-          }
-        }
-      ]
-    },
-    "using-declaration": {
-      "patterns": [
-        {
-          "name": "keyword.other.using.solidity",
-          "match": "\\b(using)\\b"
-        },
-        {
-          "name": "keyword.other.for.solidity",
-          "match": "\\b(for)\\b"
-        },
-        {
-          "name": "keyword.other.global.solidity",
-          "match": "\\bglobal\\b"
-        }
-      ]
-    },
-    "storage-keywords": {
-      "patterns": [
-        {
-          "name": "keyword.other.storage.solidity",
-          "match": "\\b(mapping|storage|memory|calldata|immutable|constant)\\b"
-        }
-      ]
-    },
-    "control-flow": {
-      "patterns": [
-        {
-          "name": "keyword.control.flow.solidity",
-          "match": "\\b(if|else|for|while|do|break|continue|return|try|catch|revert|throw|unchecked)\\b"
-        },
-        {
-          "name": "keyword.other.delete.solidity",
-          "match": "\\b(delete|new)\\b"
-        }
-      ]
-    },
-    "type-keywords": {
-      "patterns": [
-        {
-          "name": "support.type.primitive.solidity",
-          "match": "\\b(address|bool|string|bytes|byte|int|uint|fixed|ufixed)(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?\\b"
-        },
-        {
-          "name": "keyword.type.payable.solidity",
-          "match": "\\bpayable\\b"
-        }
-      ]
-    },
-    "modifiers": {
-      "patterns": [
-        {
-          "name": "keyword.modifier.visibility.solidity",
-          "match": "\\b(public|private|internal|external)\\b"
-        },
-        {
-          "name": "keyword.modifier.mutability.solidity",
-          "match": "\\b(pure|view|payable|nonpayable)\\b"
-        },
-        {
-          "name": "keyword.modifier.misc.solidity",
-          "match": "\\b(virtual|override|abstract|indexed|anonymous)\\b"
-        },
-        {
-          "name": "keyword.other.returns.solidity",
-          "match": "\\b(returns)\\b"
-        }
-      ]
-    },
-    "assembly": {
-      "patterns": [
-        {
-          "name": "keyword.control.assembly.solidity",
-          "begin": "\\b(assembly)\\b",
-          "beginCaptures": {
-            "1": { "name": "keyword.control.assembly.solidity" }
-          },
-          "end": "(?=\\{)",
-          "patterns": [
-            {
-              "name": "string.quoted.double.solidity",
-              "match": "\"[^\"]*\""
+        "natspec-tag-return": {
+            "match": "(@return)(\\s+([A-Za-z_]\\w*))?\\b",
+            "captures": {
+                "1": {
+                    "name": "storage.type.return.natspec"
+                },
+                "3": {
+                    "name": "variable.other.natspec"
+                }
             }
-          ]
-        }
-      ]
-    },
-    "expression": {
-      "patterns": [
-        { "include": "#string" },
-        { "include": "#number" },
-        { "include": "#boolean" },
-        { "include": "#operators" },
-        { "include": "#global-variables" },
-        { "include": "#function-call" },
-        { "include": "#punctuation" }
-      ]
-    },
-    "string": {
-      "patterns": [
-        {
-          "name": "string.quoted.double.solidity",
-          "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.solidity",
-              "match": "\\\\."
+        },
+        "comment": {
+            "patterns": [
+                {
+                    "include": "#comment-line"
+                },
+                {
+                    "include": "#comment-block"
+                }
+            ]
+        },
+        "comment-todo": {
+            "match": "(?i)\\b(FIXME|TODO|CHANGED|XXX|IDEA|HACK|NOTE|REVIEW|NB|BUG|QUESTION|COMBAK|TEMP|SUPPRESS|LINT|\\w+-disable|\\w+-suppress)\\b(?-i)",
+            "name": "keyword.comment.todo"
+        },
+        "comment-line": {
+            "begin": "(?<!tp:)//",
+            "end": "$",
+            "name": "comment.line",
+            "patterns": [
+                {
+                    "include": "#comment-todo"
+                }
+            ]
+        },
+        "comment-block": {
+            "begin": "/\\*",
+            "end": "\\*/",
+            "name": "comment.block",
+            "patterns": [
+                {
+                    "include": "#comment-todo"
+                }
+            ]
+        },
+        "operator": {
+            "patterns": [
+                {
+                    "include": "#operator-logic"
+                },
+                {
+                    "include": "#operator-mapping"
+                },
+                {
+                    "include": "#operator-arithmetic"
+                },
+                {
+                    "include": "#operator-binary"
+                },
+                {
+                    "include": "#operator-assignment"
+                }
+            ]
+        },
+        "operator-logic": {
+            "match": "(==|\\!=|<(?!<)|<=|>(?!>)|>=|\\&\\&|\\|\\||\\:(?!=)|\\?|\\!)",
+            "name": "keyword.operator.logic"
+        },
+        "operator-mapping": {
+            "match": "(=>)",
+            "name": "keyword.operator.mapping"
+        },
+        "operator-arithmetic": {
+            "match": "(\\+|\\-|\\/|\\*)",
+            "name": "keyword.operator.arithmetic"
+        },
+        "operator-binary": {
+            "match": "(\\^|\\&|\\||<<|>>)",
+            "name": "keyword.operator.binary"
+        },
+        "operator-assignment": {
+            "match": "(\\:?=)",
+            "name": "keyword.operator.assignment"
+        },
+        "control": {
+            "patterns": [
+                {
+                    "include": "#control-flow"
+                },
+                {
+                    "include": "#control-using"
+                },
+                {
+                    "include": "#control-import"
+                },
+                {
+                    "include": "#control-pragma"
+                },
+                {
+                    "include": "#control-underscore"
+                },
+                {
+                    "include": "#control-unchecked"
+                },
+                {
+                    "include": "#control-other"
+                }
+            ]
+        },
+        "control-flow": {
+            "patterns": [
+                {
+                    "match": "\\b(if|else|for|while|do|break|continue|try|catch|finally|throw|return|global)\\b",
+                    "name": "keyword.control.flow"
+                },
+                {
+                    "begin": "\\b(returns)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.control.flow.return"
+                        }
+                    },
+                    "end": "(?=\\))",
+                    "patterns": [
+                        {
+                            "include": "#declaration-function-parameters"
+                        }
+                    ]
+                }
+            ]
+        },
+        "control-using": {
+            "patterns": [
+                {
+                    "match": "\\b(using)\\b\\s+\\b([A-Za-z\\d_]+)\\b\\s+\\b(for)\\b\\s+\\b([A-Za-z\\d_]+)",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.using"
+                        },
+                        "2": {
+                            "name": "entity.name.type.library"
+                        },
+                        "3": {
+                            "name": "keyword.control.for"
+                        },
+                        "4": {
+                            "name": "entity.name.type"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b(using)\\b",
+                    "name": "keyword.control.using"
+                }
+            ]
+        },
+        "control-import": {
+            "patterns": [
+                {
+                    "begin": "\\b(import)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.control.import"
+                        }
+                    },
+                    "end": "(?=\\;)",
+                    "patterns": [
+                        {
+                            "begin": "((?=\\{))",
+                            "end": "((?=\\}))",
+                            "patterns": [
+                                {
+                                    "match": "\\b(\\w+)\\b",
+                                    "name": "entity.name.type.interface"
+                                }
+                            ]
+                        },
+                        {
+                            "match": "\\b(from)\\b",
+                            "name": "keyword.control.import.from"
+                        },
+                        {
+                            "include": "#string"
+                        },
+                        {
+                            "include": "#punctuation"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(import)\\b",
+                    "name": "keyword.control.import"
+                }
+            ]
+        },
+        "control-unchecked": {
+            "match": "\\b(unchecked)\\b",
+            "name": "keyword.control.unchecked"
+        },
+        "control-pragma": {
+            "match": "\\b(pragma)(?:\\s+([A-Za-z_]\\w+)\\s+([^\\s]+))?\\b",
+            "captures": {
+                "1": {
+                    "name": "keyword.control.pragma"
+                },
+                "2": {
+                    "name": "entity.name.tag.pragma"
+                },
+                "3": {
+                    "name": "constant.other.pragma"
+                }
             }
-          ]
         },
-        {
-          "name": "string.quoted.single.solidity",
-          "begin": "'",
-          "end": "'",
-          "patterns": [
-            {
-              "name": "constant.character.escape.solidity",
-              "match": "\\\\."
+        "control-underscore": {
+            "match": "\\b(_)\\b",
+            "name": "constant.other.underscore"
+        },
+        "control-other": {
+            "match": "\\b(new|delete|emit)\\b",
+            "name": "keyword.control"
+        },
+        "constant": {
+            "patterns": [
+                {
+                    "include": "#constant-boolean"
+                },
+                {
+                    "include": "#constant-time"
+                },
+                {
+                    "include": "#constant-currency"
+                }
+            ]
+        },
+        "constant-boolean": {
+            "match": "\\b(true|false)\\b",
+            "name": "constant.language.boolean"
+        },
+        "constant-time": {
+            "match": "\\b(seconds|minutes|hours|days|weeks|years)\\b",
+            "name": "constant.language.time"
+        },
+        "constant-currency": {
+            "match": "\\b(ether|wei|gwei|finney|szabo)\\b",
+            "name": "constant.language.currency"
+        },
+        "number-decimal": {
+            "match": "\\b([0-9_]+(\\.[0-9_]+)?)\\b",
+            "name": "constant.numeric.decimal"
+        },
+        "number-hex": {
+            "match": "\\b(0[xX][a-fA-F0-9]+)\\b",
+            "name": "constant.numeric.hexadecimal"
+        },
+        "number-scientific": {
+            "match": "\\b(?:0\\.(?:0[0-9]|[0-9][0-9_]?)|[0-9][0-9_]*(?:\\.\\d{1,2})?)(?:e[+-]?[0-9_]+)?",
+            "name": "constant.numeric.scientific"
+        },
+        "string": {
+            "patterns": [
+                {
+                    "match": "\\\"(?:\\\\\"|[^\\\"])*\\\"",
+                    "name": "string.quoted.double"
+                },
+                {
+                    "match": "\\'(?:\\\\'|[^\\'])*\\'",
+                    "name": "string.quoted.single"
+                }
+            ]
+        },
+        "primitive": {
+            "patterns": [
+                {
+                    "include": "#number-decimal"
+                },
+                {
+                    "include": "#number-hex"
+                },
+                {
+                    "include": "#number-scientific"
+                },
+                {
+                    "include": "#string"
+                }
+            ]
+        },
+        "type-primitive": {
+            "patterns": [
+                {
+                    "begin": "\\b(address|string\\d*|bytes\\d*|int\\d*|uint\\d*|bool\\d*)\\b(?:\\[\\])(\\()",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "support.type.primitive"
+                        }
+                    },
+                    "end": "(\\))",
+                    "patterns": [
+                        {
+                            "include": "#primitive"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#global"
+                        },
+                        {
+                            "include": "#variable"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(address|string\\d*|bytes\\d*|int\\d*|uint\\d*|bool\\d*)\\b",
+                    "name": "support.type.primitive"
+                }
+            ]
+        },
+        "global": {
+            "patterns": [
+                {
+                    "include": "#global-variables"
+                },
+                {
+                    "include": "#global-functions"
+                }
+            ]
+        },
+        "global-variables": {
+            "patterns": [
+                {
+                    "match": "\\b(this)\\b",
+                    "name": "variable.language.this"
+                },
+                {
+                    "match": "\\b(super)\\b",
+                    "name": "variable.language.super"
+                },
+                {
+                    "match": "\\b(abi)\\b",
+                    "name": "variable.language.builtin.abi"
+                },
+                {
+                    "match": "\\b(msg\\.sender|msg|block|tx|now)\\b",
+                    "name": "variable.language.transaction"
+                },
+                {
+                    "match": "\\b(tx\\.origin|tx\\.gasprice|msg\\.data|msg\\.sig|msg\\.value)\\b",
+                    "name": "variable.language.transaction"
+                }
+            ]
+        },
+        "global-functions": {
+            "patterns": [
+                {
+                    "match": "\\b(require|assert|revert)\\b",
+                    "name": "keyword.control.exceptions"
+                },
+                {
+                    "match": "\\b(selfdestruct|suicide)\\b",
+                    "name": "keyword.control.contract"
+                },
+                {
+                    "match": "\\b(addmod|mulmod|keccak256|sha256|sha3|ripemd160|ecrecover)\\b",
+                    "name": "support.function.math"
+                },
+                {
+                    "match": "\\b(unicode)\\b",
+                    "name": "support.function.string"
+                },
+                {
+                    "match": "\\b(blockhash|gasleft)\\b",
+                    "name": "variable.language.transaction"
+                },
+                {
+                    "match": "\\b(type)\\b",
+                    "name": "variable.language.type"
+                }
+            ]
+        },
+        "type-modifier-access": {
+            "match": "\\b(internal|external|private|public)\\b",
+            "name": "storage.type.modifier.access"
+        },
+        "type-modifier-payable": {
+            "match": "\\b(nonpayable|payable)\\b",
+            "name": "storage.type.modifier.payable"
+        },
+        "type-modifier-constant": {
+            "match": "\\b(constant)\\b",
+            "name": "storage.type.modifier.readonly"
+        },
+        "type-modifier-immutable": {
+            "match": "\\b(immutable)\\b",
+            "name": "storage.type.modifier.readonly"
+        },
+        "type-modifier-transient": {
+            "match": "\\b(transient)\\b",
+            "name": "storage.type.modifier.readonly"
+        },
+        "type-modifier-extended-scope": {
+            "match": "\\b(pure|view|inherited|indexed|storage|memory|virtual|calldata|override|abstract)\\b",
+            "name": "storage.type.modifier.extendedscope"
+        },
+        "variable": {
+            "patterns": [
+                {
+                    "match": "\\b(\\_\\w+)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "variable.parameter.function"
+                        }
+                    }
+                },
+                {
+                    "match": "(?:\\.)(\\w+)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "support.variable.property"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b(\\w+)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "variable.parameter.other"
+                        }
+                    }
+                }
+            ]
+        },
+        "modifier-call": {
+            "patterns": [
+                {
+                    "include": "#function-call"
+                },
+                {
+                    "match": "\\b(\\w+)\\b",
+                    "name": "entity.name.function.modifier"
+                }
+            ]
+        },
+        "declaration": {
+            "patterns": [
+                {
+                    "include": "#declaration-contract"
+                },
+                {
+                    "include": "#declaration-userType"
+                },
+                {
+                    "include": "#declaration-interface"
+                },
+                {
+                    "include": "#declaration-library"
+                },
+                {
+                    "include": "#declaration-function"
+                },
+                {
+                    "include": "#declaration-modifier"
+                },
+                {
+                    "include": "#declaration-constructor"
+                },
+                {
+                    "include": "#declaration-event"
+                },
+                {
+                    "include": "#declaration-storage"
+                },
+                {
+                    "include": "#declaration-error"
+                }
+            ]
+        },
+        "declaration-storage-field": {
+            "patterns": [
+                {
+                    "include": "#comment"
+                },
+                {
+                    "include": "#control"
+                },
+                {
+                    "include": "#type-primitive"
+                },
+                {
+                    "include": "#type-modifier-access"
+                },
+                {
+                    "include": "#type-modifier-immutable"
+                },
+                {
+                    "include": "#type-modifier-transient"
+                },
+                {
+                    "include": "#type-modifier-payable"
+                },
+                {
+                    "include": "#type-modifier-constant"
+                },
+                {
+                    "include": "#primitive"
+                },
+                {
+                    "include": "#constant"
+                },
+                {
+                    "include": "#operator"
+                },
+                {
+                    "include": "#punctuation"
+                }
+            ]
+        },
+        "declaration-storage": {
+            "patterns": [
+                {
+                    "include": "#declaration-storage-mapping"
+                },
+                {
+                    "include": "#declaration-struct"
+                },
+                {
+                    "include": "#declaration-enum"
+                },
+                {
+                    "include": "#declaration-storage-field"
+                }
+            ]
+        },
+        "declaration-userType": {
+            "match": "\\b(type)\\b\\s+(\\w+)\\b\\s+\\b(is)\\b",
+            "captures": {
+                "1": {
+                    "name": "storage.type.userType"
+                },
+                "2": {
+                    "name": "entity.name.type.userType"
+                },
+                "3": {
+                    "name": "storage.modifier.is"
+                }
             }
-          ]
         },
-        {
-          "name": "string.quoted.hex.solidity",
-          "match": "\\b(hex)\"[0-9a-fA-F_]*\"",
-          "captures": {
-            "1": { "name": "keyword.other.hex.solidity" }
-          }
+        "declaration-contract": {
+            "patterns": [
+                {
+                    "begin": "\\b(contract)\\b\\s+(\\w+)\\b\\s+\\b(is)\\b\\s+",
+                    "end": "(?=\\{)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.contract"
+                        },
+                        "2": {
+                            "name": "entity.name.type.contract"
+                        },
+                        "3": {
+                            "name": "storage.modifier.is"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "match": "\\b(\\w+)\\b",
+                            "name": "entity.name.type.contract.extend"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(contract)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.contract"
+                        },
+                        "2": {
+                            "name": "entity.name.type.contract"
+                        }
+                    }
+                }
+            ]
         },
-        {
-          "name": "string.quoted.hex.solidity",
-          "match": "\\b(hex)'[0-9a-fA-F_]*'",
-          "captures": {
-            "1": { "name": "keyword.other.hex.solidity" }
-          }
+        "declaration-interface": {
+            "patterns": [
+                {
+                    "begin": "\\b(interface)\\b\\s+(\\w+)\\b\\s+\\b(is)\\b\\s+",
+                    "end": "(?=\\{)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.interface"
+                        },
+                        "2": {
+                            "name": "entity.name.type.interface"
+                        },
+                        "3": {
+                            "name": "storage.modifier.is"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "match": "\\b(\\w+)\\b",
+                            "name": "entity.name.type.interface.extend"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(interface)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.interface"
+                        },
+                        "2": {
+                            "name": "entity.name.type.interface"
+                        }
+                    }
+                }
+            ]
         },
-        {
-          "name": "string.quoted.unicode.solidity",
-          "match": "\\b(unicode)\"[^\"]*\"",
-          "captures": {
-            "1": { "name": "keyword.other.unicode.solidity" }
-          }
+        "declaration-library": {
+            "match": "\\b(library)(\\s+([A-Za-z_]\\w*))?\\b",
+            "captures": {
+                "1": {
+                    "name": "storage.type.library"
+                },
+                "3": {
+                    "name": "entity.name.type.library"
+                }
+            }
+        },
+        "declaration-struct": {
+            "patterns": [
+                {
+                    "match": "\\b(struct)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.struct"
+                        },
+                        "3": {
+                            "name": "entity.name.type.struct"
+                        }
+                    }
+                },
+                {
+                    "begin": "\\b(struct)\\b\\s*(\\w+)?\\b\\s*(?=\\{)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.struct"
+                        },
+                        "2": {
+                            "name": "entity.name.type.struct"
+                        }
+                    },
+                    "end": "(?=\\})",
+                    "patterns": [
+                        {
+                            "include": "#type-primitive"
+                        },
+                        {
+                            "include": "#variable"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#comment"
+                        }
+                    ]
+                }
+            ]
+        },
+        "declaration-event": {
+            "patterns": [
+                {
+                    "begin": "\\b(event)\\b(?:\\s+(\\w+)\\b)?",
+                    "end": "(?=\\))",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.event"
+                        },
+                        "2": {
+                            "name": "entity.name.type.event"
+                        }
+                    },
+                    "patterns": [
+                        {
+                            "include": "#type-primitive"
+                        },
+                        {
+                            "match": "\\b(?:(indexed)\\s)?(\\w+)(?:,\\s*|)",
+                            "captures": {
+                                "1": {
+                                    "name": "storage.type.modifier.indexed"
+                                },
+                                "2": {
+                                    "name": "variable.parameter.event"
+                                }
+                            }
+                        },
+                        {
+                            "include": "#punctuation"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(event)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.event"
+                        },
+                        "3": {
+                            "name": "entity.name.type.event"
+                        }
+                    }
+                }
+            ]
+        },
+        "declaration-constructor": {
+            "patterns": [
+                {
+                    "begin": "\\b(constructor)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.constructor"
+                        }
+                    },
+                    "end": "(?=\\{)",
+                    "patterns": [
+                        {
+                            "begin": "\\G\\s*(?=\\()",
+                            "end": "(?=\\))",
+                            "patterns": [
+                                {
+                                    "include": "#declaration-function-parameters"
+                                }
+                            ]
+                        },
+                        {
+                            "begin": "(?<=\\))",
+                            "end": "(?=\\{)",
+                            "patterns": [
+                                {
+                                    "include": "#type-modifier-access"
+                                },
+                                {
+                                    "include": "#function-call"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(constructor)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.constructor"
+                        }
+                    }
+                }
+            ]
+        },
+        "declaration-enum": {
+            "patterns": [
+                {
+                    "begin": "\\b(enum)\\s+(\\w+)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.enum"
+                        },
+                        "2": {
+                            "name": "entity.name.type.enum"
+                        }
+                    },
+                    "end": "(?=\\})",
+                    "patterns": [
+                        {
+                            "match": "\\b(\\w+)\\b",
+                            "name": "variable.other.enummember"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#comment"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(enum)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.enum"
+                        },
+                        "3": {
+                            "name": "entity.name.type.enum"
+                        }
+                    }
+                }
+            ]
+        },
+        "declaration-function-parameters": {
+            "begin": "\\G\\s*(?=\\()",
+            "end": "(?=\\))",
+            "patterns": [
+                {
+                    "include": "#type-primitive"
+                },
+                {
+                    "include": "#type-modifier-extended-scope"
+                },
+                {
+                    "match": "\\b([A-Z]\\w*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.struct"
+                        }
+                    }
+                },
+                {
+                    "include": "#variable"
+                },
+                {
+                    "include": "#punctuation"
+                },
+                {
+                    "include": "#comment"
+                }
+            ]
+        },
+        "declaration-function": {
+            "patterns": [
+                {
+                    "begin": "\\b(function)\\s+(\\w+)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.function"
+                        },
+                        "2": {
+                            "name": "entity.name.function"
+                        }
+                    },
+                    "end": "(?=\\{|;)",
+                    "patterns": [
+                        {
+                            "include": "#natspec"
+                        },
+                        {
+                            "include": "#global"
+                        },
+                        {
+                            "include": "#declaration-function-parameters"
+                        },
+                        {
+                            "include": "#type-modifier-access"
+                        },
+                        {
+                            "include": "#type-modifier-payable"
+                        },
+                        {
+                            "include": "#type-modifier-immutable"
+                        },
+                        {
+                            "include": "#type-modifier-extended-scope"
+                        },
+                        {
+                            "include": "#control-flow"
+                        },
+                        {
+                            "include": "#function-call"
+                        },
+                        {
+                            "include": "#modifier-call"
+                        },
+                        {
+                            "include": "#punctuation"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(function)\\s+([A-Za-z_]\\w*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.function"
+                        },
+                        "2": {
+                            "name": "entity.name.function"
+                        }
+                    }
+                }
+            ]
+        },
+        "declaration-modifier": {
+            "patterns": [
+                {
+                    "begin": "\\b(modifier)\\b\\s*(\\w+)",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.function.modifier"
+                        },
+                        "2": {
+                            "name": "entity.name.function.modifier"
+                        }
+                    },
+                    "end": "(?=\\{)",
+                    "patterns": [
+                        {
+                            "include": "#declaration-function-parameters"
+                        },
+                        {
+                            "begin": "(?<=\\))",
+                            "end": "(?=\\{)",
+                            "patterns": [
+                                {
+                                    "include": "#declaration-function-parameters"
+                                },
+                                {
+                                    "include": "#type-modifier-access"
+                                },
+                                {
+                                    "include": "#type-modifier-payable"
+                                },
+                                {
+                                    "include": "#type-modifier-immutable"
+                                },
+                                {
+                                    "include": "#type-modifier-extended-scope"
+                                },
+                                {
+                                    "include": "#function-call"
+                                },
+                                {
+                                    "include": "#modifier-call"
+                                },
+                                {
+                                    "include": "#control-flow"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(modifier)(\\s+([A-Za-z_]\\w*))?\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.modifier"
+                        },
+                        "3": {
+                            "name": "entity.name.function"
+                        }
+                    }
+                }
+            ]
+        },
+        "declaration-storage-mapping": {
+            "patterns": [
+                {
+                    "begin": "\\b(mapping)\\b",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "storage.type.mapping"
+                        }
+                    },
+                    "end": "(?=\\))",
+                    "patterns": [
+                        {
+                            "include": "#declaration-storage-mapping"
+                        },
+                        {
+                            "include": "#type-primitive"
+                        },
+                        {
+                            "include": "#punctuation"
+                        },
+                        {
+                            "include": "#operator"
+                        }
+                    ]
+                },
+                {
+                    "match": "\\b(mapping)\\b",
+                    "name": "storage.type.mapping"
+                }
+            ]
+        },
+        "declaration-error": {
+            "match": "\\b(error)(\\s+([A-Za-z_]\\w*))?\\b",
+            "captures": {
+                "1": {
+                    "name": "storage.type.error"
+                },
+                "3": {
+                    "name": "entity.name.type.error"
+                }
+            }
+        },
+        "function-call": {
+            "match": "\\b([A-Za-z_]\\w*)\\s*(\\()",
+            "captures": {
+                "1": {
+                    "name": "entity.name.function"
+                },
+                "2": {
+                    "name": "punctuation.parameters.begin"
+                }
+            }
+        },
+        "assembly": {
+            "patterns": [
+                {
+                    "match": "\\b(assembly)\\b",
+                    "name": "keyword.control.assembly"
+                },
+                {
+                    "match": "\\b(let)\\b",
+                    "name": "storage.type.assembly"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                {
+                    "match": ";",
+                    "name": "punctuation.terminator.statement"
+                },
+                {
+                    "match": "\\.",
+                    "name": "punctuation.accessor"
+                },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator"
+                },
+                {
+                    "match": "\\{",
+                    "name": "punctuation.brace.curly.begin"
+                },
+                {
+                    "match": "\\}",
+                    "name": "punctuation.brace.curly.end"
+                },
+                {
+                    "match": "\\[",
+                    "name": "punctuation.brace.square.begin"
+                },
+                {
+                    "match": "\\]",
+                    "name": "punctuation.brace.square.end"
+                },
+                {
+                    "match": "\\(",
+                    "name": "punctuation.parameters.begin"
+                },
+                {
+                    "match": "\\)",
+                    "name": "punctuation.parameters.end"
+                }
+            ]
         }
-      ]
     },
-    "number": {
-      "patterns": [
-        {
-          "name": "constant.numeric.hex.solidity",
-          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
-        },
-        {
-          "name": "constant.numeric.decimal.solidity",
-          "match": "\\b\\d[\\d_]*(\\.[\\d_]+)?([eE][+-]?[\\d_]+)?\\b"
-        },
-        {
-          "name": "keyword.other.unit.solidity",
-          "match": "\\b(wei|gwei|ether|seconds|minutes|hours|days|weeks)\\b"
-        }
-      ]
-    },
-    "boolean": {
-      "patterns": [
-        {
-          "name": "constant.language.boolean.solidity",
-          "match": "\\b(true|false)\\b"
-        }
-      ]
-    },
-    "operators": {
-      "patterns": [
-        {
-          "name": "keyword.operator.assignment.solidity",
-          "match": "(=>|:=|=)"
-        },
-        {
-          "name": "keyword.operator.comparison.solidity",
-          "match": "(==|!=|<=|>=|<|>)"
-        },
-        {
-          "name": "keyword.operator.logical.solidity",
-          "match": "(&&|\\|\\||!)"
-        },
-        {
-          "name": "keyword.operator.arithmetic.solidity",
-          "match": "(\\+\\+|--|\\*\\*|\\+|\\-|\\*|/|%)"
-        },
-        {
-          "name": "keyword.operator.bitwise.solidity",
-          "match": "(\\^|&|\\||~|<<|>>)"
-        },
-        {
-          "name": "keyword.operator.ternary.solidity",
-          "match": "\\?"
-        }
-      ]
-    },
-    "global-variables": {
-      "patterns": [
-        {
-          "name": "variable.language.transaction.solidity",
-          "match": "\\b(msg\\.sender|msg\\.value|msg\\.data|msg\\.sig|msg\\.gas)\\b"
-        },
-        {
-          "name": "variable.language.transaction.solidity",
-          "match": "\\b(tx\\.origin|tx\\.gasprice)\\b"
-        },
-        {
-          "name": "variable.language.block.solidity",
-          "match": "\\b(block\\.(coinbase|difficulty|prevrandao|gaslimit|number|timestamp|chainid|basefee|blobbasefee))\\b"
-        },
-        {
-          "name": "variable.language.this.solidity",
-          "match": "\\b(this|super)\\b"
-        },
-        {
-          "name": "support.function.global.solidity",
-          "match": "\\b(abi\\.(encode|encodePacked|encodeWithSelector|encodeWithSignature|encodeCall|decode))\\b"
-        },
-        {
-          "name": "support.function.global.solidity",
-          "match": "\\b(keccak256|sha256|ripemd160|ecrecover|addmod|mulmod|selfdestruct|blockhash|gasleft)\\b"
-        },
-        {
-          "name": "support.function.require.solidity",
-          "match": "\\b(require|assert)\\b"
-        },
-        {
-          "name": "support.type.solidity",
-          "match": "\\b(type)\\s*\\("
-        }
-      ]
-    },
-    "function-call": {
-      "patterns": [
-        {
-          "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\()",
-          "captures": {
-            "1": { "name": "entity.name.function.call.solidity" }
-          }
-        }
-      ]
-    },
-    "punctuation": {
-      "patterns": [
-        {
-          "name": "punctuation.terminator.solidity",
-          "match": ";"
-        },
-        {
-          "name": "punctuation.separator.solidity",
-          "match": ","
-        }
-      ]
-    }
-  }
+    "scopeName": "source.solidity",
+    "uuid": "ad87d2cd-8575-4afe-984e-9421a3788933"
 }

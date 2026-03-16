@@ -11,6 +11,8 @@ pub mod diagnostics;
 pub mod document;
 pub mod format;
 pub mod hover;
+pub mod resolve;
 pub mod server;
+pub mod symbols;
 
 pub use server::{run_server, SolgridServer};

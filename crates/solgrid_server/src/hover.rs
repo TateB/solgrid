@@ -1,7 +1,7 @@
-//! Hover — rule documentation and code intelligence on hover.
+//! Hover — symbol signatures, NatSpec documentation, and rule documentation.
 
-use crate::convert;
-use crate::definition;
+use crate::symbols::{SymbolDef, SymbolKind};
+use crate::{convert, symbols};
 use solgrid_diagnostics::{FixAvailability, RuleMeta};
 use solgrid_linter::LintEngine;
 use tower_lsp_server::ls_types;
@@ -25,7 +25,7 @@ pub fn hover_at_position(
     hover_for_symbol(source, position)
 }
 
-fn hover_for_diagnostic(
+pub fn hover_for_diagnostic(
     engine: &LintEngine,
     lsp_diagnostics: &[ls_types::Diagnostic],
     position: &ls_types::Position,
@@ -56,55 +56,96 @@ fn hover_for_diagnostic(
     None
 }
 
-fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<ls_types::Hover> {
+/// Generate hover information for a symbol at a position.
+///
+/// Shows the definition signature (e.g., function header, variable type) as a
+/// Solidity code block, followed by any NatSpec documentation.
+pub fn hover_for_symbol(
+    source: &str,
+    position: &ls_types::Position,
+) -> Option<ls_types::Hover> {
     let offset = convert::position_to_offset(source, *position);
-    let resolved = definition::find_definition(source, offset)?;
+    let table = symbols::build_symbol_table(source, "buffer.sol")?;
 
-    let signature = extract_signature(source, &resolved);
-    let natspec = extract_natspec(source, resolved.item_range.start);
+    // Try member access first: `Container.member`
+    let (def, ident_range) =
+        if let Some((container, _member, member_range)) =
+            symbols::find_member_access_at_offset(source, offset)
+        {
+            let container_def = table.resolve(&container, offset)?;
+            let member_def = table.resolve_member(container_def, &source[member_range.clone()])?;
+            (member_def, member_range)
+        } else {
+            let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
+            let def = table.resolve(&name, offset)?;
+            (def, ident_range)
+        };
+
+    let signature = extract_signature(source, def);
+    let natspec = extract_natspec(source, def.def_span.start);
 
     let mut content = String::new();
-    if let Some(sig) = &signature {
-        content.push_str("```solidity\n");
-        content.push_str(sig);
-        content.push_str("\n```\n");
-    }
+    content.push_str("```solidity\n");
+    content.push_str(&signature);
+    content.push_str("\n```");
+
     if let Some(doc) = &natspec {
-        if !content.is_empty() {
-            content.push_str("\n---\n\n");
-        }
+        content.push_str("\n\n---\n\n");
         content.push_str(&format_natspec(doc));
     }
 
-    if content.is_empty() {
-        return None;
-    }
-
-    let start = convert::offset_to_position(source, resolved.name_range.start);
-    let end = convert::offset_to_position(source, resolved.name_range.end);
+    let range = convert::span_to_range(source, &ident_range);
 
     Some(ls_types::Hover {
         contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
             kind: ls_types::MarkupKind::Markdown,
             value: content,
         }),
-        range: Some(ls_types::Range { start, end }),
+        range: Some(range),
     })
 }
 
-/// Extract the signature of an item (text up to `{` or `;`).
-fn extract_signature(source: &str, resolved: &definition::ResolvedSymbol) -> Option<String> {
-    let item_text = source.get(resolved.item_range.clone())?;
-    // Find the first `{` or `;` to get just the signature
-    let end = item_text
-        .find('{')
-        .or_else(|| item_text.find(';'))
-        .unwrap_or(item_text.len());
-    let sig = item_text[..end].trim();
-    if sig.is_empty() {
-        return None;
+/// Extract a human-readable signature from a symbol's definition span.
+fn extract_signature(source: &str, def: &SymbolDef) -> String {
+    let text = &source[def.def_span.clone()];
+
+    match def.kind {
+        // Truncate at `{` to get the header only.
+        SymbolKind::Contract
+        | SymbolKind::Interface
+        | SymbolKind::Library
+        | SymbolKind::Function
+        | SymbolKind::Modifier => truncate_at_char(text, '{'),
+
+        // Truncate at `;`.
+        SymbolKind::Event | SymbolKind::Error | SymbolKind::Udvt => truncate_at_char(text, ';'),
+
+        // Show full definition (usually short).
+        SymbolKind::Struct | SymbolKind::Enum | SymbolKind::EnumVariant => {
+            normalize_whitespace(text)
+        }
+
+        // Truncate at assignment `=` or `;` to show type without initializer.
+        // Uses `find_assignment_eq` to avoid matching `=>` in mapping types.
+        SymbolKind::StateVariable | SymbolKind::LocalVariable => {
+            let trimmed = if let Some(eq) = find_assignment_eq(text) {
+                if let Some(semi) = text.find(';') {
+                    &text[..eq.min(semi)]
+                } else {
+                    &text[..eq]
+                }
+            } else {
+                truncate_at_char_raw(text, ';')
+            };
+            normalize_whitespace(trimmed)
+        }
+
+        // Struct fields: show type + name (truncate at `;`).
+        SymbolKind::StructField => truncate_at_char(text, ';'),
+
+        // Parameters: show type + name as-is.
+        SymbolKind::Parameter => normalize_whitespace(text),
     }
-    Some(sig.to_string())
 }
 
 /// Extract NatSpec comment preceding an item.
@@ -191,6 +232,67 @@ fn format_natspec(natspec: &str) -> String {
         }
     }
     lines.join("\n\n")
+}
+
+/// Find the position of an assignment `=` that is not part of `=>`, `==`, `!=`, `<=`, `>=`.
+fn find_assignment_eq(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        if bytes[i] == b'=' {
+            // Skip `=>` (mapping arrow)
+            if i + 1 < len && bytes[i + 1] == b'>' {
+                i += 2;
+                continue;
+            }
+            // Skip `==`
+            if i + 1 < len && bytes[i + 1] == b'=' {
+                i += 2;
+                continue;
+            }
+            // Skip `!=`, `<=`, `>=` (we're on the `=` following `!`, `<`, `>`)
+            if i > 0 && matches!(bytes[i - 1], b'!' | b'<' | b'>') {
+                i += 1;
+                continue;
+            }
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Truncate text at the first occurrence of `ch`, trim, and normalize whitespace.
+fn truncate_at_char(text: &str, ch: char) -> String {
+    let truncated = truncate_at_char_raw(text, ch);
+    normalize_whitespace(truncated)
+}
+
+fn truncate_at_char_raw(text: &str, ch: char) -> &str {
+    if let Some(pos) = text.find(ch) {
+        text[..pos].trim_end()
+    } else {
+        text.trim_end()
+    }
+}
+
+/// Collapse consecutive whitespace (including newlines) into single spaces.
+fn normalize_whitespace(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut prev_was_ws = false;
+    for ch in text.trim().chars() {
+        if ch.is_whitespace() {
+            if !prev_was_ws {
+                result.push(' ');
+                prev_was_ws = true;
+            }
+        } else {
+            result.push(ch);
+            prev_was_ws = false;
+        }
+    }
+    result
 }
 
 /// Format rule documentation as Markdown.
@@ -306,5 +408,646 @@ mod tests {
         let lsp_diags = vec![];
         let hover = hover_for_diagnostic(&engine, &lsp_diags, &ls_types::Position::new(0, 0));
         assert!(hover.is_none());
+    }
+
+    fn hover_value(source: &str, position: ls_types::Position) -> Option<String> {
+        let hover = hover_for_symbol(source, &position)?;
+        match hover.contents {
+            ls_types::HoverContents::Markup(m) => Some(m.value),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_hover_function() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function transfer(address to, uint256 amount) external returns (bool) {
+        return true;
+    }
+
+    function use_it() public {
+        transfer(msg.sender, 100);
+    }
+}
+"#;
+        // Hover on "transfer" in the function definition (line 4, col 13)
+        let val = hover_value(source, ls_types::Position::new(4, 13)).unwrap();
+        assert!(val.contains("function transfer(address to, uint256 amount) external returns (bool)"));
+        assert!(!val.contains("{"));
+    }
+
+    #[test]
+    fn test_hover_state_variable() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 public totalSupply = 1000;
+    function get() public view returns (uint256) {
+        return totalSupply;
+    }
+}
+"#;
+        // Hover on "totalSupply" at usage site (line 6, on 'totalSupply')
+        let offset = source.find("return totalSupply").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256 public totalSupply"));
+        assert!(!val.contains("1000"));
+    }
+
+    #[test]
+    fn test_hover_parameter() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function add(uint256 a, uint256 b) public pure returns (uint256) {
+        return a + b;
+    }
+}
+"#;
+        let offset = source.find("return a").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256 a"));
+    }
+
+    #[test]
+    fn test_hover_contract() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract MyToken {
+    uint256 x;
+}
+"#;
+        let offset = source.find("MyToken").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("contract MyToken"));
+        assert!(!val.contains("{"));
+    }
+
+    #[test]
+    fn test_hover_event() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+"#;
+        let offset = source.find("Transfer").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("event Transfer(address indexed from, address indexed to, uint256 value)"));
+    }
+
+    #[test]
+    fn test_hover_error() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    error InsufficientBalance(uint256 balance, uint256 amount);
+}
+"#;
+        let offset = source.find("InsufficientBalance").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("error InsufficientBalance(uint256 balance, uint256 amount)"));
+    }
+
+    #[test]
+    fn test_hover_struct() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    struct Position { address token; uint256 amount; }
+}
+"#;
+        let offset = source.find("Position").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("struct Position"));
+        assert!(val.contains("address token"));
+    }
+
+    #[test]
+    fn test_hover_udvt() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+type Price is uint256;
+"#;
+        let offset = source.find("Price").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("type Price is uint256"));
+    }
+
+    #[test]
+    fn test_hover_nonident_returns_none() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+        // Position on a space
+        assert!(hover_for_symbol(source, &ls_types::Position::new(0, 0)).is_none());
+    }
+
+    // -- Mapping and complex type tests --
+
+    #[test]
+    fn test_hover_mapping_simple() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    mapping(address => uint256) public balances;
+}
+"#;
+        let offset = source.find("balances").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("mapping(address => uint256) public balances"));
+    }
+
+    #[test]
+    fn test_hover_nested_mapping() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
+}
+"#;
+        let offset = source.find("_operatorApprovals").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(
+            val.contains("mapping(address => mapping(address => bool)) private _operatorApprovals"),
+            "got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_triple_nested_mapping() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    mapping(address => mapping(address => mapping(uint256 => bool))) public nested;
+}
+"#;
+        let offset = source.find("nested").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(
+            val.contains("mapping(address => mapping(address => mapping(uint256 => bool))) public nested"),
+            "got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_mapping_with_initializer() {
+        // Mappings can't have initializers, but test that = inside mapping type doesn't break
+        // things and that a real assignment = is handled correctly.
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 public value = 42;
+}
+"#;
+        let offset = source.find("value").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256 public value"));
+        assert!(!val.contains("42"));
+    }
+
+    // -- Array types --
+
+    #[test]
+    fn test_hover_dynamic_array() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256[] public values;
+}
+"#;
+        let offset = source.find("values").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256[] public values"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_fixed_array() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256[10] public fixedValues;
+}
+"#;
+        let offset = source.find("fixedValues").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256[10] public fixedValues"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_nested_array() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    address[][] public nestedAddrs;
+}
+"#;
+        let offset = source.find("nestedAddrs").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("address[][] public nestedAddrs"), "got: {val}");
+    }
+
+    // -- Complex variable types --
+
+    #[test]
+    fn test_hover_bytes_types() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    bytes public data;
+    bytes32 public hash;
+    string public name;
+}
+"#;
+        let offset = source.find(" data").unwrap() + 1;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("bytes public data"), "got: {val}");
+
+        let offset = source.find(" hash").unwrap() + 1;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("bytes32 public hash"), "got: {val}");
+
+        let offset = source.find(" name").unwrap() + 1;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("string public name"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_address_payable() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    address payable public recipient;
+}
+"#;
+        let offset = source.find("recipient").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("address payable public recipient"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_constant_immutable() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 public constant MAX_SUPPLY = 1000000;
+    address public immutable owner;
+}
+"#;
+        let offset = source.find("MAX_SUPPLY").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("uint256 public constant MAX_SUPPLY"), "got: {val}");
+        assert!(!val.contains("1000000"));
+
+        let offset = source.find("owner").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("address public immutable owner"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_custom_type_variable() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    struct Info { uint256 id; address addr; }
+    Info public myInfo;
+}
+"#;
+        let offset = source.find("myInfo").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("Info public myInfo"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_mapping_to_struct_array() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    struct Order { uint256 amount; }
+    mapping(address => Order[]) public orders;
+}
+"#;
+        let offset = source.find("orders").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("mapping(address => Order[]) public orders"), "got: {val}");
+    }
+
+    // -- Function signature variations --
+
+    #[test]
+    fn test_hover_function_visibility_modifiers() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function pubFn() public pure returns (uint256) { return 1; }
+    function intFn() internal view returns (bool) { return true; }
+    function extFn() external payable {}
+    function privFn() private {}
+}
+"#;
+        let offset = source.find("pubFn").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function pubFn() public pure returns (uint256)"), "got: {val}");
+
+        let offset = source.find("intFn").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function intFn() internal view returns (bool)"), "got: {val}");
+
+        let offset = source.find("extFn").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function extFn() external payable"), "got: {val}");
+
+        let offset = source.find("privFn").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function privFn() private"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_function_complex_params() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function complexFn(
+        address[] calldata addrs,
+        mapping(address => uint256) storage balances,
+        bytes32 hash
+    ) internal returns (bool success, uint256 count) {
+        return (true, 0);
+    }
+}
+"#;
+        let offset = source.find("complexFn").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function complexFn("), "got: {val}");
+        assert!(val.contains("address[] calldata addrs"), "got: {val}");
+        assert!(val.contains("returns (bool success, uint256 count)"), "got: {val}");
+        assert!(!val.contains("{"), "got: {val}");
+    }
+
+    // -- Special constructs --
+
+    #[test]
+    fn test_hover_modifier() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    modifier onlyOwner() {
+        _;
+    }
+}
+"#;
+        let offset = source.find("onlyOwner").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("modifier onlyOwner()"), "got: {val}");
+        assert!(!val.contains("{"));
+    }
+
+    #[test]
+    fn test_hover_error_with_params() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    error TransferFailed(address from, address to, uint256 amount);
+}
+"#;
+        let offset = source.find("TransferFailed").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("error TransferFailed(address from, address to, uint256 amount)"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_event_with_indexed() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+"#;
+        let offset = source.find("Approval").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("event Approval(address indexed owner, address indexed spender, uint256 value)"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_enum_variants() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    enum Color { Red, Green, Blue }
+}
+"#;
+        let offset = source.find("Color").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("enum Color { Red, Green, Blue }"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_contract_inheritance() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Base {}
+contract Child is Base {
+    uint256 x;
+}
+"#;
+        let offset = source.find("Child").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("contract Child is Base"), "got: {val}");
+        assert!(!val.contains("{"), "got: {val}");
+    }
+
+    // -- Member access hover --
+
+    #[test]
+    fn test_hover_member_access_contract_function() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+library MathLib {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+}
+
+contract Test {
+    function foo() public pure returns (uint256) {
+        return MathLib.add(1, 2);
+    }
+}
+"#;
+        // Hover on "add" in "MathLib.add"
+        let offset = source.find("MathLib.add(1").unwrap() + 8; // on 'a' of 'add'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("function add(uint256 a, uint256 b) internal pure returns (uint256)"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_member_access_enum_variant() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    enum Status { Active, Paused }
+    function getActive() public pure returns (Status) {
+        return Status.Active;
+    }
+}
+"#;
+        // Hover on "Active" in "Status.Active"
+        let offset = source.find("Status.Active").unwrap() + 7; // on 'A' of 'Active'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("Active"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_member_access_struct_field() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    struct Position {
+        address token;
+        uint256 amount;
+    }
+    function getToken(Position memory pos) public pure returns (address) {
+        return Position.token;
+    }
+}
+"#;
+        // Hover on "token" in "Position.token"
+        let offset = source.find("Position.token").unwrap() + 9; // on 't' of 'token'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("address token"), "got: {val}");
+    }
+
+    // -- Local variable types --
+
+    #[test]
+    fn test_hover_local_variable_types() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public pure {
+        uint256 x = 42;
+        bool flag = true;
+        address addr = address(0);
+        bytes memory data = "";
+        string memory label = "hello";
+    }
+}
+"#;
+        // Check each local var — use "name =" or "name;" patterns for precise matching
+        let offset = source.find("x = 42").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("uint256 x"), "got: {val}");
+        assert!(!val.contains("42"));
+
+        let offset = source.find("flag =").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("bool flag"), "got: {val}");
+
+        let offset = source.find("addr =").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("address addr"), "got: {val}");
+
+        let offset = source.find("data =").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("bytes memory data"), "got: {val}");
+
+        let offset = source.find("label =").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("string memory label"), "got: {val}");
+    }
+
+    // -- find_assignment_eq tests --
+
+    #[test]
+    fn test_find_assignment_eq() {
+        assert_eq!(find_assignment_eq("uint256 x = 42"), Some(10));
+        assert_eq!(find_assignment_eq("mapping(a => b) x"), None);
+        assert_eq!(find_assignment_eq("mapping(a => b) x = something"), Some(18));
+        assert_eq!(find_assignment_eq("x == y"), None);
+        assert_eq!(find_assignment_eq("x != y"), None);
+        assert_eq!(find_assignment_eq("x <= y"), None);
+        assert_eq!(find_assignment_eq("x >= y"), None);
+        assert_eq!(
+            find_assignment_eq("mapping(address => mapping(address => bool)) x = val"),
+            Some(47)
+        );
+    }
+
+    #[test]
+    fn test_hover_with_natspec() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    /// @notice Transfers tokens to the given address.
+    /// @param to The recipient address
+    /// @param amount The amount to transfer
+    function transfer(address to, uint256 amount) external returns (bool) {
+        return true;
+    }
+}
+"#;
+        let offset = source.find("transfer").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("function transfer"));
+        assert!(val.contains("Transfers tokens"));
+        assert!(val.contains("**@param**"));
     }
 }
