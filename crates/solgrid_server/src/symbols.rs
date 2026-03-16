@@ -138,6 +138,27 @@ impl SymbolTable {
         None
     }
 
+    /// Find the innermost function or modifier whose def_span contains `offset`.
+    pub fn find_enclosing_function(&self, offset: usize) -> Option<&SymbolDef> {
+        let mut best: Option<&SymbolDef> = None;
+        for scope in &self.scopes {
+            for sym in &scope.symbols {
+                if matches!(sym.kind, SymbolKind::Function | SymbolKind::Modifier)
+                    && sym.def_span.contains(&offset)
+                {
+                    match best {
+                        None => best = Some(sym),
+                        Some(prev) if sym.def_span.len() < prev.def_span.len() => {
+                            best = Some(sym);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        best
+    }
+
     /// Return all direct symbol definitions in the given scope.
     pub fn scope_symbols(&self, scope_id: ScopeId) -> &[SymbolDef] {
         &self.scopes[scope_id].symbols

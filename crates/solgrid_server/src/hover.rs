@@ -78,16 +78,28 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
     };
 
     let signature = extract_signature(source, def, &table);
-    let natspec = extract_natspec(source, def.def_span.start);
+
+    // For parameters/returns, extract the relevant @param/@return from the parent function.
+    let doc_md = if matches!(def.kind, SymbolKind::Parameter | SymbolKind::ReturnParameter) {
+        table
+            .find_enclosing_function(def.def_span.start)
+            .and_then(|func_def| extract_natspec(source, func_def.def_span.start))
+            .and_then(|raw| {
+                let is_return = def.kind == SymbolKind::ReturnParameter;
+                extract_param_doc(&raw, &def.name, is_return)
+            })
+    } else {
+        extract_natspec(source, def.def_span.start).map(|doc| format_natspec(&doc))
+    };
 
     let mut content = String::new();
     content.push_str("```solidity\n");
     content.push_str(&signature);
     content.push_str("\n```");
 
-    if let Some(doc) = &natspec {
+    if let Some(doc) = &doc_md {
         content.push_str("\n\n---\n\n");
-        content.push_str(&format_natspec(doc));
+        content.push_str(doc);
     }
 
     let range = convert::span_to_range(source, &ident_range);
@@ -150,11 +162,10 @@ fn extract_signature(
     }
 }
 
-/// Format a parameter or return value for hover display as `(prefix) name: type`.
+/// Format a parameter or return value for hover display as `(prefix) type name`.
 fn format_param_hover(source: &str, def: &SymbolDef, prefix: &str) -> String {
-    let type_text = source[def.def_span.start..def.name_span.start].trim();
-    let type_text = normalize_whitespace(type_text);
-    format!("{} {}: {}", prefix, def.name, type_text)
+    let text = &source[def.def_span.clone()];
+    format!("{} {}", prefix, normalize_whitespace(text))
 }
 
 /// Format a contract/interface/library hover showing its header and members.
@@ -257,25 +268,32 @@ fn extract_natspec(source: &str, item_start: usize) -> Option<String> {
     Some(natspec_lines.join("\n"))
 }
 
+/// Strip NatSpec comment markers from a single line, returning the inner content.
+fn strip_natspec_marker(line: &str) -> &str {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix("///") {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix("/**") {
+        rest.trim()
+    } else if trimmed.starts_with("*/") {
+        ""
+    } else if let Some(rest) = trimmed.strip_prefix("* ") {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix('*') {
+        rest.trim()
+    } else {
+        trimmed
+    }
+}
+
 /// Format NatSpec into readable markdown.
 fn format_natspec(natspec: &str) -> String {
     let mut lines = Vec::new();
     for line in natspec.lines() {
-        let trimmed = line.trim();
-        // Strip comment markers
-        let content = if let Some(rest) = trimmed.strip_prefix("///") {
-            rest.trim()
-        } else if let Some(rest) = trimmed.strip_prefix("/**") {
-            rest.trim()
-        } else if trimmed.starts_with("*/") {
+        let content = strip_natspec_marker(line);
+        if content.is_empty() {
             continue;
-        } else if let Some(rest) = trimmed.strip_prefix("* ") {
-            rest.trim()
-        } else if let Some(rest) = trimmed.strip_prefix('*') {
-            rest.trim()
-        } else {
-            trimmed
-        };
+        }
 
         if content.starts_with('@') {
             // Format NatSpec tags as bold
@@ -294,11 +312,34 @@ fn format_natspec(natspec: &str) -> String {
             } else {
                 lines.push(content.to_string());
             }
-        } else if !content.is_empty() {
+        } else {
             lines.push(content.to_string());
         }
     }
     lines.join("\n\n")
+}
+
+/// Extract the description for a specific `@param` or `@return` tag from raw NatSpec.
+fn extract_param_doc(natspec: &str, param_name: &str, is_return: bool) -> Option<String> {
+    let tag = if is_return { "@return" } else { "@param" };
+
+    for line in natspec.lines() {
+        let content = strip_natspec_marker(line)
+            .trim_end_matches("*/")
+            .trim_end();
+        if let Some(rest) = content.strip_prefix(tag) {
+            let rest = rest.trim_start();
+            if let Some(after_name) = rest.strip_prefix(param_name) {
+                if after_name.is_empty() || after_name.starts_with(char::is_whitespace) {
+                    let desc = after_name.trim();
+                    if !desc.is_empty() {
+                        return Some(desc.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Find the position of an assignment `=` that is not part of `=>`, `==`, `!=`, `<=`, `>=`.
@@ -542,7 +583,7 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7;
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("(parameter) a: uint256"), "got: {val}");
+        assert!(val.contains("(parameter) uint256 a"), "got: {val}");
     }
 
     #[test]
@@ -1120,6 +1161,42 @@ contract Test {
         assert!(val.contains("string memory label"), "got: {val}");
     }
 
+    // -- extract_param_doc tests --
+
+    #[test]
+    fn test_extract_param_doc() {
+        let natspec = "/// @notice Does stuff\n/// @param to The recipient\n/// @param amount The amount\n/// @return success Whether it worked";
+        assert_eq!(
+            extract_param_doc(natspec, "to", false),
+            Some("The recipient".to_string())
+        );
+        assert_eq!(
+            extract_param_doc(natspec, "amount", false),
+            Some("The amount".to_string())
+        );
+        assert_eq!(
+            extract_param_doc(natspec, "success", true),
+            Some("Whether it worked".to_string())
+        );
+        // Non-existent param
+        assert_eq!(extract_param_doc(natspec, "foo", false), None);
+        // Param name prefix shouldn't match longer name
+        assert_eq!(extract_param_doc(natspec, "to", true), None);
+    }
+
+    #[test]
+    fn test_extract_param_doc_block_comment() {
+        let natspec = "/** @param token The token address\n * @param amount The amount */";
+        assert_eq!(
+            extract_param_doc(natspec, "token", false),
+            Some("The token address".to_string())
+        );
+        assert_eq!(
+            extract_param_doc(natspec, "amount", false),
+            Some("The amount".to_string())
+        );
+    }
+
     // -- find_assignment_eq tests --
 
     #[test]
@@ -1176,7 +1253,66 @@ contract Test {
         let offset = source.find("result = a").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("(return) result: uint256"), "got: {val}");
+        assert!(val.contains("(return) uint256 result"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_parameter_with_natspec() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    /// @notice Transfers tokens to the given address.
+    /// @param to The recipient address
+    /// @param amount The amount to transfer
+    /// @return success Whether the transfer succeeded
+    function transfer(address to, uint256 amount) external returns (bool success) {
+        to;
+        success = amount > 0;
+    }
+}
+"#;
+        // Hover on param "to" at usage site
+        let offset = source.find("        to;").unwrap() + 8;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(parameter) address to"), "got: {val}");
+        assert!(val.contains("The recipient address"), "got: {val}");
+
+        // Hover on param "amount" at usage site
+        let offset = source.find("amount > 0").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(parameter) uint256 amount"), "got: {val}");
+        assert!(val.contains("The amount to transfer"), "got: {val}");
+
+        // Hover on return param "success"
+        let offset = source.find("success = amount").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(return) bool success"), "got: {val}");
+        assert!(
+            val.contains("Whether the transfer succeeded"),
+            "got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_parameter_no_natspec() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function add(uint256 a, uint256 b) public pure returns (uint256) {
+        return a + b;
+    }
+}
+"#;
+        let offset = source.find("return a").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(parameter) uint256 a"), "got: {val}");
+        assert!(!val.contains("---"), "should have no doc separator, got: {val}");
     }
 
     #[test]
@@ -1193,7 +1329,7 @@ contract Test {
         let offset = source.find("data.length").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("(parameter) data: bytes memory"), "got: {val}");
+        assert!(val.contains("(parameter) bytes memory data"), "got: {val}");
     }
 
     #[test]
