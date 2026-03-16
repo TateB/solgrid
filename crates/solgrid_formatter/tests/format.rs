@@ -649,3 +649,57 @@ fn test_single_spacing_with_comments() {
         "single mode should add blank line even with comments, got:\n{formatted}"
     );
 }
+
+// --- Top-level blank line spacing ---
+
+#[test]
+fn test_blank_line_between_pragma_and_import() {
+    let source = "pragma solidity ^0.8.0;\nimport \"./Foo.sol\";\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("^0.8.0;\n\nimport"),
+        "expected 1 blank line between pragma and import, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("^0.8.0;\n\n\nimport"),
+        "should NOT have 2 blank lines between pragma and import, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_blank_line_between_import_and_contract() {
+    let source = "import \"./Foo.sol\";\ncontract A {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("\"./Foo.sol\";\n\ncontract A"),
+        "expected 1 blank line between import and contract, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\"./Foo.sol\";\n\n\ncontract A"),
+        "should NOT have 2 blank lines between import and contract, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_two_blank_lines_between_contracts() {
+    let source = "contract A {}\ncontract B {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("}\n\n\ncontract B"),
+        "expected 2 blank lines between contracts, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("}\n\n\n\ncontract B"),
+        "should NOT have 3 blank lines between contracts, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_no_blank_line_between_imports() {
+    let source = "import \"./Foo.sol\";\nimport \"./Bar.sol\";\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("\"./Foo.sol\";\nimport"),
+        "expected no blank line between imports, got:\n{formatted}"
+    );
+}

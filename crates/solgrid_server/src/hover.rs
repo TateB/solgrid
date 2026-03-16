@@ -139,8 +139,8 @@ fn extract_signature(source: &str, def: &SymbolDef) -> String {
         // Struct fields: show type + name (truncate at `;`).
         SymbolKind::StructField => truncate_at_char(text, ';'),
 
-        // Parameters: show type + name as-is.
-        SymbolKind::Parameter => normalize_whitespace(text),
+        // Parameters: show type + name with (parameter) prefix.
+        SymbolKind::Parameter => format!("(parameter) {}", normalize_whitespace(text)),
     }
 }
 
@@ -471,7 +471,7 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7;
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("uint256 a"));
+        assert!(val.contains("(parameter) uint256 a"));
     }
 
     #[test]

@@ -81,15 +81,15 @@ pub fn format_source_unit(
         // appears before the doc comment block, not between comment and item)
         if !chunks.is_empty() {
             chunks.push(hardline());
-            // Add extra blank line between different top-level items
-            if should_add_blank_line(
+            let extra = blank_lines_between(
                 if idx > 0 {
                     Some(&ast.items[idx - 1])
                 } else {
                     None
                 },
                 item,
-            ) {
+            );
+            for _ in 0..extra {
                 chunks.push(hardline());
             }
         }
@@ -177,23 +177,34 @@ fn flush_sorted_imports(
     }
 }
 
-/// Determine if a blank line should be inserted between two items.
-fn should_add_blank_line(
+/// Determine how many extra blank lines to insert between two top-level items.
+///
+/// Per the Solidity style guide, each top-level declaration is surrounded by one
+/// blank line on each side. Between two declarations, these stack to produce two
+/// blank lines.
+fn blank_lines_between(
     prev: Option<&solar_ast::Item<'_>>,
-    _current: &solar_ast::Item<'_>,
-) -> bool {
+    current: &solar_ast::Item<'_>,
+) -> usize {
     let Some(prev) = prev else {
-        return false;
+        return 0;
     };
 
-    // Add blank line between different top-level construct types
     let prev_cat = top_level_category(prev);
-    let curr_cat = top_level_category(_current);
+    let curr_cat = top_level_category(current);
 
     match (prev_cat, curr_cat) {
-        (Some(a), Some(b)) => a != b,
-        _ => false,
+        // Between two declarations: 2 blank lines (1 below prev + 1 above current)
+        (Some(a), Some(b)) if is_declaration(&a) && is_declaration(&b) => 2,
+        // Directive -> declaration or different directive types: 1 blank line
+        (Some(a), Some(b)) if a != b => 1,
+        // Same directive type (e.g. import -> import): no blank line
+        _ => 0,
     }
+}
+
+fn is_declaration(cat: &TopLevelCategory) -> bool {
+    matches!(cat, TopLevelCategory::Contract | TopLevelCategory::Other)
 }
 
 #[derive(PartialEq, Eq)]
