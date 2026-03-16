@@ -744,10 +744,7 @@ fn test_no_blank_line_between_imports() {
 
 // --- 1. Blank Lines: Two blank lines between top-level declarations ---
 
-#[test]
-fn test_style_guide_blank_lines_between_contracts_yes() {
-    // Style guide "Yes" example: two blank lines between contracts
-    let source = r#"// SPDX-License-Identifier: GPL-3.0
+const STYLE_GUIDE_01_BLANK_LINES_YES: &str = r#"// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.4.0 <0.9.0;
 
 contract A {
@@ -764,21 +761,15 @@ contract C {
     uint256 z;
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    // Verify two blank lines (3 newlines) between contracts
-    assert!(
-        formatted.contains("}\n\n\ncontract B"),
-        "expected 2 blank lines between A and B, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("}\n\n\ncontract C"),
-        "expected 2 blank lines between B and C, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_blank_lines_between_contracts_yes() {
+    let formatted = format_source(STYLE_GUIDE_01_BLANK_LINES_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_01_BLANK_LINES_YES);
 }
 
 #[test]
 fn test_style_guide_blank_lines_between_contracts_no() {
-    // Style guide "No" example: only 0-1 blank lines between contracts
     let source = r#"// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.4.0 <0.9.0;
 
@@ -794,23 +785,12 @@ contract C {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should insert two blank lines between each contract
-    assert!(
-        formatted.contains("}\n\n\ncontract B"),
-        "formatter should add 2 blank lines between A and B, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("}\n\n\ncontract C"),
-        "formatter should add 2 blank lines between B and C, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_01_BLANK_LINES_YES);
 }
 
 // --- 2. Blank Lines: Functions within contract ---
 
-#[test]
-fn test_style_guide_function_spacing_yes() {
-    // Style guide "Yes": single blank line between functions with bodies
-    let source = r#"contract B {
+const STYLE_GUIDE_02_FUNCTION_SPACING_YES: &str = r#"contract B {
     function spam() public pure returns (uint256) {
         return 1;
     }
@@ -820,21 +800,19 @@ fn test_style_guide_function_spacing_yes() {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_function_spacing_yes() {
     let config = FormatConfig {
-        contract_body_spacing: solgrid_config::ContractBodySpacing::Preserve,
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    // Blank line between functions should be preserved
-    assert!(
-        formatted.contains("}\n\n    function ham"),
-        "expected blank line between spam and ham, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_02_FUNCTION_SPACING_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_02_FUNCTION_SPACING_YES);
 }
 
 #[test]
 fn test_style_guide_function_spacing_no() {
-    // Style guide "No": missing blank lines between functions with bodies
     let source = r#"contract B {
     function spam() public pure returns (uint256) {
         return 1;
@@ -849,19 +827,12 @@ fn test_style_guide_function_spacing_no() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    // Single mode should add blank line between functions
-    assert!(
-        formatted.contains("}\n\n    function ham"),
-        "single mode should add blank line between functions, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_02_FUNCTION_SPACING_YES);
 }
 
 // --- 3. Maximum Line Length: Function Calls ---
 
-#[test]
-fn test_style_guide_long_function_call_yes() {
-    // Style guide "Yes": each argument on its own line, indented
-    let source = r#"contract T {
+const STYLE_GUIDE_03_LONG_FUNCTION_CALL_YES: &str = r#"contract T {
     function f() public {
         thisFunctionCallIsReallyLong(
             longArgument1,
@@ -871,29 +842,19 @@ fn test_style_guide_long_function_call_yes() {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_long_function_call_yes() {
     let config = FormatConfig {
         line_length: 50,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    // Each argument should be on its own line
-    assert!(
-        formatted.contains("longArgument1,"),
-        "should contain longArgument1, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("longArgument2,"),
-        "should contain longArgument2, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("longArgument3"),
-        "should contain longArgument3, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_03_LONG_FUNCTION_CALL_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_03_LONG_FUNCTION_CALL_YES);
 }
 
 #[test]
 fn test_style_guide_long_function_call_no_aligned_to_paren() {
-    // Style guide "No": arguments aligned to opening paren
     let source = r#"contract T {
     function f() public {
         thisFunctionCallIsReallyLong(longArgument1,
@@ -908,19 +869,12 @@ fn test_style_guide_long_function_call_no_aligned_to_paren() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    // Formatter should NOT align to opening paren — should use standard indent
-    assert!(
-        !formatted.contains("                                      longArgument2"),
-        "should not align to opening paren, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_03_LONG_FUNCTION_CALL_YES);
 }
 
 // --- 4. Maximum Line Length: Assignment Statements ---
 
-#[test]
-fn test_style_guide_assignment_wrapping_yes() {
-    // Style guide "Yes": function call in assignment wraps args properly
-    let source = r#"contract T {
+const STYLE_GUIDE_04_ASSIGNMENT_WRAPPING_YES: &str = r#"contract T {
     mapping(uint256 => mapping(uint256 => mapping(bool => uint256[]))) public data;
     function f() public {
         data[being][set][toSomeValue] = someFunction(
@@ -932,23 +886,20 @@ fn test_style_guide_assignment_wrapping_yes() {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_assignment_wrapping_yes() {
     let config = FormatConfig {
         line_length: 60,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    assert!(
-        formatted.contains("someFunction("),
-        "should contain someFunction call, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_04_ASSIGNMENT_WRAPPING_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_04_ASSIGNMENT_WRAPPING_YES);
 }
 
 // --- 5. Maximum Line Length: Event Definitions ---
 
-#[test]
-fn test_style_guide_long_event_definition_yes() {
-    // Style guide "Yes": event params each on own line
-    let source = r#"contract T {
+const STYLE_GUIDE_05_LONG_EVENT_YES: &str = r#"contract T {
     event LongAndLotsOfArgs(
         address sender,
         address recipient,
@@ -958,29 +909,19 @@ fn test_style_guide_long_event_definition_yes() {
     );
 }
 "#;
+
+#[test]
+fn test_style_guide_long_event_definition_yes() {
     let config = FormatConfig {
         line_length: 50,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    assert!(
-        formatted.contains("event LongAndLotsOfArgs("),
-        "should contain event declaration, got:\n{formatted}"
-    );
-    // When wrapping, each param should be on its own line
-    assert!(
-        formatted.contains("address sender"),
-        "should contain sender param, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("uint256 amount"),
-        "should contain amount param, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_05_LONG_EVENT_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_05_LONG_EVENT_YES);
 }
 
 #[test]
 fn test_style_guide_long_event_definition_no() {
-    // Style guide "No": event params aligned to opening paren
     let source = r#"contract T {
     event LongAndLotsOfArgs(address sender,
                             address recipient,
@@ -994,62 +935,46 @@ fn test_style_guide_long_event_definition_no() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    // Formatter should NOT use paren-alignment — should use standard indent
-    assert!(
-        !formatted.contains("                            address recipient"),
-        "should not align params to opening paren, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_05_LONG_EVENT_YES);
 }
 
 // --- 6. Imports: Placement ---
 
-#[test]
-fn test_style_guide_imports_before_contracts_yes() {
-    // Style guide "Yes": imports come before contract declarations
-    let source = r#"// SPDX-License-Identifier: GPL-3.0
+const STYLE_GUIDE_06_IMPORTS_YES: &str = r#"// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.4.0 <0.9.0;
 
 import "./Owned.sol";
 
-contract A {
-}
+contract A {}
 
 
-contract B {
-}
+contract B {}
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    let import_pos = formatted.find("import").unwrap();
-    let contract_pos = formatted.find("contract").unwrap();
-    assert!(
-        import_pos < contract_pos,
-        "import should come before contract"
-    );
+
+#[test]
+fn test_style_guide_imports_before_contracts_yes() {
+    let formatted = format_source(STYLE_GUIDE_06_IMPORTS_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_06_IMPORTS_YES);
 }
 
 // --- 7. Whitespace in Expressions ---
 
-#[test]
-fn test_style_guide_no_whitespace_in_parens_yes() {
-    // Style guide "Yes": no space inside parentheses, brackets, or braces
-    let source = r#"contract T {
+const STYLE_GUIDE_07_NO_WHITESPACE_YES: &str = r#"contract T {
     uint256[] public ham;
     function f() public {
         ham[1];
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("ham[1]"),
-        "should have no spaces inside brackets, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_no_whitespace_in_parens_yes() {
+    let formatted = format_source(STYLE_GUIDE_07_NO_WHITESPACE_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_07_NO_WHITESPACE_YES);
 }
 
 #[test]
 fn test_style_guide_no_whitespace_in_parens_no() {
-    // Style guide "No": extra spaces inside delimiters
-    // The parser handles this transparently — formatter always outputs clean
     let source = r#"contract T {
     uint256[] public ham;
     function f() public {
@@ -1058,35 +983,25 @@ fn test_style_guide_no_whitespace_in_parens_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should remove extra spaces inside brackets
-    assert!(
-        formatted.contains("ham[1]"),
-        "should remove spaces inside brackets, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_07_NO_WHITESPACE_YES);
 }
 
 // --- 8. No Space Before Commas/Semicolons ---
 
-#[test]
-fn test_style_guide_no_space_before_comma() {
-    // Style guide "Yes": no space before comma
-    let source = r#"contract T {
+const STYLE_GUIDE_08_NO_SPACE_COMMA_YES: &str = r#"contract T {
     function spam(uint256 i, uint256 j) public pure {}
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        !formatted.contains(" ,"),
-        "should not have space before comma, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_no_space_before_comma() {
+    let formatted = format_source(STYLE_GUIDE_08_NO_SPACE_COMMA_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_08_NO_SPACE_COMMA_YES);
 }
 
 // --- 9. No Extra Alignment ---
 
-#[test]
-fn test_style_guide_no_alignment_yes() {
-    // Style guide "Yes": single space around assignment
-    let source = r#"contract T {
+const STYLE_GUIDE_09_NO_ALIGNMENT_YES: &str = r#"contract T {
     function f() public {
         uint256 x = 1;
         uint256 y = 2;
@@ -1094,24 +1009,15 @@ fn test_style_guide_no_alignment_yes() {
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("x = 1;"),
-        "should have single space around =, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("y = 2;"),
-        "should have single space around =, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("longVariable = 3;"),
-        "should have single space around =, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_no_alignment_yes() {
+    let formatted = format_source(STYLE_GUIDE_09_NO_ALIGNMENT_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_09_NO_ALIGNMENT_YES);
 }
 
 #[test]
 fn test_style_guide_no_alignment_no() {
-    // Style guide "No": multiple spaces for visual alignment
     let source = r#"contract T {
     function f() public {
         uint256 x            = 1;
@@ -1121,46 +1027,30 @@ fn test_style_guide_no_alignment_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should remove alignment spaces
-    assert!(
-        formatted.contains("x = 1;"),
-        "should remove alignment spaces, got:\n{formatted}"
-    );
-    assert!(
-        !formatted.contains("x            = 1"),
-        "should not have alignment spaces, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_09_NO_ALIGNMENT_YES);
 }
 
 // --- 10. Receive/Fallback: No Space Before Parens ---
 
-#[test]
-fn test_style_guide_receive_fallback_no_space_yes() {
-    // Style guide "Yes": no space between function name and parens
-    let source = r#"contract T {
+const STYLE_GUIDE_10_RECEIVE_FALLBACK_YES: &str = r#"contract T {
     receive() external payable {}
 
     fallback() external {}
 }
 "#;
+
+#[test]
+fn test_style_guide_receive_fallback_no_space_yes() {
     let config = FormatConfig {
         contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    assert!(
-        formatted.contains("receive()"),
-        "should have no space before parens in receive, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("fallback()"),
-        "should have no space before parens in fallback, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_10_RECEIVE_FALLBACK_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_10_RECEIVE_FALLBACK_YES);
 }
 
 #[test]
 fn test_style_guide_receive_fallback_no_space_no() {
-    // Style guide "No": space between function name and parens
     let source = r#"contract T {
     receive () external payable {}
 
@@ -1172,23 +1062,12 @@ fn test_style_guide_receive_fallback_no_space_no() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    // Formatter should remove space between name and parens
-    assert!(
-        formatted.contains("receive()"),
-        "should remove space before parens in receive, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("fallback()"),
-        "should remove space before parens in fallback, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_10_RECEIVE_FALLBACK_YES);
 }
 
 // --- 11. Control Structures: Brace Placement ---
 
-#[test]
-fn test_style_guide_brace_same_line_yes() {
-    // Style guide "Yes": opening brace on same line
-    let source = r#"// SPDX-License-Identifier: GPL-3.0
+const STYLE_GUIDE_11_BRACE_SAME_LINE_YES: &str = r#"// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.4.0 <0.9.0;
 
 contract Coin {
@@ -1198,20 +1077,15 @@ contract Coin {
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("contract Coin {"),
-        "contract brace should be on same line, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("struct Bank {"),
-        "struct brace should be on same line, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_brace_same_line_yes() {
+    let formatted = format_source(STYLE_GUIDE_11_BRACE_SAME_LINE_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_11_BRACE_SAME_LINE_YES);
 }
 
 #[test]
 fn test_style_guide_brace_same_line_no() {
-    // Style guide "No": opening brace on next line
     let source = r#"// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.4.0 <0.9.0;
 
@@ -1224,19 +1098,12 @@ contract Coin
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should put brace on same line
-    assert!(
-        formatted.contains("contract Coin {"),
-        "formatter should put contract brace on same line, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_11_BRACE_SAME_LINE_YES);
 }
 
 // --- 12. If/While/For: Keyword Spacing ---
 
-#[test]
-fn test_style_guide_control_keyword_spacing_yes() {
-    // Style guide "Yes": space between keyword and paren
-    let source = r#"contract T {
+const STYLE_GUIDE_12_CONTROL_KEYWORD_YES: &str = r#"contract T {
     function f(uint256 x) public pure {
         if (x > 0) {
             x = 1;
@@ -1250,27 +1117,16 @@ fn test_style_guide_control_keyword_spacing_yes() {
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("if ("),
-        "should have space after if, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("for ("),
-        "should have space after for, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("while ("),
-        "should have space after while, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_control_keyword_spacing_yes() {
+    let formatted = format_source(STYLE_GUIDE_12_CONTROL_KEYWORD_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_12_CONTROL_KEYWORD_YES);
 }
 
 // --- 13. If/Else: Else Placement ---
 
-#[test]
-fn test_style_guide_else_same_line_yes() {
-    // Style guide "Yes": else on same line as closing brace
-    let source = r#"contract T {
+const STYLE_GUIDE_13_ELSE_SAME_LINE_YES: &str = r#"contract T {
     function f(uint256 x) public pure returns (uint256) {
         if (x < 3) {
             x += 1;
@@ -1283,71 +1139,51 @@ fn test_style_guide_else_same_line_yes() {
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("} else if"),
-        "else if should be on same line as closing brace, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("} else {"),
-        "else should be on same line as closing brace, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_else_same_line_yes() {
+    let formatted = format_source(STYLE_GUIDE_13_ELSE_SAME_LINE_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_13_ELSE_SAME_LINE_YES);
 }
 
 #[test]
 fn test_style_guide_else_same_line_no() {
-    // Style guide "No": else on new line after closing brace
     let source = r#"contract T {
     function f(uint256 x) public pure returns (uint256) {
         if (x < 3) {
             x += 1;
         }
-        else {
+        else if (x > 7) {
             x -= 1;
+        }
+        else {
+            x = 5;
         }
         return x;
     }
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should put else on same line as closing brace
-    assert!(
-        formatted.contains("} else {"),
-        "formatter should put else on same line, got:\n{formatted}"
-    );
-    assert!(
-        !formatted.contains("}\n        else"),
-        "should not have else on new line, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_13_ELSE_SAME_LINE_YES);
 }
 
 // --- 14. Function Declaration: Brace Placement ---
 
-#[test]
-fn test_style_guide_function_brace_same_line_yes() {
-    // Style guide "Yes": opening brace on same line as declaration
-    let source = r#"contract T {
+const STYLE_GUIDE_14_FUNC_BRACE_YES: &str = r#"contract T {
     function increment(uint256 x) public pure returns (uint256) {
         return x + 1;
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    // Brace should be on same line
-    assert!(
-        formatted.contains(") {"),
-        "opening brace should be on same line, got:\n{formatted}"
-    );
-    // Closing brace should be at proper indentation
-    assert!(
-        formatted.contains("    }"),
-        "closing brace should be indented, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_function_brace_same_line_yes() {
+    let formatted = format_source(STYLE_GUIDE_14_FUNC_BRACE_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_14_FUNC_BRACE_YES);
 }
 
 #[test]
 fn test_style_guide_function_brace_same_line_no() {
-    // Style guide "No": opening brace on next line
     let source = r#"contract T {
     function increment(uint256 x) public pure returns (uint256)
     {
@@ -1356,41 +1192,34 @@ fn test_style_guide_function_brace_same_line_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should put brace on same line
-    assert!(
-        formatted.contains(") {"),
-        "formatter should put brace on same line, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_14_FUNC_BRACE_YES);
 }
 
 // --- 15. Function Declaration: Modifier Order ---
 
-#[test]
-fn test_style_guide_modifier_order_yes() {
-    // Style guide "Yes": visibility → mutability → virtual → override → custom → returns
-    let source = r#"contract T {
+const STYLE_GUIDE_15_MODIFIER_ORDER_YES: &str = r#"contract T {
     mapping(address => uint256) balanceOf;
     function balance(uint256 from) public view override returns (uint256) {
         return balanceOf[from];
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    let public_pos = formatted.find("public").unwrap();
-    let view_pos = formatted.find("view").unwrap();
-    let override_pos = formatted.find("override").unwrap();
-    let returns_pos = formatted.find("returns").unwrap();
-    assert!(public_pos < view_pos, "public should come before view");
-    assert!(view_pos < override_pos, "view should come before override");
-    assert!(
-        override_pos < returns_pos,
-        "override should come before returns"
-    );
+
+const STYLE_GUIDE_15_MODIFIER_ORDER_CUSTOM_YES: &str = r#"contract T {
+    function increment(uint256 x) public pure onlyOwner returns (uint256) {
+        return x + 1;
+    }
+}
+"#;
+
+#[test]
+fn test_style_guide_modifier_order_yes() {
+    let formatted = format_source(STYLE_GUIDE_15_MODIFIER_ORDER_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_15_MODIFIER_ORDER_YES);
 }
 
 #[test]
 fn test_style_guide_modifier_order_no() {
-    // Style guide "No": override before view
     let source = r#"contract T {
     mapping(address => uint256) balanceOf;
     function balance(uint256 from) public override view returns (uint256) {
@@ -1399,19 +1228,11 @@ fn test_style_guide_modifier_order_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should reorder: public view override returns
-    let public_pos = formatted.find("public").unwrap();
-    let view_pos = formatted.find("view").unwrap();
-    let override_pos = formatted.find("override").unwrap();
-    assert!(
-        public_pos < view_pos && view_pos < override_pos,
-        "formatter should reorder to: public view override, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_15_MODIFIER_ORDER_YES);
 }
 
 #[test]
 fn test_style_guide_modifier_order_custom_no() {
-    // Style guide "No": custom modifier before visibility
     let source = r#"contract T {
     function increment(uint256 x) onlyOwner public pure returns (uint256) {
         return x + 1;
@@ -1419,21 +1240,12 @@ fn test_style_guide_modifier_order_custom_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should reorder: public pure onlyOwner returns
-    let public_pos = formatted.find("public").unwrap();
-    let only_owner_pos = formatted.find("onlyOwner").unwrap();
-    assert!(
-        public_pos < only_owner_pos,
-        "public should come before onlyOwner, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_15_MODIFIER_ORDER_CUSTOM_YES);
 }
 
 // --- 16. Long Function Declarations ---
 
-#[test]
-fn test_style_guide_long_function_declaration_yes() {
-    // Style guide "Yes": each parameter on own line, closing paren on own line
-    let source = r#"contract T {
+const STYLE_GUIDE_16_LONG_FUNC_DECL_YES: &str = r#"contract T {
     function thisFunctionHasLotsOfArguments(
         address a,
         address b,
@@ -1441,30 +1253,26 @@ fn test_style_guide_long_function_declaration_yes() {
         address d,
         address e,
         address f
-    ) public {
+    )
+        public
+    {
         a;
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_long_function_declaration_yes() {
     let config = FormatConfig {
         line_length: 50,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    // Each address param should appear, properly wrapped
-    assert!(
-        formatted.contains("address a,"),
-        "should contain address a, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("address f"),
-        "should contain address f, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_16_LONG_FUNC_DECL_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_16_LONG_FUNC_DECL_YES);
 }
 
 #[test]
 fn test_style_guide_long_function_declaration_no() {
-    // Style guide "No": params on same line, cramped
     let source = r#"contract T {
     function thisFunctionHasLotsOfArguments(address a, address b, address c,
         address d, address e, address f) public {
@@ -1477,20 +1285,12 @@ fn test_style_guide_long_function_declaration_no() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    // Formatter should wrap each param — should not have multiple params on one line
-    // (at line_length 50, `address a, address b, address c,` can't fit)
-    assert!(
-        !formatted.contains("address a, address b, address c,"),
-        "should not cram params on one line, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_16_LONG_FUNC_DECL_YES);
 }
 
 // --- 17. Modifiers on Separate Lines ---
 
-#[test]
-fn test_style_guide_modifiers_separate_lines_yes() {
-    // Style guide "Yes": each modifier on its own indented line
-    let source = r#"contract T {
+const STYLE_GUIDE_17_MODIFIERS_LINES_YES: &str = r#"contract T {
     function thisFunctionNameIsReallyLong(address x, address y, address z)
         public
         pure
@@ -1500,32 +1300,20 @@ fn test_style_guide_modifiers_separate_lines_yes() {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_modifiers_separate_lines_yes() {
     let config = FormatConfig {
-        line_length: 70,
+        line_length: 80,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    // Function should format with attributes, possibly wrapped
-    assert!(
-        formatted.contains("public"),
-        "should contain public, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("pure"),
-        "should contain pure, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("returns (address)"),
-        "should contain returns, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_17_MODIFIERS_LINES_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_17_MODIFIERS_LINES_YES);
 }
 
 // --- 18. Multiline Return Statements ---
 
-#[test]
-fn test_style_guide_multiline_return_yes() {
-    // Style guide "Yes": return params each on own line (function signature)
-    let source = r#"contract T {
+const STYLE_GUIDE_18_MULTILINE_RETURN_YES: &str = r#"contract T {
     function thisFunctionNameIsReallyLong(
         address a,
         address b,
@@ -1543,23 +1331,20 @@ fn test_style_guide_multiline_return_yes() {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_multiline_return_yes() {
     let config = FormatConfig {
         line_length: 50,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    assert!(
-        formatted.contains("returns (") || formatted.contains("returns("),
-        "should contain returns clause, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_18_MULTILINE_RETURN_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_18_MULTILINE_RETURN_YES);
 }
 
 // --- 19. Constructor with Base Arguments ---
 
-#[test]
-fn test_style_guide_constructor_inheritance_yes() {
-    // Style guide "Yes": base constructors on separate indented lines
-    let source = r#"contract B {
+const STYLE_GUIDE_19_CONSTRUCTOR_INHERIT_YES: &str = r#"contract B {
     constructor(uint256 p) {}
 }
 
@@ -1586,146 +1371,95 @@ contract A is B, C, D {
     }
 }
 "#;
+
+#[test]
+fn test_style_guide_constructor_inheritance_yes() {
     let config = FormatConfig {
-        line_length: 80,
+        line_length: 100,
         ..default_config()
     };
-    let formatted = format_source(source, &config).unwrap();
-    assert!(
-        formatted.contains("B(param1)"),
-        "should contain B(param1) base call, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("C(param2, param3)"),
-        "should contain C(param2, param3) base call, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("D(param4)"),
-        "should contain D(param4) base call, got:\n{formatted}"
-    );
+    let formatted = format_source(STYLE_GUIDE_19_CONSTRUCTOR_INHERIT_YES, &config).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_19_CONSTRUCTOR_INHERIT_YES);
 }
 
 // --- 20. Mappings: No Space ---
 
-#[test]
-fn test_style_guide_mapping_no_space_yes() {
-    // Style guide "Yes": no space between mapping and paren
-    let source = r#"contract T {
+const STYLE_GUIDE_20_MAPPING_YES: &str = r#"contract T {
     mapping(uint256 => uint256) map;
     mapping(address => bool) registeredAddresses;
     mapping(uint256 => mapping(bool => uint256[])) public data;
     mapping(uint256 => mapping(uint256 => uint256)) data2;
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("mapping(uint256 => uint256)"),
-        "should have no space after mapping keyword, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("mapping(address => bool)"),
-        "should have no space after mapping keyword, got:\n{formatted}"
-    );
-    // Nested mappings
-    assert!(
-        formatted.contains("mapping(uint256 => mapping("),
-        "nested mapping should have no space, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_mapping_no_space_yes() {
+    let formatted = format_source(STYLE_GUIDE_20_MAPPING_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_20_MAPPING_YES);
 }
 
 #[test]
 fn test_style_guide_mapping_no_space_no() {
-    // Style guide "No": space after mapping keyword
     let source = r#"contract T {
     mapping (uint256 => uint256) map;
     mapping( address => bool ) registeredAddresses;
     mapping (uint256 => mapping (bool => uint256[])) public data;
+    mapping (uint256 => mapping (uint256 => uint256)) data2;
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should remove extra spaces
-    assert!(
-        formatted.contains("mapping(uint256 => uint256)"),
-        "should remove space after mapping keyword, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("mapping(address => bool)"),
-        "should remove spaces inside mapping parens, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_20_MAPPING_YES);
 }
 
 // --- 21. Variable Declarations: Array Type ---
 
-#[test]
-fn test_style_guide_array_type_no_space_yes() {
-    // Style guide "Yes": no space between type and brackets
-    let source = r#"contract T {
+const STYLE_GUIDE_21_ARRAY_TYPE_YES: &str = r#"contract T {
     uint256[] x;
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("uint256[]"),
-        "should have no space between type and brackets, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_array_type_no_space_yes() {
+    let formatted = format_source(STYLE_GUIDE_21_ARRAY_TYPE_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_21_ARRAY_TYPE_YES);
 }
 
 #[test]
 fn test_style_guide_array_type_no_space_no() {
-    // Style guide "No": space between type and brackets
     let source = r#"contract T {
     uint256 [] x;
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should remove space between type and brackets
-    assert!(
-        formatted.contains("uint256[]"),
-        "should remove space between type and brackets, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_21_ARRAY_TYPE_YES);
 }
 
 // --- 22. Strings: Double Quotes ---
 
-#[test]
-fn test_style_guide_double_quotes_yes() {
-    // Style guide "Yes": double quotes for strings
-    let source = r#"contract T {
+const STYLE_GUIDE_22_DOUBLE_QUOTES_YES: &str = r#"contract T {
     string public str = "foo";
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("\"foo\""),
-        "should use double quotes, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_double_quotes_yes() {
+    let formatted = format_source(STYLE_GUIDE_22_DOUBLE_QUOTES_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_22_DOUBLE_QUOTES_YES);
 }
 
 #[test]
 fn test_style_guide_double_quotes_no() {
-    // Style guide "No": single quotes for strings
     let source = r#"contract T {
-    string public str = 'bar';
+    string public str = 'foo';
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Default config uses double quotes, so single quotes should be converted
-    assert!(
-        formatted.contains("\"bar\""),
-        "should convert single quotes to double quotes, got:\n{formatted}"
-    );
-    assert!(
-        !formatted.contains("'bar'"),
-        "should not contain single quotes, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_22_DOUBLE_QUOTES_YES);
 }
 
 // --- 23. Operators: Spacing ---
 
-#[test]
-fn test_style_guide_operator_spacing_yes() {
-    // Style guide "Yes": space around operators
-    let source = r#"contract T {
+const STYLE_GUIDE_23_OPERATOR_SPACING_YES: &str = r#"contract T {
     function f() public pure {
         uint256 x = 3;
         x = 100 / 10;
@@ -1733,24 +1467,15 @@ fn test_style_guide_operator_spacing_yes() {
     }
 }
 "#;
-    let formatted = format_source(source, &default_config()).unwrap();
-    assert!(
-        formatted.contains("x = 3;"),
-        "should have space around =, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("100 / 10"),
-        "should have space around /, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("3 + 4"),
-        "should have space around +, got:\n{formatted}"
-    );
+
+#[test]
+fn test_style_guide_operator_spacing_yes() {
+    let formatted = format_source(STYLE_GUIDE_23_OPERATOR_SPACING_YES, &default_config()).unwrap();
+    assert_eq!(formatted, STYLE_GUIDE_23_OPERATOR_SPACING_YES);
 }
 
 #[test]
 fn test_style_guide_operator_spacing_no() {
-    // Style guide "No": no space around operators
     let source = r#"contract T {
     function f() public pure {
         uint256 x=3;
@@ -1760,156 +1485,10 @@ fn test_style_guide_operator_spacing_no() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
-    // Formatter should add spaces around operators
-    assert!(
-        formatted.contains("x = 3;"),
-        "should add space around =, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("100 / 10"),
-        "should add space around /, got:\n{formatted}"
-    );
-    assert!(
-        formatted.contains("3 + 4"),
-        "should add space around +, got:\n{formatted}"
-    );
+    assert_eq!(formatted, STYLE_GUIDE_23_OPERATOR_SPACING_YES);
 }
 
-// --- Idempotency: All style guide "Yes" examples ---
-
-#[test]
-fn test_style_guide_idempotency_contract_spacing() {
-    let source = r#"// SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.4.0 <0.9.0;
-
-contract A {}
-
-
-contract B {}
-
-
-contract C {}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide contract spacing should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_if_else() {
-    let source = r#"contract T {
-    function f(uint256 x) public pure returns (uint256) {
-        if (x < 3) {
-            x += 1;
-        } else if (x > 7) {
-            x -= 1;
-        } else {
-            x = 5;
-        }
-        return x;
-    }
-}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide if/else should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_function_declaration() {
-    let source = r#"contract T {
-    function increment(uint256 x) public pure returns (uint256) {
-        return x + 1;
-    }
-}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide function decl should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_mapping() {
-    let source = r#"contract T {
-    mapping(uint256 => uint256) map;
-    mapping(address => bool) registeredAddresses;
-    mapping(uint256 => mapping(bool => uint256[])) public data;
-}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide mapping should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_operator_spacing() {
-    let source = r#"contract T {
-    function f() public pure {
-        uint256 x = 3;
-        x = 100 / 10;
-        x += 3 + 4;
-    }
-}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide operator spacing should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_struct_brace() {
-    let source = r#"// SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.4.0 <0.9.0;
-
-contract Coin {
-    struct Bank {
-        address owner;
-        uint256 balance;
-    }
-}
-"#;
-    let result = format_source_verified(source, &default_config());
-    assert!(
-        result.is_ok(),
-        "style guide struct brace should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
-
-#[test]
-fn test_style_guide_idempotency_receive_fallback() {
-    let source = r#"contract T {
-    receive() external payable {}
-
-    fallback() external {}
-}
-"#;
-    let config = FormatConfig {
-        contract_body_spacing: solgrid_config::ContractBodySpacing::Preserve,
-        ..default_config()
-    };
-    let result = format_source_verified(source, &config);
-    assert!(
-        result.is_ok(),
-        "style guide receive/fallback should be idempotent: {}",
-        result.unwrap_err()
-    );
-}
+// --- Idempotency: Emit statement (standalone, no style guide rule) ---
 
 #[test]
 fn test_style_guide_idempotency_emit_statement() {

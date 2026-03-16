@@ -417,9 +417,12 @@ fn format_function(
     // Body
     match &func.body {
         Some(body) => {
-            signature.push(space());
-            signature.push(format_block(body, source, config, comments));
-            group(signature)
+            let block = format_block(body, source, config, comments);
+            // When the signature wraps, put { on its own line at the
+            // function's indent level (Solidity style guide).
+            // When it fits on one line, { stays on the same line.
+            signature.push(if_flat(space(), line()));
+            concat(vec![group(signature), block])
         }
         None => {
             signature.push(text(";"));
@@ -566,7 +569,13 @@ fn format_event(event: &ItemEvent<'_>, source: &str, config: &FormatConfig) -> F
                 concat(param_parts)
             })
             .collect();
-        parts.push(join(params, concat(vec![text(","), line()])));
+        // When wrapping, put all params on new lines with indent
+        // (matching format_params style and the Solidity style guide).
+        parts.push(indent(vec![
+            softline(),
+            join(params, concat(vec![text(","), line()])),
+        ]));
+        parts.push(softline());
     }
 
     parts.push(text(")"));
@@ -594,7 +603,13 @@ fn format_error(error: &ItemError<'_>, source: &str, config: &FormatConfig) -> F
                 concat(param_parts)
             })
             .collect();
-        parts.push(join(params, concat(vec![text(","), line()])));
+        // When wrapping, put all params on new lines with indent
+        // (matching format_params style and the Solidity style guide).
+        parts.push(indent(vec![
+            softline(),
+            join(params, concat(vec![text(","), line()])),
+        ]));
+        parts.push(softline());
     }
 
     parts.push(text(");"));
