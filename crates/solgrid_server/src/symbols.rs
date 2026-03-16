@@ -23,6 +23,7 @@ pub enum SymbolKind {
     StateVariable,
     LocalVariable,
     Parameter,
+    ReturnParameter,
     EnumVariant,
 }
 
@@ -135,6 +136,11 @@ impl SymbolTable {
         }
 
         None
+    }
+
+    /// Return all direct symbol definitions in the given scope.
+    pub fn scope_symbols(&self, scope_id: ScopeId) -> &[SymbolDef] {
+        &self.scopes[scope_id].symbols
     }
 
     /// Resolve a member inside a container symbol's scope.
@@ -323,7 +329,7 @@ fn collect_item(
                             func_scope,
                             SymbolDef {
                                 name: name_ident.as_str().to_string(),
-                                kind: SymbolKind::Parameter,
+                                kind: SymbolKind::ReturnParameter,
                                 name_span,
                                 def_span: param_def_span,
                                 scope: None,
@@ -694,6 +700,25 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7; // on 'a'
         let def = table.resolve("a", offset).unwrap();
         assert_eq!(def.kind, SymbolKind::Parameter);
+    }
+
+    #[test]
+    fn test_return_parameters() {
+        let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function add(uint256 a, uint256 b) public pure returns (uint256 result) {
+        result = a + b;
+    }
+}
+"#;
+        let table = table_for(source);
+
+        let offset = source.find("result = a").unwrap();
+        let def = table.resolve("result", offset).unwrap();
+        assert_eq!(def.kind, SymbolKind::ReturnParameter);
     }
 
     #[test]

@@ -77,7 +77,7 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
         (def, ident_range)
     };
 
-    let signature = extract_signature(source, def);
+    let signature = extract_signature(source, def, &table);
     let natspec = extract_natspec(source, def.def_span.start);
 
     let mut content = String::new();
@@ -102,16 +102,21 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
 }
 
 /// Extract a human-readable signature from a symbol's definition span.
-fn extract_signature(source: &str, def: &SymbolDef) -> String {
+fn extract_signature(
+    source: &str,
+    def: &SymbolDef,
+    table: &symbols::SymbolTable,
+) -> String {
     let text = &source[def.def_span.clone()];
 
     match def.kind {
+        // Show container with its members.
+        SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library => {
+            format_container_signature(source, def, table)
+        }
+
         // Truncate at `{` to get the header only.
-        SymbolKind::Contract
-        | SymbolKind::Interface
-        | SymbolKind::Library
-        | SymbolKind::Function
-        | SymbolKind::Modifier => truncate_at_char(text, '{'),
+        SymbolKind::Function | SymbolKind::Modifier => truncate_at_char(text, '{'),
 
         // Truncate at `;`.
         SymbolKind::Event | SymbolKind::Error | SymbolKind::Udvt => truncate_at_char(text, ';'),
@@ -139,9 +144,75 @@ fn extract_signature(source: &str, def: &SymbolDef) -> String {
         // Struct fields: show type + name (truncate at `;`).
         SymbolKind::StructField => truncate_at_char(text, ';'),
 
-        // Parameters: show type + name with (parameter) prefix.
-        SymbolKind::Parameter => format!("(parameter) {}", normalize_whitespace(text)),
+        // Parameters: show name: type with (parameter)/(return) prefix.
+        SymbolKind::Parameter => format_param_hover(source, def, "(parameter)"),
+        SymbolKind::ReturnParameter => format_param_hover(source, def, "(return)"),
     }
+}
+
+/// Format a parameter or return value for hover display as `(prefix) name: type`.
+fn format_param_hover(source: &str, def: &SymbolDef, prefix: &str) -> String {
+    let type_text = source[def.def_span.start..def.name_span.start].trim();
+    let type_text = normalize_whitespace(type_text);
+    format!("{} {}: {}", prefix, def.name, type_text)
+}
+
+/// Format a contract/interface/library hover showing its header and members.
+fn format_container_signature(
+    source: &str,
+    def: &SymbolDef,
+    table: &symbols::SymbolTable,
+) -> String {
+    let text = &source[def.def_span.clone()];
+    let header = truncate_at_char(text, '{');
+
+    let scope_id = match def.scope {
+        Some(id) => id,
+        None => return header,
+    };
+
+    let members = table.scope_symbols(scope_id);
+    if members.is_empty() {
+        return header;
+    }
+
+    const MAX_MEMBERS: usize = 20;
+    let mut lines = Vec::new();
+    lines.push(format!("{} {{", header));
+
+    for (i, member) in members.iter().enumerate() {
+        if i >= MAX_MEMBERS {
+            let remaining = members.len() - MAX_MEMBERS;
+            lines.push(format!("  // ... and {} more", remaining));
+            break;
+        }
+        let member_text = &source[member.def_span.clone()];
+        let member_sig = match member.kind {
+            SymbolKind::Function | SymbolKind::Modifier => truncate_at_char(member_text, '{'),
+            SymbolKind::Event | SymbolKind::Error | SymbolKind::Udvt => {
+                truncate_at_char(member_text, ';')
+            }
+            SymbolKind::StateVariable => {
+                let trimmed = if let Some(eq) = find_assignment_eq(member_text) {
+                    if let Some(semi) = member_text.find(';') {
+                        &member_text[..eq.min(semi)]
+                    } else {
+                        &member_text[..eq]
+                    }
+                } else {
+                    truncate_at_char_raw(member_text, ';')
+                };
+                normalize_whitespace(trimmed)
+            }
+            SymbolKind::Struct => format!("struct {}", member.name),
+            SymbolKind::Enum => format!("enum {}", member.name),
+            _ => continue,
+        };
+        lines.push(format!("  {};", member_sig.trim_end_matches(';').trim_end()));
+    }
+
+    lines.push("}".to_string());
+    lines.join("\n")
 }
 
 /// Extract NatSpec comment preceding an item.
@@ -471,7 +542,7 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7;
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("(parameter) uint256 a"));
+        assert!(val.contains("(parameter) a: uint256"), "got: {val}");
     }
 
     #[test]
@@ -486,8 +557,8 @@ contract MyToken {
         let offset = source.find("MyToken").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("contract MyToken"));
-        assert!(!val.contains("{"));
+        assert!(val.contains("contract MyToken {"), "got: {val}");
+        assert!(val.contains("uint256 x"), "got: {val}");
     }
 
     #[test]
@@ -938,8 +1009,8 @@ contract Child is Base {
 "#;
         let offset = source.find("Child").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("contract Child is Base"), "got: {val}");
-        assert!(!val.contains("{"), "got: {val}");
+        assert!(val.contains("contract Child is Base {"), "got: {val}");
+        assert!(val.contains("uint256 x"), "got: {val}");
     }
 
     // -- Member access hover --
@@ -1089,5 +1160,96 @@ contract Test {
         assert!(val.contains("function transfer"));
         assert!(val.contains("Transfers tokens"));
         assert!(val.contains("**@param**"));
+    }
+
+    #[test]
+    fn test_hover_return_parameter() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function add(uint256 a, uint256 b) public pure returns (uint256 result) {
+        result = a + b;
+    }
+}
+"#;
+        let offset = source.find("result = a").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(return) result: uint256"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_parameter_with_data_location() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function process(bytes memory data) public pure returns (uint256) {
+        return data.length;
+    }
+}
+"#;
+        let offset = source.find("data.length").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("(parameter) data: bytes memory"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_interface_shows_members() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+"#;
+        let offset = source.find("IERC20").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("interface IERC20 {"), "got: {val}");
+        assert!(val.contains("function totalSupply()"), "got: {val}");
+        assert!(val.contains("function balanceOf("), "got: {val}");
+        assert!(val.contains("event Transfer("), "got: {val}");
+        assert!(val.contains("}"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_empty_contract() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Empty {}
+"#;
+        let offset = source.find("Empty").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("contract Empty"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_contract_with_mixed_members() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Token {
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    function transfer(address to, uint256 amount) external returns (bool) {
+        return true;
+    }
+    event Transfer(address from, address to, uint256 value);
+}
+"#;
+        let offset = source.find("Token").unwrap();
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(val.contains("contract Token {"), "got: {val}");
+        assert!(val.contains("uint256 public totalSupply"), "got: {val}");
+        assert!(val.contains("function transfer("), "got: {val}");
+        assert!(val.contains("event Transfer("), "got: {val}");
     }
 }
