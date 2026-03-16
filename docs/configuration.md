@@ -97,7 +97,8 @@ All formatter options live under `[format]`:
 | `wrap_comments` | bool | false | `wrap_comments` | -- |
 | `sort_imports` | bool | false | `sort_imports` | -- |
 | `multiline_func_header` | `"attributes_first"` / `"params_first"` / `"all"` | `"attributes_first"` | `multiline_func_header` | -- |
-| `contract_new_lines` | bool | false | `contract_new_lines` | -- |
+| `contract_body_spacing` | `"preserve"` / `"single"` / `"compact"` | `"preserve"` | `contract_new_lines`* | -- |
+| `inheritance_brace_new_line` | bool | true | -- | -- |
 
 ### Formatter Directives
 

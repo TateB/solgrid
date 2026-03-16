@@ -121,8 +121,10 @@ pub struct FormatConfig {
     pub sort_imports: bool,
     /// Style for multiline function headers.
     pub multiline_func_header: MultilineFuncHeader,
-    /// Add newlines at the start and end of contract bodies.
-    pub contract_new_lines: bool,
+    /// Spacing between declarations inside contract bodies.
+    pub contract_body_spacing: ContractBodySpacing,
+    /// Put opening brace on new line when inheritance list wraps (default: true).
+    pub inheritance_brace_new_line: bool,
 }
 
 impl Default for FormatConfig {
@@ -139,7 +141,8 @@ impl Default for FormatConfig {
             wrap_comments: false,
             sort_imports: false,
             multiline_func_header: MultilineFuncHeader::AttributesFirst,
-            contract_new_lines: false,
+            contract_body_spacing: ContractBodySpacing::Preserve,
+            inheritance_brace_new_line: true,
         }
     }
 }
@@ -175,6 +178,17 @@ pub enum MultilineFuncHeader {
     ParamsFirst,
     /// Break after each element.
     All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractBodySpacing {
+    /// Preserve blank lines from the original source (default).
+    Preserve,
+    /// Always add a single blank line between declarations.
+    Single,
+    /// No blank lines between declarations (compact).
+    Compact,
 }
 
 /// Global configuration section.
@@ -324,8 +338,23 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
         if let Some(v) = fmt.get("sort_imports").and_then(|v| v.as_bool()) {
             config.format.sort_imports = v;
         }
-        if let Some(v) = fmt.get("contract_new_lines").and_then(|v| v.as_bool()) {
-            config.format.contract_new_lines = v;
+        if let Some(v) = fmt.get("contract_body_spacing").and_then(|v| v.as_str()) {
+            config.format.contract_body_spacing = match v {
+                "preserve" => ContractBodySpacing::Preserve,
+                "single" => ContractBodySpacing::Single,
+                "compact" => ContractBodySpacing::Compact,
+                _ => ContractBodySpacing::Preserve,
+            };
+        } else if let Some(v) = fmt.get("contract_new_lines").and_then(|v| v.as_bool()) {
+            // Backwards compatibility: contract_new_lines maps to single/compact
+            config.format.contract_body_spacing = if v {
+                ContractBodySpacing::Single
+            } else {
+                ContractBodySpacing::Compact
+            };
+        }
+        if let Some(v) = fmt.get("inheritance_brace_new_line").and_then(|v| v.as_bool()) {
+            config.format.inheritance_brace_new_line = v;
         }
         if let Some(v) = fmt.get("override_spacing").and_then(|v| v.as_bool()) {
             config.format.override_spacing = v;
@@ -464,7 +493,11 @@ threads = 4
             config.multiline_func_header,
             MultilineFuncHeader::AttributesFirst
         );
-        assert!(!config.contract_new_lines);
+        assert_eq!(
+            config.contract_body_spacing,
+            ContractBodySpacing::Preserve
+        );
+        assert!(config.inheritance_brace_new_line);
     }
 
     #[test]

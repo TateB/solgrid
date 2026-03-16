@@ -4,7 +4,9 @@
 //! for use by the `prettier-plugin-solgrid` npm package.
 
 use napi_derive::napi;
-use solgrid_config::{FormatConfig, MultilineFuncHeader, NumberUnderscore, UintType};
+use solgrid_config::{
+    ContractBodySpacing, FormatConfig, MultilineFuncHeader, NumberUnderscore, UintType,
+};
 
 /// JavaScript-friendly formatting options.
 ///
@@ -38,8 +40,11 @@ pub struct FormatOptions {
     pub sort_imports: Option<bool>,
     /// solgrid-specific: "attributes_first", "params_first", or "all".
     pub multiline_func_header: Option<String>,
-    /// solgrid-specific: add newlines at start/end of contract body.
-    pub contract_new_lines: Option<bool>,
+    /// solgrid-specific: spacing between contract body declarations.
+    /// "preserve" (default), "single", or "compact".
+    pub contract_body_spacing: Option<String>,
+    /// solgrid-specific: put opening brace on new line for multiline inheritance.
+    pub inheritance_brace_new_line: Option<bool>,
 }
 
 /// Convert JavaScript format options to solgrid's internal `FormatConfig`.
@@ -95,8 +100,15 @@ pub fn map_options(options: Option<FormatOptions>) -> FormatConfig {
             _ => MultilineFuncHeader::AttributesFirst,
         };
     }
-    if let Some(cn) = opts.contract_new_lines {
-        config.contract_new_lines = cn;
+    if let Some(ref cbs) = opts.contract_body_spacing {
+        config.contract_body_spacing = match cbs.as_str() {
+            "single" => ContractBodySpacing::Single,
+            "compact" => ContractBodySpacing::Compact,
+            _ => ContractBodySpacing::Preserve,
+        };
+    }
+    if let Some(ibn) = opts.inheritance_brace_new_line {
+        config.inheritance_brace_new_line = ibn;
     }
 
     config
@@ -161,7 +173,8 @@ mod tests {
             wrap_comments: None,
             sort_imports: None,
             multiline_func_header: None,
-            contract_new_lines: None,
+            contract_body_spacing: None,
+            inheritance_brace_new_line: None,
         };
         let config = map_options(Some(opts));
         assert_eq!(config.line_length, 80);
@@ -187,7 +200,8 @@ mod tests {
             wrap_comments: None,
             sort_imports: Some(true),
             multiline_func_header: Some("params_first".into()),
-            contract_new_lines: None,
+            contract_body_spacing: None,
+            inheritance_brace_new_line: None,
         };
         let config = map_options(Some(opts));
         assert_eq!(config.line_length, 100);
@@ -221,7 +235,8 @@ mod tests {
                 wrap_comments: None,
                 sort_imports: None,
                 multiline_func_header: None,
-                contract_new_lines: None,
+                contract_body_spacing: None,
+            inheritance_brace_new_line: None,
             };
             let config = map_options(Some(opts));
             assert_eq!(config.number_underscore, expected, "input: {input}");
@@ -250,7 +265,8 @@ mod tests {
                 wrap_comments: None,
                 sort_imports: None,
                 multiline_func_header: None,
-                contract_new_lines: None,
+                contract_body_spacing: None,
+            inheritance_brace_new_line: None,
             };
             let config = map_options(Some(opts));
             assert_eq!(config.uint_type, expected, "input: {input}");

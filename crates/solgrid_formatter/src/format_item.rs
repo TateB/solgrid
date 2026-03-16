@@ -12,7 +12,7 @@ use crate::format_ty::{
 use crate::ir::*;
 use solar_ast::*;
 use solgrid_ast::{span_text, span_to_range};
-use solgrid_config::FormatConfig;
+use solgrid_config::{ContractBodySpacing, FormatConfig};
 
 /// Format a top-level item.
 pub fn format_item(
@@ -165,13 +165,28 @@ fn format_contract(
                 }
             })
             .collect();
-        header.push(group(vec![indent(vec![
-            line(),
-            join(bases, concat(vec![text(","), line()])),
-        ])]));
-    }
 
-    header.push(text(" {"));
+        if config.inheritance_brace_new_line {
+            // Group inheritance + brace so if_flat controls brace placement:
+            // flat: `contract Foo is Bar, Baz {`
+            // broken: `contract Foo is\n    Bar,\n    Baz\n{`
+            header.push(group(vec![
+                indent(vec![
+                    line(),
+                    join(bases, concat(vec![text(","), line()])),
+                ]),
+                if_flat(text(" {"), concat(vec![hardline(), text("{")])),
+            ]));
+        } else {
+            header.push(group(vec![indent(vec![
+                line(),
+                join(bases, concat(vec![text(","), line()])),
+            ])]));
+            header.push(text(" {"));
+        }
+    } else {
+        header.push(text(" {"));
+    }
 
     // Body
     if contract.body.is_empty() {
@@ -182,31 +197,37 @@ fn format_contract(
     let mut body_parts = Vec::new();
     let mut prev_kind: Option<ItemCategory> = None;
     let mut prev_multiline = false;
+    let mut prev_item_end: usize = 0;
 
     for item in contract.body.iter() {
         let item_range = span_to_range(item.span);
         let current_kind = categorize_item(item);
         let current_multiline = is_multiline_item(item);
 
+        // Determine if we need a blank line before this item.
+        // Comments between items do NOT count as a whitespace gap.
+        let need_blank_line = if prev_kind.is_some() {
+            match config.contract_body_spacing {
+                ContractBodySpacing::Preserve => {
+                    has_blank_line_between(source, prev_item_end, item_range.start)
+                }
+                ContractBodySpacing::Single => true,
+                ContractBodySpacing::Compact => prev_multiline || current_multiline,
+            }
+        } else {
+            false
+        };
+
+        // Add blank line before leading comments if needed
+        if need_blank_line {
+            body_parts.push(hardline());
+        }
+
         // Emit leading comments for this body item
         let leading = comments.take_leading(item_range.start);
         for comment in &leading {
             body_parts.push(hardline());
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
-        }
-
-        // Add blank line between items when either is multi-line,
-        // or between different categories when contract_new_lines is enabled
-        if prev_kind.is_some() && leading.is_empty() {
-            if prev_multiline || current_multiline {
-                body_parts.push(hardline());
-            } else if config.contract_new_lines {
-                if let (Some(prev), Some(curr)) = (&prev_kind, &current_kind) {
-                    if prev != curr {
-                        body_parts.push(hardline());
-                    }
-                }
-            }
         }
 
         body_parts.push(hardline());
@@ -219,6 +240,7 @@ fn format_contract(
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
+        prev_item_end = item_range.end;
         prev_kind = current_kind;
         prev_multiline = current_multiline;
     }
@@ -580,6 +602,30 @@ fn format_error(error: &ItemError<'_>, source: &str, config: &FormatConfig) -> F
 
     parts.push(text(");"));
     group(parts)
+}
+
+/// Check if there's a blank line in the source between two byte positions.
+/// A blank line is one that contains only whitespace — comments don't count
+/// as whitespace, so a comment between items doesn't create or suppress a gap.
+fn has_blank_line_between(source: &str, start: usize, end: usize) -> bool {
+    if start >= end || end > source.len() {
+        return false;
+    }
+    let between = &source[start..end];
+    let mut prev_was_newline = false;
+    for ch in between.chars() {
+        if ch == '\n' {
+            if prev_was_newline {
+                return true;
+            }
+            prev_was_newline = true;
+        } else if ch == '\r' || ch == ' ' || ch == '\t' {
+            // Whitespace — continue without resetting
+        } else {
+            prev_was_newline = false;
+        }
+    }
+    false
 }
 
 /// Sort import items if sort_imports is enabled.

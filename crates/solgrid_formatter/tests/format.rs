@@ -29,9 +29,10 @@ fn test_format_plain_import() {
 fn test_format_named_import() {
     let source = "import {Foo, Bar} from \"./Foo.sol\";\n";
     let formatted = format_source(source, &default_config()).unwrap();
-    assert!(formatted.contains("Foo"));
-    assert!(formatted.contains("Bar"));
-    assert!(formatted.contains("from"));
+    assert!(
+        formatted.contains("import {Foo, Bar} from \"./Foo.sol\";")
+            || formatted.contains("import { Foo, Bar } from \"./Foo.sol\";")
+    );
 }
 
 #[test]
@@ -82,11 +83,23 @@ fn test_format_library() {
 fn test_format_simple_function() {
     let source = "contract T {\n    function foo() public pure returns (uint256) {\n        return 1;\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();
-    assert!(formatted.contains("function foo()"));
-    assert!(formatted.contains("public"));
-    assert!(formatted.contains("pure"));
-    assert!(formatted.contains("returns"));
-    assert!(formatted.contains("return 1;"));
+    assert!(
+        formatted.contains("function foo()"),
+        "should contain function signature"
+    );
+    assert!(formatted.contains("public"), "should contain visibility");
+    assert!(formatted.contains("pure"), "should contain mutability");
+    assert!(
+        formatted.contains("returns (uint256)"),
+        "should contain return type"
+    );
+    assert!(
+        formatted.contains("return 1;"),
+        "should contain function body"
+    );
+    // Formatting should be idempotent
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(formatted, reformatted, "formatting should be idempotent");
 }
 
 #[test]
@@ -141,7 +154,15 @@ fn test_uint_type_short() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
-    assert!(formatted.contains("uint ") || formatted.contains("uint\n"));
+    // Should have converted uint256 to uint
+    assert!(
+        formatted.contains("uint x;") || formatted.contains("uint  x;"),
+        "expected 'uint x;' but got: {formatted}"
+    );
+    assert!(
+        !formatted.contains("uint256"),
+        "uint256 should have been shortened to uint"
+    );
 }
 
 // --- Struct / Enum / Event / Error ---
@@ -416,4 +437,215 @@ fn test_syntax_error() {
     let source = "contract { }"; // Missing name
     let result = format_source(source, &default_config());
     assert!(result.is_err());
+}
+
+// --- Contract body spacing ---
+
+#[test]
+fn test_preserve_blank_lines_default() {
+    let source = r#"contract T {
+    uint256 public x;
+
+    uint256 public y;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    // The blank line between x and y should be preserved (indent whitespace on blank line)
+    let lines: Vec<&str> = formatted.lines().collect();
+    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
+    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    assert!(
+        y_line - x_line >= 2,
+        "there should be a blank line between x and y, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_preserve_no_blank_line() {
+    let source = r#"contract T {
+    uint256 public x;
+    uint256 public y;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    // No blank line in source = no blank line in output
+    assert!(
+        formatted.contains("uint256 public x;\n    uint256 public y;"),
+        "no blank line should be added, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_preserve_comment_not_a_gap() {
+    let source = r#"contract T {
+    uint256 public x;
+    // comment about y
+    uint256 public y;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    // Comment between items without blank line should not create a gap
+    assert!(
+        !formatted.contains("x;\n\n"),
+        "comment should not create a gap, got:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("// comment about y"),
+        "comment should be preserved"
+    );
+}
+
+#[test]
+fn test_preserve_blank_line_with_comment() {
+    let source = r#"contract T {
+    uint256 public x;
+
+    // comment about y
+    uint256 public y;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    // Blank line before comment should be preserved
+    let lines: Vec<&str> = formatted.lines().collect();
+    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
+    let comment_line = lines.iter().position(|l| l.contains("// comment about y")).unwrap();
+    assert!(
+        comment_line - x_line >= 2,
+        "blank line should be preserved before comment, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_single_spacing_mode() {
+    let source = r#"contract T {
+    uint256 public x;
+    uint256 public y;
+    uint256 public z;
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    // Should add blank lines between all items
+    let lines: Vec<&str> = formatted.lines().collect();
+    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
+    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    assert!(
+        y_line - x_line >= 2,
+        "single mode should add blank line, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_compact_spacing_mode() {
+    let source = r#"contract T {
+    uint256 public x;
+
+    uint256 public y;
+
+    function foo() public pure returns (uint256) {
+        return 1;
+    }
+
+    function bar() public pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Compact,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    let lines: Vec<&str> = formatted.lines().collect();
+    // Compact: no blank line between single-line items
+    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
+    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    assert_eq!(
+        y_line - x_line,
+        1,
+        "compact mode should remove blank lines between single-line items, got:\n{formatted}"
+    );
+    // But blank line around multiline items (functions with bodies)
+    let foo_line = lines.iter().position(|l| l.contains("function foo()")).unwrap();
+    assert!(
+        foo_line - y_line >= 2,
+        "compact mode should keep blank lines around multiline items, got:\n{formatted}"
+    );
+}
+
+// --- Inheritance brace placement ---
+
+#[test]
+fn test_inheritance_brace_new_line_default() {
+    // Force a long inheritance list that must wrap
+    let source = "contract OwnedResolver is Ownable, ABIResolver, AddrResolver, ContentHashResolver, DNSResolver, InterfaceResolver, NameResolver, PubkeyResolver, TextResolver, ExtendedResolver {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    // When inheritance wraps, { should be on its own line
+    assert!(
+        formatted.contains("\n{"),
+        "opening brace should be on new line when inheritance wraps, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_inheritance_brace_same_line_when_fits() {
+    let source = "contract Foo is Bar, Baz {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    // When inheritance fits on one line, { stays on same line
+    assert!(
+        formatted.contains("is Bar, Baz {}"),
+        "opening brace should stay on same line when inheritance fits, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_inheritance_brace_same_line_config() {
+    let source = "contract OwnedResolver is Ownable, ABIResolver, AddrResolver, ContentHashResolver, DNSResolver, InterfaceResolver, NameResolver, PubkeyResolver, TextResolver, ExtendedResolver {}\n";
+    let config = FormatConfig {
+        inheritance_brace_new_line: false,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    // With config off, { should be on same line as last base
+    assert!(
+        !formatted.contains("\n{"),
+        "opening brace should NOT be on new line with config off, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_inheritance_brace_idempotent() {
+    let source = "contract OwnedResolver is Ownable, ABIResolver, AddrResolver, ContentHashResolver, DNSResolver, InterfaceResolver, NameResolver, PubkeyResolver, TextResolver, ExtendedResolver {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(
+        formatted, reformatted,
+        "inheritance brace formatting should be idempotent"
+    );
+}
+
+#[test]
+fn test_single_spacing_with_comments() {
+    let source = r#"contract T {
+    uint256 public x;
+    // comment about y
+    uint256 public y;
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    // Single mode should still add blank line even with comments between items
+    let lines: Vec<&str> = formatted.lines().collect();
+    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
+    let comment_line = lines.iter().position(|l| l.contains("// comment about y")).unwrap();
+    assert!(
+        comment_line - x_line >= 2,
+        "single mode should add blank line even with comments, got:\n{formatted}"
+    );
 }

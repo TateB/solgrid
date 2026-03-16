@@ -470,7 +470,8 @@ These options live in `[format]` in `solgrid.toml` and are a superset of both fo
 | `sort_imports` | bool | false | `sort_imports` | — |
 | `imports_granularity` | `"preserve"` / `"item"` / `"file"` | `"preserve"` | — | — |
 | `multiline_func_header` | `"attributes_first"` / `"params_first"` / `"all"` | `"attributes_first"` | `multiline_func_header` | — |
-| `contract_new_lines` | bool | false | `contract_new_lines` | — |
+| `contract_body_spacing` | `"preserve"` / `"single"` / `"compact"` | `"preserve"` | `contract_new_lines`* | — |
+| `inheritance_brace_new_line` | bool | true | — | — |
 | `trailing_comma` | bool | false | — | — |
 | `blank_lines_between_contracts` | integer | 2 | — | (style guide) |
 | `blank_lines_between_functions` | integer | 1 | — | (style guide) |

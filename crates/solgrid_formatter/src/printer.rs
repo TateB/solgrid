@@ -144,7 +144,26 @@ pub fn print_chunks(chunk: &FormatChunk, config: &FormatConfig) -> String {
         }
     }
 
-    output
+    // Strip trailing whitespace from blank lines (lines that are only whitespace)
+    let trailing_newline = output.ends_with('\n');
+    let cleaned: String = output
+        .lines()
+        .map(|line| {
+            if line.chars().all(|c| c.is_whitespace()) {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // lines() drops the trailing newline — restore it
+    if trailing_newline {
+        cleaned + "\n"
+    } else {
+        cleaned
+    }
 }
 
 /// Measure the flat width of a chunk tree (as if everything is on one line).
