@@ -212,8 +212,24 @@ contract Test {
     fn test_lint_default_config() {
         let result = lint(SAMPLE_SOL, "");
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed["diagnostics"].is_array());
-        assert!(parsed["diagnostic_count"].is_number());
+        let diags = parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics should be an array");
+        let count = parsed["diagnostic_count"]
+            .as_u64()
+            .expect("diagnostic_count should be a number");
+        assert_eq!(
+            diags.len() as u64,
+            count,
+            "diagnostic_count should match array length"
+        );
+        assert_eq!(
+            parsed["error_count"].as_u64().unwrap_or(0)
+                + parsed["warning_count"].as_u64().unwrap_or(0)
+                + parsed["info_count"].as_u64().unwrap_or(0),
+            count,
+            "severity counts should sum to total"
+        );
     }
 
     #[test]
@@ -228,8 +244,24 @@ contract Test {
     fn test_fix_returns_source_and_diagnostics() {
         let result = fix(SAMPLE_SOL, "", false);
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert!(parsed["fixed_source"].is_string());
-        assert!(parsed["diagnostics"].is_array());
+        let fixed = parsed["fixed_source"]
+            .as_str()
+            .expect("fixed_source should be a string");
+        assert!(
+            fixed.contains("contract Test"),
+            "fixed source should preserve the contract"
+        );
+        let diags = parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics should be an array");
+        let count = parsed["diagnostic_count"]
+            .as_u64()
+            .expect("diagnostic_count should be a number");
+        assert_eq!(
+            diags.len() as u64,
+            count,
+            "diagnostic_count should match array length"
+        );
     }
 
     #[test]
@@ -277,8 +309,10 @@ contract Test {
     #[test]
     fn test_format_invalid_source() {
         let result = format("this is not {{{ valid solidity", "");
-        // Should return an error (either as JSON error or as-is)
-        // The formatter may return the source unchanged or error
-        assert!(!result.is_empty());
+        // Should return a JSON error object for invalid syntax
+        assert!(
+            result.starts_with(r#"{"error":"#),
+            "invalid source should produce an error, got: {result}"
+        );
     }
 }

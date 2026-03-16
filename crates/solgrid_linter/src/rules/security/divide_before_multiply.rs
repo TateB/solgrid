@@ -63,6 +63,9 @@ impl Rule for DivideBeforeMultiplyRule {
                     let original_line = &ctx.source[line_start..];
                     if let Some(orig_div_pos) = original_line.find(" / ") {
                         let abs_pos = line_start + orig_div_pos + 1; // +1 to point at `/`
+                        if ctx.is_in_comment_or_string(abs_pos) {
+                            continue;
+                        }
                         diagnostics.push(Diagnostic::new(
                             META.id,
                             "division before multiplication may cause precision loss; consider reordering to multiply first",

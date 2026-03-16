@@ -30,6 +30,10 @@ impl Rule for LowLevelCallsRule {
             let mut search_from = 0;
             while let Some(pos) = ctx.source[search_from..].find(pattern) {
                 let abs_pos = search_from + pos;
+                search_from = abs_pos + pattern.len();
+                if ctx.is_in_comment_or_string(abs_pos) {
+                    continue;
+                }
                 let method = pattern.trim_start_matches('.').trim_end_matches(['(', '{']);
                 diagnostics.push(Diagnostic::new(
                     META.id,
@@ -37,7 +41,6 @@ impl Rule for LowLevelCallsRule {
                     META.default_severity,
                     abs_pos..abs_pos + pattern.len(),
                 ));
-                search_from = abs_pos + pattern.len();
             }
         }
 

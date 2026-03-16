@@ -40,6 +40,10 @@ impl Rule for NotRelyOnBlockHashRule {
                     continue;
                 }
             }
+            if ctx.is_in_comment_or_string(abs_pos) {
+                search_from = abs_pos + pattern_len;
+                continue;
+            }
             diagnostics.push(Diagnostic::new(
                 META.id,
                 "do not rely on `blockhash()` for randomness — it can be influenced by miners",

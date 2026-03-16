@@ -51,6 +51,10 @@ impl Rule for NotRelyOnTimeRule {
                         continue;
                     }
                 }
+                if ctx.is_in_comment_or_string(abs_pos) {
+                    search_from = abs_pos + pattern_len;
+                    continue;
+                }
                 diagnostics.push(Diagnostic::new(
                     META.id,
                     "avoid relying on `block.timestamp` for critical logic — it can be manipulated by miners",
@@ -84,6 +88,10 @@ impl Rule for NotRelyOnTimeRule {
                         search_from = abs_pos + pattern_len;
                         continue;
                     }
+                }
+                if ctx.is_in_comment_or_string(abs_pos) {
+                    search_from = abs_pos + pattern_len;
+                    continue;
                 }
                 diagnostics.push(Diagnostic::new(
                     META.id,

@@ -31,7 +31,7 @@ impl Rule for TxOriginRule {
         while let Some(pos) = ctx.source[search_from..].find("tx.origin") {
             let abs_pos = search_from + pos;
             // Make sure it's not inside a comment or string
-            if !is_in_comment_or_string(ctx.source, abs_pos) {
+            if !ctx.is_in_comment_or_string(abs_pos) {
                 diagnostics.push(Diagnostic::new(
                     META.id,
                     "avoid using `tx.origin` for authorization; use `msg.sender` instead",
@@ -43,32 +43,4 @@ impl Rule for TxOriginRule {
         }
         diagnostics
     }
-}
-
-fn is_in_comment_or_string(source: &str, pos: usize) -> bool {
-    let before = &source[..pos];
-    // Check if inside a line comment
-    if let Some(last_newline) = before.rfind('\n') {
-        let line = &before[last_newline..];
-        if line.contains("//") {
-            let comment_pos = before.rfind("//").unwrap();
-            if comment_pos > last_newline {
-                return true;
-            }
-        }
-    } else if before.contains("//") {
-        return true;
-    }
-    // Check if inside a block comment
-    let block_opens = before.matches("/*").count();
-    let block_closes = before.matches("*/").count();
-    if block_opens > block_closes {
-        return true;
-    }
-    // Check if inside a string literal (simple heuristic)
-    let double_quotes = before.matches('"').count();
-    if !double_quotes.is_multiple_of(2) {
-        return true;
-    }
-    false
 }

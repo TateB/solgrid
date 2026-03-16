@@ -28,7 +28,7 @@ impl Rule for MaxLineLengthRule {
         let mut diagnostics = Vec::new();
         let mut offset = 0;
 
-        for (line_idx, line) in ctx.source.split('\n').enumerate() {
+        for (line_idx, line) in ctx.source.lines().enumerate() {
             let char_count = line.chars().count();
             if char_count > DEFAULT_MAX_LENGTH {
                 diagnostics.push(Diagnostic::new(
@@ -43,7 +43,13 @@ impl Rule for MaxLineLengthRule {
                     offset..offset + line.len(),
                 ));
             }
-            offset += line.len() + 1; // +1 for '\n'
+            // Advance past the line content plus the line ending (\n or \r\n)
+            offset += line.len();
+            if ctx.source[offset..].starts_with("\r\n") {
+                offset += 2;
+            } else if ctx.source[offset..].starts_with('\n') {
+                offset += 1;
+            }
         }
 
         diagnostics

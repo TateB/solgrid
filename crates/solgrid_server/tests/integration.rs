@@ -143,9 +143,17 @@ fn test_code_actions_full_file_range() {
         &uri,
     );
 
-    // Should produce some code actions (the source has fixable issues)
-    // Even if no fixes, the function should not panic
-    let _ = result;
+    // Code actions should be valid — each must have a non-empty title
+    for action in &result {
+        match action {
+            ls_types::CodeActionOrCommand::CodeAction(ca) => {
+                assert!(!ca.title.is_empty(), "code action should have a title");
+            }
+            ls_types::CodeActionOrCommand::Command(cmd) => {
+                assert!(!cmd.title.is_empty(), "command should have a title");
+            }
+        }
+    }
 }
 
 #[test]
@@ -195,8 +203,10 @@ fn test_format_range_subset() {
     };
 
     let edits = format::format_range(source, &range, &config);
-    // Should not crash
-    let _ = edits;
+    // Edits should have valid ranges
+    for edit in &edits {
+        assert!(edit.range.start.line <= edit.range.end.line);
+    }
 }
 
 // =============================================================================
@@ -343,14 +353,35 @@ contract Test {
         &full_range,
         &uri,
     );
-    let _ = code_actions; // May or may not have fixable items
+    for action in &code_actions {
+        match action {
+            ls_types::CodeActionOrCommand::CodeAction(ca) => {
+                assert!(!ca.title.is_empty(), "code action should have a title");
+            }
+            ls_types::CodeActionOrCommand::Command(cmd) => {
+                assert!(!cmd.title.is_empty(), "command should have a title");
+            }
+        }
+    }
 
-    // Step 3: Format
+    // Step 3: Format — should produce valid edits
     let format_edits = format::format_document(source, &config.format);
-    let _ = format_edits;
+    for edit in &format_edits {
+        assert!(edit.range.start.line <= edit.range.end.line);
+        assert!(!edit.new_text.is_empty(), "format edit should have content");
+    }
 
-    // Step 4: Hover over a diagnostic
-    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(4, 20), "");
-    // May or may not find a diagnostic at this exact position depending on spans
-    let _ = hover;
+    // Step 4: Hover over a diagnostic — should find the tx.origin diagnostic
+    let tx_diag = diags.iter().find(|d| {
+        matches!(&d.code, Some(ls_types::NumberOrString::String(id)) if id == "security/tx-origin")
+    });
+    assert!(tx_diag.is_some(), "should have found tx-origin diagnostic");
+    let tx_diag = tx_diag.unwrap();
+    let hover_pos =
+        ls_types::Position::new(tx_diag.range.start.line, tx_diag.range.start.character + 1);
+    let hover = hover::hover_at_position(&engine, &diags, &hover_pos, "");
+    assert!(
+        hover.is_some(),
+        "should find hover info for tx-origin diagnostic"
+    );
 }

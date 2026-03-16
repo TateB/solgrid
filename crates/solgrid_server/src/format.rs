@@ -1,6 +1,5 @@
 //! Formatting — full-document and range formatting via the LSP.
 
-use crate::convert;
 use solgrid_config::FormatConfig;
 use tower_lsp_server::ls_types;
 
@@ -25,66 +24,17 @@ pub fn format_document(source: &str, config: &FormatConfig) -> Vec<ls_types::Tex
 
 /// Format a range within a document.
 ///
-/// Since the formatter operates on full source units, we format the entire
-/// document and then extract only the edits that fall within the requested range.
-/// If no changes fall within the range, we return an empty vec.
+/// Since the formatter operates on full source units (it needs the complete
+/// AST), we format the entire document and replace it wholesale. The LSP
+/// client will apply the minimal diff. Attempting to do a line-by-line diff
+/// here is unreliable when formatting changes the number of lines.
 pub fn format_range(
     source: &str,
-    range: &ls_types::Range,
+    _range: &ls_types::Range,
     config: &FormatConfig,
 ) -> Vec<ls_types::TextEdit> {
-    match solgrid_formatter::format_source(source, config) {
-        Ok(formatted) => {
-            if formatted == source {
-                return Vec::new();
-            }
-
-            // Convert the requested range to byte offsets
-            let range_start = convert::position_to_offset(source, range.start);
-            let range_end = convert::position_to_offset(source, range.end);
-
-            // Find lines that changed within the requested range
-            let old_lines: Vec<&str> = source.lines().collect();
-            let new_lines: Vec<&str> = formatted.lines().collect();
-
-            let mut edits = Vec::new();
-            let mut old_offset = 0usize;
-
-            for (i, old_line) in old_lines.iter().enumerate() {
-                let line_end = old_offset + old_line.len();
-
-                // Check if this line is within the requested range
-                if line_end >= range_start && old_offset <= range_end {
-                    if let Some(&new_line) = new_lines.get(i) {
-                        if *old_line != new_line {
-                            edits.push(ls_types::TextEdit {
-                                range: ls_types::Range {
-                                    start: ls_types::Position::new(i as u32, 0),
-                                    end: ls_types::Position::new(i as u32, old_line.len() as u32),
-                                },
-                                new_text: new_line.to_string(),
-                            });
-                        }
-                    }
-                }
-
-                // +1 for the newline character
-                old_offset = line_end + 1;
-            }
-
-            // If line-level diffing produced no edits but the file changed,
-            // fall back to replacing the entire requested range
-            if edits.is_empty() && formatted != source {
-                vec![ls_types::TextEdit {
-                    range: full_document_range(source),
-                    new_text: formatted,
-                }]
-            } else {
-                edits
-            }
-        }
-        Err(_) => Vec::new(),
-    }
+    // Format the whole document — the formatter needs full context.
+    format_document(source, config)
 }
 
 /// Compute the LSP range covering the entire document.
@@ -124,9 +74,16 @@ mod tests {
             "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract    Test  {\n}\n";
         let config = FormatConfig::default();
         let edits = format_document(source, &config);
-        // May or may not produce edits depending on how the formatter handles this
-        // The important thing is no crash
-        let _ = edits;
+        // Source has extra spaces — formatting should produce edits
+        assert!(
+            !edits.is_empty(),
+            "source with extra whitespace should produce format edits"
+        );
+        // The edit should contain the cleaned-up contract name
+        assert!(
+            edits[0].new_text.contains("contract Test {"),
+            "formatted output should normalize whitespace in contract declaration"
+        );
     }
 
     #[test]
@@ -139,8 +96,10 @@ mod tests {
             end: ls_types::Position::new(1, 0),
         };
         let edits = format_range(source, &range, &config);
-        // Should not crash
-        let _ = edits;
+        // Edits should have valid ranges
+        for edit in &edits {
+            assert!(edit.range.start.line <= edit.range.end.line);
+        }
     }
 
     #[test]

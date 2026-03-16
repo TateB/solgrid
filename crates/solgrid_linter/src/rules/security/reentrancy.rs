@@ -79,57 +79,110 @@ impl Rule for ReentrancyRule {
 
 /// Check a function body for CEI violations.
 /// Walk statements linearly, tracking whether an external call has been seen.
+/// Returns true if an external call was found in these statements.
 fn check_function_body(
     stmts: &[Stmt<'_>],
     state_vars: &[String],
     source: &str,
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> bool {
     let mut seen_external_call = false;
 
     for stmt in stmts {
         let stmt_text = solgrid_ast::span_text(source, stmt.span);
 
         // Check if this statement contains an external call
-        if !seen_external_call && contains_external_call(stmt_text) {
+        if contains_external_call(stmt_text) {
             seen_external_call = true;
-            continue;
         }
 
         // If we've seen an external call, check for state variable assignments
+        // (including in the same statement that contains the call)
         if seen_external_call {
-            if let Some(var_name) = assigns_state_var(stmt_text, state_vars) {
-                let range = solgrid_ast::span_to_range(stmt.span);
-                diagnostics.push(Diagnostic::new(
-                    META.id,
-                    format!(
-                        "state variable `{var_name}` is modified after an external call (CEI violation)"
-                    ),
-                    META.default_severity,
-                    range,
-                ));
-            }
+            check_stmt_for_state_assignment(stmt, state_vars, source, diagnostics);
         }
 
-        // Recursively check nested blocks
-        if let StmtKind::Block(block) = &stmt.kind {
-            if seen_external_call {
-                for s in block.stmts.iter() {
-                    let s_text = solgrid_ast::span_text(source, s.span);
-                    if let Some(var_name) = assigns_state_var(s_text, state_vars) {
-                        let range = solgrid_ast::span_to_range(s.span);
-                        diagnostics.push(Diagnostic::new(
-                            META.id,
-                            format!(
-                                "state variable `{var_name}` is modified after an external call (CEI violation)"
-                            ),
-                            META.default_severity,
-                            range,
-                        ));
-                    }
-                }
-            }
+        // Recursively check nested control flow for external calls
+        // that might set seen_external_call for subsequent statements
+        if !seen_external_call {
+            seen_external_call = check_nested_for_external_call(stmt, source);
         }
+    }
+
+    seen_external_call
+}
+
+/// Check a single statement (and its nested children) for state variable
+/// assignments, used when we know an external call has already been seen.
+fn check_stmt_for_state_assignment(
+    stmt: &Stmt<'_>,
+    state_vars: &[String],
+    source: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let stmt_text = solgrid_ast::span_text(source, stmt.span);
+
+    // Don't flag the statement if it only contains external calls, not assignments
+    if contains_external_call(stmt_text) && assigns_state_var(stmt_text, state_vars).is_none() {
+        return;
+    }
+
+    if let Some(var_name) = assigns_state_var(stmt_text, state_vars) {
+        let range = solgrid_ast::span_to_range(stmt.span);
+        diagnostics.push(Diagnostic::new(
+            META.id,
+            format!(
+                "state variable `{var_name}` is modified after an external call (CEI violation)"
+            ),
+            META.default_severity,
+            range,
+        ));
+        return;
+    }
+
+    // Recurse into nested blocks of control flow statements
+    for nested in get_nested_stmts(stmt) {
+        check_stmt_for_state_assignment(nested, state_vars, source, diagnostics);
+    }
+}
+
+/// Check if a statement (or its nested children) contains an external call.
+fn check_nested_for_external_call(stmt: &Stmt<'_>, source: &str) -> bool {
+    let stmt_text = solgrid_ast::span_text(source, stmt.span);
+    if contains_external_call(stmt_text) {
+        return true;
+    }
+    for nested in get_nested_stmts(stmt) {
+        if check_nested_for_external_call(nested, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract nested statements from control flow constructs.
+fn get_nested_stmts<'a, 'ast>(stmt: &'a Stmt<'ast>) -> Vec<&'a Stmt<'ast>> {
+    match &stmt.kind {
+        StmtKind::Block(block) | StmtKind::UncheckedBlock(block) => block.stmts.iter().collect(),
+        StmtKind::If(_, then_stmt, else_stmt) => {
+            let mut stmts: Vec<&Stmt<'ast>> = vec![then_stmt];
+            if let Some(e) = else_stmt {
+                stmts.push(e);
+            }
+            stmts
+        }
+        StmtKind::While(_, body) | StmtKind::DoWhile(body, _) => {
+            vec![&**body]
+        }
+        StmtKind::For { body, .. } => {
+            vec![&**body]
+        }
+        StmtKind::Try(try_stmt) => try_stmt
+            .clauses
+            .iter()
+            .flat_map(|c| c.block.stmts.iter())
+            .collect(),
+        _ => vec![],
     }
 }
 

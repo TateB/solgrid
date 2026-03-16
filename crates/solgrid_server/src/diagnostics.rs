@@ -128,9 +128,18 @@ contract Test {
             solgrid_config::RuleLevel::Off,
         );
         let diagnostics = lint_to_lsp_diagnostics(&engine, source, Path::new("clean.sol"), &config);
-        // May still have some diagnostics depending on enabled rules,
-        // but the key point is no crash
-        let _ = diagnostics;
+        // Should not detect any security/naming issues on clean code
+        let security_diags: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| {
+                matches!(&d.code, Some(ls_types::NumberOrString::String(id)) if id.starts_with("security/"))
+            })
+            .collect();
+        assert!(
+            security_diags.is_empty(),
+            "clean source should have no security diagnostics, found: {:?}",
+            security_diags.iter().map(|d| &d.code).collect::<Vec<_>>()
+        );
     }
 
     #[test]

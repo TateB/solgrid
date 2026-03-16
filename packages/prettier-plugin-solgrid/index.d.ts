@@ -36,8 +36,13 @@ export interface FormatOptions {
   sortImports?: boolean
   /** solgrid-specific: "attributes_first", "params_first", or "all". */
   multilineFuncHeader?: string
-  /** solgrid-specific: add newlines at start/end of contract body. */
-  contractNewLines?: boolean
+  /**
+   * solgrid-specific: spacing between contract body declarations.
+   * "preserve" (default), "single", or "compact".
+   */
+  contractBodySpacing?: string
+  /** solgrid-specific: put opening brace on new line for multiline inheritance. */
+  inheritanceBraceNewLine?: boolean
 }
 /**
  * Validate that the source is syntactically valid Solidity.

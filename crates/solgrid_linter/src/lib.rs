@@ -6,6 +6,7 @@ pub mod fix;
 pub mod registry;
 pub mod rule;
 pub mod rules;
+pub mod source_utils;
 pub mod suppression;
 
 pub mod testing;

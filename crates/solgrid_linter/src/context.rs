@@ -1,6 +1,8 @@
 //! Lint context — everything a rule needs to inspect source code.
 
+use crate::source_utils::{is_in_non_code_region, scan_source_regions, SourceRegion};
 use solgrid_config::Config;
+use std::cell::OnceCell;
 use std::path::Path;
 
 /// Context provided to each rule during linting.
@@ -14,6 +16,8 @@ pub struct LintContext<'a> {
     pub path: &'a Path,
     /// The active configuration.
     pub config: &'a Config,
+    /// Lazily-computed non-code regions (comments, strings).
+    source_regions: OnceCell<Vec<SourceRegion>>,
 }
 
 impl<'a> LintContext<'a> {
@@ -23,7 +27,19 @@ impl<'a> LintContext<'a> {
             source,
             path,
             config,
+            source_regions: OnceCell::new(),
         }
+    }
+
+    /// Check whether a byte offset falls inside a comment or string literal.
+    ///
+    /// The underlying region scan is computed once (on first call) and cached
+    /// for the lifetime of this context. Subsequent calls are O(log n) lookups.
+    pub fn is_in_comment_or_string(&self, pos: usize) -> bool {
+        let regions = self
+            .source_regions
+            .get_or_init(|| scan_source_regions(self.source));
+        is_in_non_code_region(regions, pos)
     }
 
     /// Get a line and column number for a byte offset.

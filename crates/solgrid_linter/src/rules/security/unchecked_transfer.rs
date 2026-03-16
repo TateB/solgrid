@@ -28,12 +28,12 @@ impl Rule for UncheckedTransferRule {
         let mut diagnostics = Vec::new();
 
         // Flag .transferFrom( — almost always ERC20
-        find_unchecked_calls(ctx.source, ".transferFrom(", &mut diagnostics);
+        find_unchecked_calls(ctx, ".transferFrom(", &mut diagnostics);
 
         // Flag .transfer( only when it looks like ERC20 (has a comma indicating
         // two arguments: `token.transfer(to, amount)`)
         // We skip ETH-style `.transfer(amount)` which has no comma before the closing paren.
-        find_unchecked_transfer_two_arg(ctx.source, &mut diagnostics);
+        find_unchecked_transfer_two_arg(ctx, &mut diagnostics);
 
         diagnostics.sort_by_key(|d| d.span.start);
         diagnostics
@@ -43,11 +43,12 @@ impl Rule for UncheckedTransferRule {
 /// Search for `pattern` (e.g. `.transferFrom(`) as a standalone expression
 /// statement — i.e. not wrapped in `require(`, `assert(`, or assigned to a
 /// variable with `=`.
-fn find_unchecked_calls(source: &str, pattern: &str, diagnostics: &mut Vec<Diagnostic>) {
+fn find_unchecked_calls(ctx: &LintContext<'_>, pattern: &str, diagnostics: &mut Vec<Diagnostic>) {
+    let source = ctx.source;
     let mut search_from = 0;
     while let Some(pos) = source[search_from..].find(pattern) {
         let abs_pos = search_from + pos;
-        if !is_in_comment_or_string(source, abs_pos) && is_unchecked_usage(source, abs_pos) {
+        if !ctx.is_in_comment_or_string(abs_pos) && is_unchecked_usage(source, abs_pos) {
             let method = pattern.trim_start_matches('.').trim_end_matches('(');
             diagnostics.push(Diagnostic::new(
                 META.id,
@@ -64,14 +65,15 @@ fn find_unchecked_calls(source: &str, pattern: &str, diagnostics: &mut Vec<Diagn
 
 /// Flag `.transfer(` that has two arguments (comma present) — likely ERC20,
 /// not ETH transfer.
-fn find_unchecked_transfer_two_arg(source: &str, diagnostics: &mut Vec<Diagnostic>) {
+fn find_unchecked_transfer_two_arg(ctx: &LintContext<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    let source = ctx.source;
     let pattern = ".transfer(";
     let mut search_from = 0;
     while let Some(pos) = source[search_from..].find(pattern) {
         let abs_pos = search_from + pos;
         search_from = abs_pos + pattern.len();
 
-        if is_in_comment_or_string(source, abs_pos) {
+        if ctx.is_in_comment_or_string(abs_pos) {
             continue;
         }
 
@@ -133,32 +135,4 @@ fn is_unchecked_usage(source: &str, pos: usize) -> bool {
     }
 
     true
-}
-
-fn is_in_comment_or_string(source: &str, pos: usize) -> bool {
-    let before = &source[..pos];
-    // Check if inside a line comment
-    if let Some(last_newline) = before.rfind('\n') {
-        let line = &before[last_newline..];
-        if line.contains("//") {
-            let comment_pos = before.rfind("//").unwrap();
-            if comment_pos > last_newline {
-                return true;
-            }
-        }
-    } else if before.contains("//") {
-        return true;
-    }
-    // Check if inside a block comment
-    let block_opens = before.matches("/*").count();
-    let block_closes = before.matches("*/").count();
-    if block_opens > block_closes {
-        return true;
-    }
-    // Check if inside a string literal (simple heuristic)
-    let double_quotes = before.matches('"').count();
-    if !double_quotes.is_multiple_of(2) {
-        return true;
-    }
-    false
 }
