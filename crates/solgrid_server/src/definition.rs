@@ -1,8 +1,8 @@
 //! Go-to-definition handler for the LSP server.
 
+use crate::convert;
 use crate::resolve::ImportResolver;
 use crate::symbols::{self, ImportedSymbols};
-use crate::convert;
 use std::path::Path;
 use tower_lsp_server::ls_types;
 
@@ -59,7 +59,12 @@ pub fn goto_definition(
         // Cross-file member access: resolve container in imports, then member in that file.
         let importing_file = uri_to_path(uri)?;
         if let Some(result) = resolve_cross_file_member(
-            &table, &container, &source[member_range], &importing_file, get_source, resolver,
+            &table,
+            &container,
+            &source[member_range],
+            &importing_file,
+            get_source,
+            resolver,
         ) {
             return Some(result);
         }
@@ -319,10 +324,8 @@ contract Main is Token {}
         let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
         assert!(result.is_some());
         if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
-            let expected_uri = ls_types::Uri::from_file_path(
-                &token_path.canonicalize().unwrap(),
-            )
-            .unwrap();
+            let expected_uri =
+                ls_types::Uri::from_file_path(&token_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             // Should point to the "Token" name in the contract definition.
             assert_ne!(loc.range, ls_types::Range::default());
@@ -488,7 +491,10 @@ contract Main {
         let pos = convert::offset_to_position(main_source, offset);
 
         let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
-        assert!(result.is_some(), "expected definition for cross-file TokenLib.mint");
+        assert!(
+            result.is_some(),
+            "expected definition for cross-file TokenLib.mint"
+        );
         if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
             let expected_uri =
                 ls_types::Uri::from_file_path(&token_path.canonicalize().unwrap()).unwrap();
@@ -516,8 +522,7 @@ contract Main {
         let offset = source.find("Missing m").unwrap();
         let pos = convert::offset_to_position(source, offset);
 
-        let result =
-            goto_definition(source, &pos, &uri, &noop_source, &noop_resolver());
+        let result = goto_definition(source, &pos, &uri, &noop_source, &noop_resolver());
         // Should return None since the import can't be resolved.
         assert!(result.is_none());
     }

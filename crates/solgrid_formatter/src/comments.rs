@@ -47,16 +47,25 @@ pub fn extract_comments(source: &str) -> Vec<Comment> {
 
         if bytes[i] == b'/' && i + 1 < len {
             if bytes[i + 1] == b'/' {
-                // Line comment
+                // Line comment — detect NatSpec `///` vs regular `//`
                 let start = i;
-                i += 2; // skip //
+                let is_doc = i + 2 < len && bytes[i + 2] == b'/';
+                if is_doc {
+                    i += 3; // skip ///
+                } else {
+                    i += 2; // skip //
+                }
                 let content_start = i;
                 while i < len && bytes[i] != b'\n' {
                     i += 1;
                 }
                 let content = source[content_start..i].to_string();
                 comments.push(Comment {
-                    kind: CommentKind::Line,
+                    kind: if is_doc {
+                        CommentKind::DocLine
+                    } else {
+                        CommentKind::Line
+                    },
                     range: start..i,
                     content,
                     consumed: false,

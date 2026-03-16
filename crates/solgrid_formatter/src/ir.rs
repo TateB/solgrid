@@ -35,6 +35,8 @@ pub enum FormatChunk {
 pub enum CommentKind {
     /// `// ...`
     Line,
+    /// `/// ...` (NatSpec doc comment)
+    DocLine,
     /// `/* ... */`
     Block,
 }

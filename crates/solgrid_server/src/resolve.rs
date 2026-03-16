@@ -225,19 +225,16 @@ mod tests {
     #[test]
     fn test_resolve_node_modules() {
         let dir = tempfile::tempdir().unwrap();
-        let nm_path =
-            dir.path()
-                .join("node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol");
+        let nm_path = dir
+            .path()
+            .join("node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol");
         fs::create_dir_all(nm_path.parent().unwrap()).unwrap();
         fs::write(&nm_path, "contract ERC20 {}").unwrap();
 
         let importing = dir.path().join("src/Main.sol");
         let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
         let resolved = resolver
-            .resolve(
-                "@openzeppelin/contracts/token/ERC20/ERC20.sol",
-                &importing,
-            )
+            .resolve("@openzeppelin/contracts/token/ERC20/ERC20.sol", &importing)
             .unwrap();
         assert_eq!(resolved, nm_path);
     }
@@ -276,10 +273,7 @@ mod tests {
         let importing = dir.path().join("src/Main.sol");
         let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
         let resolved = resolver
-            .resolve(
-                "@openzeppelin/contracts/token/ERC20/ERC20.sol",
-                &importing,
-            )
+            .resolve("@openzeppelin/contracts/token/ERC20/ERC20.sol", &importing)
             .unwrap();
         assert_eq!(resolved, target);
     }

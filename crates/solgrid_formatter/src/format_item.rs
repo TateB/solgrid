@@ -3,6 +3,7 @@
 //! Handles pragma, imports, contracts, functions, structs, enums, events,
 //! errors, UDVTs, using-for, and variable declarations.
 
+use crate::comments::CommentStore;
 use crate::format_expr::format_expr;
 use crate::format_stmt::{format_block, format_params};
 use crate::format_ty::{
@@ -10,16 +11,23 @@ use crate::format_ty::{
 };
 use crate::ir::*;
 use solar_ast::*;
-use solgrid_ast::span_text;
+use solgrid_ast::{span_text, span_to_range};
 use solgrid_config::FormatConfig;
 
 /// Format a top-level item.
-pub fn format_item(item: &Item<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+pub fn format_item(
+    item: &Item<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     match &item.kind {
         ItemKind::Pragma(pragma) => format_pragma(pragma, item.span, source),
         ItemKind::Import(import) => format_import(import, source, config),
-        ItemKind::Contract(contract) => format_contract(contract, item.span, source, config),
-        ItemKind::Function(func) => format_function(func, source, config),
+        ItemKind::Contract(contract) => {
+            format_contract(contract, item.span, source, config, comments)
+        }
+        ItemKind::Function(func) => format_function(func, source, config, comments),
         ItemKind::Variable(var) => format_variable_def(var, source, config),
         ItemKind::Struct(s) => format_struct(s, source, config),
         ItemKind::Enum(e) => format_enum(e),
@@ -77,20 +85,22 @@ fn format_import(import: &ImportDirective<'_>, source: &str, config: &FormatConf
                 })
                 .collect();
 
-            let inner = join(items, text(", "));
+            let inner = join(items, concat(vec![text(","), line()]));
 
             if config.bracket_spacing {
                 group(vec![
-                    text("import { "),
-                    inner,
-                    text(" } from "),
+                    text("import {"),
+                    indent(vec![line(), inner]),
+                    line(),
+                    text("} from "),
                     text(path_str),
                     text(";"),
                 ])
             } else {
                 group(vec![
                     text("import {"),
-                    inner,
+                    indent(vec![softline(), inner]),
+                    softline(),
                     text("} from "),
                     text(path_str),
                     text(";"),
@@ -113,6 +123,7 @@ fn format_contract(
     _span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
 ) -> FormatChunk {
     let kind_str = match contract.kind {
         ContractKind::Contract => "contract",
@@ -125,7 +136,7 @@ fn format_contract(
 
     // Inheritance
     if !contract.bases.is_empty() {
-        header.push(text(" is "));
+        header.push(text(" is"));
         let bases: Vec<FormatChunk> = contract
             .bases
             .iter()
@@ -154,7 +165,10 @@ fn format_contract(
                 }
             })
             .collect();
-        header.push(join(bases, text(", ")));
+        header.push(group(vec![indent(vec![
+            line(),
+            join(bases, concat(vec![text(","), line()])),
+        ])]));
     }
 
     header.push(text(" {"));
@@ -167,22 +181,46 @@ fn format_contract(
 
     let mut body_parts = Vec::new();
     let mut prev_kind: Option<ItemCategory> = None;
+    let mut prev_multiline = false;
 
     for item in contract.body.iter() {
+        let item_range = span_to_range(item.span);
         let current_kind = categorize_item(item);
+        let current_multiline = is_multiline_item(item);
 
-        // Add blank line between different categories if contract_new_lines is enabled
-        if config.contract_new_lines {
-            if let (Some(prev), Some(curr)) = (&prev_kind, &current_kind) {
-                if prev != curr {
-                    body_parts.push(hardline());
+        // Emit leading comments for this body item
+        let leading = comments.take_leading(item_range.start);
+        for comment in &leading {
+            body_parts.push(hardline());
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
+        // Add blank line between items when either is multi-line,
+        // or between different categories when contract_new_lines is enabled
+        if prev_kind.is_some() && leading.is_empty() {
+            if prev_multiline || current_multiline {
+                body_parts.push(hardline());
+            } else if config.contract_new_lines {
+                if let (Some(prev), Some(curr)) = (&prev_kind, &current_kind) {
+                    if prev != curr {
+                        body_parts.push(hardline());
+                    }
                 }
             }
         }
 
         body_parts.push(hardline());
-        body_parts.push(format_item(item, source, config));
+        body_parts.push(format_item(item, source, config, comments));
+
+        // Trailing comments on the same line
+        let trailing = comments.take_trailing(source, item_range.end);
+        for comment in &trailing {
+            body_parts.push(space());
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
         prev_kind = current_kind;
+        prev_multiline = current_multiline;
     }
 
     let mut result = header;
@@ -205,6 +243,16 @@ enum ItemCategory {
     Function,
 }
 
+/// Whether an item inherently spans multiple lines (and thus needs blank line separation).
+fn is_multiline_item(item: &Item<'_>) -> bool {
+    match &item.kind {
+        ItemKind::Function(f) => f.body.is_some(),
+        ItemKind::Struct(s) => !s.fields.is_empty(),
+        ItemKind::Enum(e) => !e.variants.is_empty(),
+        _ => false,
+    }
+}
+
 fn categorize_item(item: &Item<'_>) -> Option<ItemCategory> {
     match &item.kind {
         ItemKind::Using(_) => Some(ItemCategory::Using),
@@ -220,7 +268,12 @@ fn categorize_item(item: &Item<'_>) -> Option<ItemCategory> {
 }
 
 /// Format a function definition.
-fn format_function(func: &ItemFunction<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+fn format_function(
+    func: &ItemFunction<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     let kind_str = match func.kind {
         FunctionKind::Constructor => "constructor",
         FunctionKind::Function => "function",
@@ -269,18 +322,23 @@ fn format_function(func: &ItemFunction<'_>, source: &str, config: &FormatConfig)
         if override_.paths.is_empty() {
             attrs.push(text("override"));
         } else {
-            let paths: Vec<String> = override_
+            let path_chunks: Vec<FormatChunk> = override_
                 .paths
                 .iter()
                 .map(|p| {
-                    p.segments()
-                        .iter()
-                        .map(|s| s.as_str().to_string())
-                        .collect::<Vec<_>>()
-                        .join(".")
+                    let segs: Vec<&str> = p.segments().iter().map(|s| s.as_str()).collect();
+                    text(segs.join("."))
                 })
                 .collect();
-            attrs.push(text(format!("override({})", paths.join(", "))));
+            attrs.push(group(vec![
+                text("override("),
+                indent(vec![
+                    softline(),
+                    join(path_chunks, concat(vec![text(","), line()])),
+                ]),
+                softline(),
+                text(")"),
+            ]));
         }
     }
 
@@ -324,22 +382,24 @@ fn format_function(func: &ItemFunction<'_>, source: &str, config: &FormatConfig)
     let mut signature = header_parts;
 
     if !all_attr_chunks.is_empty() || returns_chunk.is_some() {
-        // Try to fit everything on one line, break if needed
+        // Use soft breaks between attributes with indent so long signatures wrap properly
+        let mut attr_parts = Vec::new();
         for attr in &all_attr_chunks {
-            signature.push(space());
-            signature.push(attr.clone());
+            attr_parts.push(line());
+            attr_parts.push(attr.clone());
         }
         if let Some(ret) = &returns_chunk {
-            signature.push(space());
-            signature.push(ret.clone());
+            attr_parts.push(line());
+            attr_parts.push(ret.clone());
         }
+        signature.push(indent(attr_parts));
     }
 
     // Body
     match &func.body {
         Some(body) => {
             signature.push(space());
-            signature.push(format_block(body, source, config));
+            signature.push(format_block(body, source, config, comments));
             group(signature)
         }
         None => {
@@ -377,18 +437,23 @@ fn format_variable_def(
         if override_.paths.is_empty() {
             parts.push(text("override"));
         } else {
-            let paths: Vec<String> = override_
+            let path_chunks: Vec<FormatChunk> = override_
                 .paths
                 .iter()
                 .map(|p| {
-                    p.segments()
-                        .iter()
-                        .map(|s| s.as_str().to_string())
-                        .collect::<Vec<_>>()
-                        .join(".")
+                    let segs: Vec<&str> = p.segments().iter().map(|s| s.as_str()).collect();
+                    text(segs.join("."))
                 })
                 .collect();
-            parts.push(text(format!("override({})", paths.join(", "))));
+            parts.push(group(vec![
+                text("override("),
+                indent(vec![
+                    softline(),
+                    join(path_chunks, concat(vec![text(","), line()])),
+                ]),
+                softline(),
+                text(")"),
+            ]));
         }
     }
 
@@ -482,7 +547,7 @@ fn format_event(event: &ItemEvent<'_>, source: &str, config: &FormatConfig) -> F
                 concat(param_parts)
             })
             .collect();
-        parts.push(join(params, text(", ")));
+        parts.push(join(params, concat(vec![text(","), line()])));
     }
 
     parts.push(text(")"));
@@ -510,7 +575,7 @@ fn format_error(error: &ItemError<'_>, source: &str, config: &FormatConfig) -> F
                 concat(param_parts)
             })
             .collect();
-        parts.push(join(params, text(", ")));
+        parts.push(join(params, concat(vec![text(","), line()])));
     }
 
     parts.push(text(");"));

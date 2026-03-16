@@ -60,26 +60,22 @@ pub fn hover_for_diagnostic(
 ///
 /// Shows the definition signature (e.g., function header, variable type) as a
 /// Solidity code block, followed by any NatSpec documentation.
-pub fn hover_for_symbol(
-    source: &str,
-    position: &ls_types::Position,
-) -> Option<ls_types::Hover> {
+pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<ls_types::Hover> {
     let offset = convert::position_to_offset(source, *position);
     let table = symbols::build_symbol_table(source, "buffer.sol")?;
 
     // Try member access first: `Container.member`
-    let (def, ident_range) =
-        if let Some((container, _member, member_range)) =
-            symbols::find_member_access_at_offset(source, offset)
-        {
-            let container_def = table.resolve(&container, offset)?;
-            let member_def = table.resolve_member(container_def, &source[member_range.clone()])?;
-            (member_def, member_range)
-        } else {
-            let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
-            let def = table.resolve(&name, offset)?;
-            (def, ident_range)
-        };
+    let (def, ident_range) = if let Some((container, _member, member_range)) =
+        symbols::find_member_access_at_offset(source, offset)
+    {
+        let container_def = table.resolve(&container, offset)?;
+        let member_def = table.resolve_member(container_def, &source[member_range.clone()])?;
+        (member_def, member_range)
+    } else {
+        let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
+        let def = table.resolve(&name, offset)?;
+        (def, ident_range)
+    };
 
     let signature = extract_signature(source, def);
     let natspec = extract_natspec(source, def.def_span.start);
@@ -435,7 +431,9 @@ contract Test {
 "#;
         // Hover on "transfer" in the function definition (line 4, col 13)
         let val = hover_value(source, ls_types::Position::new(4, 13)).unwrap();
-        assert!(val.contains("function transfer(address to, uint256 amount) external returns (bool)"));
+        assert!(
+            val.contains("function transfer(address to, uint256 amount) external returns (bool)")
+        );
         assert!(!val.contains("{"));
     }
 
@@ -504,7 +502,9 @@ contract Test {
         let offset = source.find("Transfer").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("event Transfer(address indexed from, address indexed to, uint256 value)"));
+        assert!(
+            val.contains("event Transfer(address indexed from, address indexed to, uint256 value)")
+        );
     }
 
     #[test]
@@ -609,7 +609,9 @@ contract Test {
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
         assert!(
-            val.contains("mapping(address => mapping(address => mapping(uint256 => bool))) public nested"),
+            val.contains(
+                "mapping(address => mapping(address => mapping(uint256 => bool))) public nested"
+            ),
             "got: {val}"
         );
     }
@@ -720,7 +722,10 @@ contract Test {
         let offset = source.find("recipient").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("address payable public recipient"), "got: {val}");
+        assert!(
+            val.contains("address payable public recipient"),
+            "got: {val}"
+        );
     }
 
     #[test]
@@ -736,7 +741,10 @@ contract Test {
         let offset = source.find("MAX_SUPPLY").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("uint256 public constant MAX_SUPPLY"), "got: {val}");
+        assert!(
+            val.contains("uint256 public constant MAX_SUPPLY"),
+            "got: {val}"
+        );
         assert!(!val.contains("1000000"));
 
         let offset = source.find("owner").unwrap();
@@ -774,7 +782,10 @@ contract Test {
         let offset = source.find("orders").unwrap();
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
-        assert!(val.contains("mapping(address => Order[]) public orders"), "got: {val}");
+        assert!(
+            val.contains("mapping(address => Order[]) public orders"),
+            "got: {val}"
+        );
     }
 
     // -- Function signature variations --
@@ -793,15 +804,24 @@ contract Test {
 "#;
         let offset = source.find("pubFn").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("function pubFn() public pure returns (uint256)"), "got: {val}");
+        assert!(
+            val.contains("function pubFn() public pure returns (uint256)"),
+            "got: {val}"
+        );
 
         let offset = source.find("intFn").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("function intFn() internal view returns (bool)"), "got: {val}");
+        assert!(
+            val.contains("function intFn() internal view returns (bool)"),
+            "got: {val}"
+        );
 
         let offset = source.find("extFn").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("function extFn() external payable"), "got: {val}");
+        assert!(
+            val.contains("function extFn() external payable"),
+            "got: {val}"
+        );
 
         let offset = source.find("privFn").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
@@ -827,7 +847,10 @@ contract Test {
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
         assert!(val.contains("function complexFn("), "got: {val}");
         assert!(val.contains("address[] calldata addrs"), "got: {val}");
-        assert!(val.contains("returns (bool success, uint256 count)"), "got: {val}");
+        assert!(
+            val.contains("returns (bool success, uint256 count)"),
+            "got: {val}"
+        );
         assert!(!val.contains("{"), "got: {val}");
     }
 
@@ -861,7 +884,10 @@ contract Test {
 "#;
         let offset = source.find("TransferFailed").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("error TransferFailed(address from, address to, uint256 amount)"), "got: {val}");
+        assert!(
+            val.contains("error TransferFailed(address from, address to, uint256 amount)"),
+            "got: {val}"
+        );
     }
 
     #[test]
@@ -875,7 +901,12 @@ contract Test {
 "#;
         let offset = source.find("Approval").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("event Approval(address indexed owner, address indexed spender, uint256 value)"), "got: {val}");
+        assert!(
+            val.contains(
+                "event Approval(address indexed owner, address indexed spender, uint256 value)"
+            ),
+            "got: {val}"
+        );
     }
 
     #[test]
@@ -889,7 +920,10 @@ contract Test {
 "#;
         let offset = source.find("Color").unwrap();
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("enum Color { Red, Green, Blue }"), "got: {val}");
+        assert!(
+            val.contains("enum Color { Red, Green, Blue }"),
+            "got: {val}"
+        );
     }
 
     #[test]
@@ -930,7 +964,10 @@ contract Test {
         // Hover on "add" in "MathLib.add"
         let offset = source.find("MathLib.add(1").unwrap() + 8; // on 'a' of 'add'
         let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
-        assert!(val.contains("function add(uint256 a, uint256 b) internal pure returns (uint256)"), "got: {val}");
+        assert!(
+            val.contains("function add(uint256 a, uint256 b) internal pure returns (uint256)"),
+            "got: {val}"
+        );
     }
 
     #[test]
@@ -1018,7 +1055,10 @@ contract Test {
     fn test_find_assignment_eq() {
         assert_eq!(find_assignment_eq("uint256 x = 42"), Some(10));
         assert_eq!(find_assignment_eq("mapping(a => b) x"), None);
-        assert_eq!(find_assignment_eq("mapping(a => b) x = something"), Some(18));
+        assert_eq!(
+            find_assignment_eq("mapping(a => b) x = something"),
+            Some(18)
+        );
         assert_eq!(find_assignment_eq("x == y"), None);
         assert_eq!(find_assignment_eq("x != y"), None);
         assert_eq!(find_assignment_eq("x <= y"), None);

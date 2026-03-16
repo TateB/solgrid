@@ -140,7 +140,11 @@ impl SymbolTable {
     /// Resolve a member inside a container symbol's scope.
     ///
     /// E.g., resolve `someFunction` inside `MyContract`'s scope.
-    pub fn resolve_member(&self, container_def: &SymbolDef, member_name: &str) -> Option<&SymbolDef> {
+    pub fn resolve_member(
+        &self,
+        container_def: &SymbolDef,
+        member_name: &str,
+    ) -> Option<&SymbolDef> {
         let scope_id = container_def.scope?;
         let scope = &self.scopes[scope_id];
         scope.symbols.iter().find(|s| s.name == member_name)
@@ -150,7 +154,10 @@ impl SymbolTable {
 /// Detect a member access pattern at the given offset.
 ///
 /// If the cursor is on `bar` in `foo.bar`, returns `(container_name, member_name, member_ident_range)`.
-pub fn find_member_access_at_offset(source: &str, offset: usize) -> Option<(String, String, Range<usize>)> {
+pub fn find_member_access_at_offset(
+    source: &str,
+    offset: usize,
+) -> Option<(String, String, Range<usize>)> {
     let bytes = source.as_bytes();
     let (member_name, member_range) = find_ident_at_offset(source, offset)?;
 
@@ -472,9 +479,7 @@ fn collect_item(
                         })
                         .collect(),
                 ),
-                ImportItems::Glob(alias) => {
-                    ImportedSymbols::Glob(alias.as_str().to_string())
-                }
+                ImportItems::Glob(alias) => ImportedSymbols::Glob(alias.as_str().to_string()),
             };
             table.imports.push(ImportInfo {
                 path,
@@ -488,23 +493,13 @@ fn collect_item(
     }
 }
 
-fn collect_stmts(
-    table: &mut SymbolTable,
-    scope: ScopeId,
-    source: &str,
-    stmts: &[Stmt<'_>],
-) {
+fn collect_stmts(table: &mut SymbolTable, scope: ScopeId, source: &str, stmts: &[Stmt<'_>]) {
     for stmt in stmts {
         collect_stmt(table, scope, source, stmt);
     }
 }
 
-fn collect_stmt(
-    table: &mut SymbolTable,
-    scope: ScopeId,
-    source: &str,
-    stmt: &Stmt<'_>,
-) {
+fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &Stmt<'_>) {
     match &stmt.kind {
         StmtKind::DeclSingle(var_def) => {
             if let Some(name_ident) = var_def.name {

@@ -72,7 +72,14 @@ impl SolgridServer {
         let path = uri_to_path(uri);
         let config = self.config.read().await.clone();
 
-        let lsp_diags = diagnostics::lint_to_lsp_diagnostics(&self.engine, &source, &path, &config);
+        let mut lsp_diags =
+            diagnostics::lint_to_lsp_diagnostics(&self.engine, &source, &path, &config);
+
+        let resolver = self.resolver.read().await;
+        lsp_diags.extend(diagnostics::unresolved_import_diagnostics(
+            &source, &path, &resolver,
+        ));
+        drop(resolver);
 
         // Cache the diagnostics for hover lookups
         {

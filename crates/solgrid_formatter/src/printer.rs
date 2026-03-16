@@ -118,6 +118,11 @@ pub fn print_chunks(chunk: &FormatChunk, config: &FormatConfig) -> String {
                     output.push_str(content);
                     pos = 0; // Will be followed by a newline typically
                 }
+                CommentKind::DocLine => {
+                    output.push_str("///");
+                    output.push_str(content);
+                    pos = 0;
+                }
                 CommentKind::Block => {
                     output.push_str("/*");
                     output.push_str(content);
@@ -175,6 +180,7 @@ fn measure_flat_width(chunks: &[FormatChunk]) -> usize {
                             1
                         } + content.len()
                     }
+                    CommentKind::DocLine => 3 + content.len(),
                     CommentKind::Block => 4 + content.len(),
                 };
                 width = width.saturating_add(w);

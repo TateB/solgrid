@@ -112,11 +112,7 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             let inner = join(items, text(", "));
             group(vec![text("("), inner, text(")")])
         }
-        ExprKind::Type(ty) => concat(vec![
-            text("type("),
-            format_type(ty, source, config),
-            text(")"),
-        ]),
+        ExprKind::Type(ty) => format_type(ty, source, config),
         ExprKind::TypeCall(ty) => concat(vec![
             text("type("),
             format_type(ty, source, config),

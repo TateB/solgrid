@@ -1,6 +1,8 @@
 //! Diagnostics — real-time lint integration for the LSP server.
 
 use crate::convert;
+use crate::resolve::ImportResolver;
+use crate::symbols;
 use solgrid_config::Config;
 use solgrid_diagnostics::FileResult;
 use solgrid_linter::LintEngine;
@@ -30,9 +32,40 @@ pub fn file_result_to_lsp_diagnostics(
         .collect()
 }
 
+/// Produce diagnostics for import paths that cannot be resolved.
+pub fn unresolved_import_diagnostics(
+    source: &str,
+    path: &Path,
+    resolver: &ImportResolver,
+) -> Vec<ls_types::Diagnostic> {
+    let table = match symbols::build_symbol_table(source, &path.to_string_lossy()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    table
+        .imports
+        .iter()
+        .filter(|import| resolver.resolve(&import.path, path).is_none())
+        .map(|import| ls_types::Diagnostic {
+            range: convert::span_to_range(source, &import.path_span),
+            severity: Some(ls_types::DiagnosticSeverity::ERROR),
+            code: Some(ls_types::NumberOrString::String("unresolved-import".into())),
+            code_description: None,
+            source: Some("solgrid".into()),
+            message: format!("cannot resolve import \"{}\"", import.path),
+            related_information: None,
+            tags: None,
+            data: None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve::ImportResolver;
+    use std::fs;
 
     #[test]
     fn test_lint_to_lsp_diagnostics_detects_issues() {
@@ -98,5 +131,68 @@ contract Test {
         // May still have some diagnostics depending on enabled rules,
         // but the key point is no crash
         let _ = diagnostics;
+    }
+
+    #[test]
+    fn test_unresolved_import_produces_diagnostic() {
+        let dir = tempfile::tempdir().unwrap();
+        let importing = dir.path().join("Main.sol");
+        fs::write(&importing, "").unwrap();
+
+        let source = r#"import "./NonExistent.sol";"#;
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let diags = unresolved_import_diagnostics(source, &importing, &resolver);
+
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, Some(ls_types::DiagnosticSeverity::ERROR));
+        assert_eq!(
+            diags[0].code,
+            Some(ls_types::NumberOrString::String("unresolved-import".into()))
+        );
+        assert!(diags[0].message.contains("NonExistent.sol"));
+    }
+
+    #[test]
+    fn test_resolved_import_no_diagnostic() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_file = dir.path().join("Token.sol");
+        fs::write(&token_file, "contract Token {}").unwrap();
+        let importing = dir.path().join("Main.sol");
+        fs::write(&importing, "").unwrap();
+
+        let source = r#"import "./Token.sol";"#;
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let diags = unresolved_import_diagnostics(source, &importing, &resolver);
+
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_mixed_resolved_and_unresolved_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_file = dir.path().join("Token.sol");
+        fs::write(&token_file, "contract Token {}").unwrap();
+        let importing = dir.path().join("Main.sol");
+        fs::write(&importing, "").unwrap();
+
+        let source = "import \"./Token.sol\";\nimport \"./Missing.sol\";";
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let diags = unresolved_import_diagnostics(source, &importing, &resolver);
+
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Missing.sol"));
+    }
+
+    #[test]
+    fn test_unresolved_import_parse_failure_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let importing = dir.path().join("Bad.sol");
+        fs::write(&importing, "").unwrap();
+
+        let source = "this is not valid solidity {{{";
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let diags = unresolved_import_diagnostics(source, &importing, &resolver);
+
+        assert!(diags.is_empty());
     }
 }

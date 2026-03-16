@@ -50,28 +50,35 @@ pub fn format_source_unit(
             continue;
         }
 
-        // Emit leading comments
-        let leading = comment_store.take_leading(item_range.start);
-        for comment in &leading {
-            if !chunks.is_empty() {
-                chunks.push(hardline());
-            }
-            chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
-        }
-
         // Handle imports with sorting
         if config.sort_imports && matches!(item.kind, ItemKind::Import(_)) {
+            // Emit leading comments before collecting into import group
+            let leading = comment_store.take_leading(item_range.start);
+            for comment in &leading {
+                if !chunks.is_empty() {
+                    chunks.push(hardline());
+                }
+                chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
             import_group.push((idx, item));
             continue;
         }
 
         // Flush any pending sorted imports before non-import items
         if config.sort_imports && !import_group.is_empty() {
-            flush_sorted_imports(&mut chunks, &import_group, &import_indices, source, config);
+            flush_sorted_imports(
+                &mut chunks,
+                &import_group,
+                &import_indices,
+                source,
+                config,
+                &mut comment_store,
+            );
             import_group.clear();
         }
 
-        // Separate items with blank lines
+        // Separate items with blank lines (before leading comments so blank line
+        // appears before the doc comment block, not between comment and item)
         if !chunks.is_empty() {
             chunks.push(hardline());
             // Add extra blank line between different top-level items
@@ -87,7 +94,21 @@ pub fn format_source_unit(
             }
         }
 
-        chunks.push(format_item(item, source, config));
+        // Emit leading comments
+        let leading = comment_store.take_leading(item_range.start);
+        for comment in &leading {
+            if !chunks.is_empty() {
+                chunks.push(hardline());
+            }
+            chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
+        // Need a hardline between leading comments and the item
+        if !leading.is_empty() {
+            chunks.push(hardline());
+        }
+
+        chunks.push(format_item(item, source, config, &mut comment_store));
 
         // Trailing comments
         let trailing = comment_store.take_trailing(source, item_range.end);
@@ -99,7 +120,14 @@ pub fn format_source_unit(
 
     // Flush remaining sorted imports
     if config.sort_imports && !import_group.is_empty() {
-        flush_sorted_imports(&mut chunks, &import_group, &import_indices, source, config);
+        flush_sorted_imports(
+            &mut chunks,
+            &import_group,
+            &import_indices,
+            source,
+            config,
+            &mut comment_store,
+        );
     }
 
     // Emit any remaining comments
@@ -122,6 +150,7 @@ fn flush_sorted_imports(
     _sorted_indices: &[usize],
     source: &str,
     config: &FormatConfig,
+    comments: &mut crate::comments::CommentStore,
 ) {
     // Sort imports by their path string
     let mut sorted: Vec<&solar_ast::Item<'_>> =
@@ -144,7 +173,7 @@ fn flush_sorted_imports(
         if !chunks.is_empty() {
             chunks.push(hardline());
         }
-        chunks.push(format_item(item, source, config));
+        chunks.push(format_item(item, source, config, comments));
     }
 }
 

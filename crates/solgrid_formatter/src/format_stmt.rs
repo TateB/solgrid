@@ -1,31 +1,37 @@
 //! Statement formatting — converts Solar AST `Stmt` nodes to FormatChunk IR.
 
+use crate::comments::CommentStore;
 use crate::format_expr::{format_call_args, format_expr};
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
 use solar_ast::*;
-use solgrid_ast::span_text;
+use solgrid_ast::{span_text, span_to_range};
 use solgrid_config::FormatConfig;
 use solgrid_parser::solar_interface::SpannedOption;
 
 /// Format a statement.
-pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+pub fn format_stmt(
+    stmt: &Stmt<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     match &stmt.kind {
-        StmtKind::Block(block) => format_block(block, source, config),
+        StmtKind::Block(block) => format_block(block, source, config, comments),
         StmtKind::UncheckedBlock(block) => concat(vec![
             text("unchecked "),
-            format_block(block, source, config),
+            format_block(block, source, config, comments),
         ]),
         StmtKind::If(cond, then_stmt, else_stmt) => {
             let mut parts = vec![
                 text("if ("),
                 format_expr(cond, source, config),
                 text(") "),
-                format_stmt(then_stmt, source, config),
+                format_stmt(then_stmt, source, config, comments),
             ];
             if let Some(else_branch) = else_stmt {
                 parts.push(text(" else "));
-                parts.push(format_stmt(else_branch, source, config));
+                parts.push(format_stmt(else_branch, source, config, comments));
             }
             concat(parts)
         }
@@ -33,11 +39,11 @@ pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> Form
             text("while ("),
             format_expr(cond, source, config),
             text(") "),
-            format_stmt(body, source, config),
+            format_stmt(body, source, config, comments),
         ]),
         StmtKind::DoWhile(body, cond) => concat(vec![
             text("do "),
-            format_stmt(body, source, config),
+            format_stmt(body, source, config, comments),
             text(" while ("),
             format_expr(cond, source, config),
             text(");"),
@@ -49,7 +55,7 @@ pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> Form
             body,
         } => {
             let init_chunk = match init {
-                Some(init_stmt) => format_stmt(init_stmt, source, config),
+                Some(init_stmt) => format_stmt(init_stmt, source, config, comments),
                 None => text(";"),
             };
             let cond_chunk = match cond {
@@ -68,7 +74,7 @@ pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> Form
                 space(),
                 next_chunk,
                 text(") "),
-                format_stmt(body, source, config),
+                format_stmt(body, source, config, comments),
             ])
         }
         StmtKind::Return(expr) => match expr {
@@ -111,7 +117,7 @@ pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> Form
                 text(");"),
             ])
         }
-        StmtKind::Try(try_stmt) => format_try_stmt(try_stmt, source, config),
+        StmtKind::Try(try_stmt) => format_try_stmt(try_stmt, source, config, comments),
         StmtKind::Assembly(_) => {
             // Assembly blocks are emitted verbatim from source.
             let asm_text = span_text(source, stmt.span);
@@ -169,22 +175,48 @@ pub fn format_stmt(stmt: &Stmt<'_>, source: &str, config: &FormatConfig) -> Form
 }
 
 /// Format a block of statements `{ ... }`.
-pub fn format_block(block: &Block<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+pub fn format_block(
+    block: &Block<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     if block.stmts.is_empty() {
         return text("{}");
     }
 
     let mut body_parts = Vec::new();
     for stmt in block.stmts.iter() {
+        let stmt_range = span_to_range(stmt.span);
+
+        // Emit leading comments for this statement
+        let leading = comments.take_leading(stmt_range.start);
+        for comment in &leading {
+            body_parts.push(hardline());
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
         body_parts.push(hardline());
-        body_parts.push(format_stmt(stmt, source, config));
+        body_parts.push(format_stmt(stmt, source, config, comments));
+
+        // Trailing comments on the same line
+        let trailing = comments.take_trailing(source, stmt_range.end);
+        for comment in &trailing {
+            body_parts.push(space());
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])
 }
 
 /// Format a try statement.
-fn format_try_stmt(try_stmt: &StmtTry<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+fn format_try_stmt(
+    try_stmt: &StmtTry<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     let mut parts = vec![text("try "), format_expr(try_stmt.expr, source, config)];
 
     // StmtTry has `clauses`: the first clause is the success block,
@@ -199,7 +231,7 @@ fn format_try_stmt(try_stmt: &StmtTry<'_>, source: &str, config: &FormatConfig) 
                 parts.push(text(")"));
             }
             parts.push(space());
-            parts.push(format_block(&clause.block, source, config));
+            parts.push(format_block(&clause.block, source, config, comments));
         } else {
             // Catch clause
             parts.push(text(" catch"));
@@ -211,7 +243,7 @@ fn format_try_stmt(try_stmt: &StmtTry<'_>, source: &str, config: &FormatConfig) 
             let params = format_params(&clause.args, source, config);
             parts.push(params);
             parts.push(text(") "));
-            parts.push(format_block(&clause.block, source, config));
+            parts.push(format_block(&clause.block, source, config, comments));
         }
     }
 
@@ -239,5 +271,11 @@ pub fn format_params(
             concat(parts)
         })
         .collect();
-    join(items, text(", "))
+    group(vec![
+        indent(vec![
+            softline(),
+            join(items, concat(vec![text(","), line()])),
+        ]),
+        softline(),
+    ])
 }
