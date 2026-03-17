@@ -104,7 +104,7 @@ static SOLIDITY_GLOBALS: &[(&str, BuiltinDef)] = &[
         "assert",
         BuiltinDef {
             signature: "assert(bool condition)",
-            description: "Revert execution if `condition` is `false`. Use for checking internal errors and invariants. Consumes all remaining gas (uses the `INVALID` opcode).",
+            description: "Revert execution if `condition` is `false`. Use for checking internal errors and invariants. Since Solidity 0.8.0, this reverts with a `Panic(0x01)` error (previously it used the `INVALID` opcode and consumed all remaining gas).",
         },
     ),
     (

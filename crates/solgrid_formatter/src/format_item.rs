@@ -171,7 +171,10 @@ fn format_contract(
             // flat: `contract Foo is Bar, Baz {`
             // broken: `contract Foo is\n    Bar,\n    Baz\n{`
             header.push(group(vec![
-                indent(vec![line(), join(bases, concat(vec![text(","), line()]))]),
+                indent(vec![
+                    line(),
+                    join(bases, concat(vec![text(","), line()])),
+                ]),
                 if_flat(text(" {"), concat(vec![hardline(), text("{")])),
             ]));
         } else {

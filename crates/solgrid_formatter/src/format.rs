@@ -182,7 +182,10 @@ fn flush_sorted_imports(
 /// Per the Solidity style guide, each top-level declaration is surrounded by one
 /// blank line on each side. Between two declarations, these stack to produce two
 /// blank lines.
-fn blank_lines_between(prev: Option<&solar_ast::Item<'_>>, current: &solar_ast::Item<'_>) -> usize {
+fn blank_lines_between(
+    prev: Option<&solar_ast::Item<'_>>,
+    current: &solar_ast::Item<'_>,
+) -> usize {
     let Some(prev) = prev else {
         return 0;
     };
