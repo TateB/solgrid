@@ -157,7 +157,7 @@ jobs:
       # Build NAPI native addon for prettier-plugin-solgrid
       - name: Build NAPI addon
         shell: bash
-        run: npx napi build --release --cargo-cwd crates/solgrid_napi --target ${{ matrix.rust-target }}
+        run: npx @napi-rs/cli build --release --cargo-cwd crates/solgrid_napi --target ${{ matrix.rust-target }}
 
       - name: Stage NAPI addon into platform package
         shell: bash
