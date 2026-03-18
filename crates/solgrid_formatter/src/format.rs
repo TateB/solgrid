@@ -101,10 +101,8 @@ pub fn format_source_unit(
             // Skip hardline before the first comment when blank_lines_between
             // already inserted separation — otherwise blank lines stack and we
             // get one more blank line than intended.
-            if i > 0 || extra_blanks == 0 {
-                if !chunks.is_empty() {
-                    chunks.push(hardline());
-                }
+            if (i > 0 || extra_blanks == 0) && !chunks.is_empty() {
+                chunks.push(hardline());
             }
             chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
