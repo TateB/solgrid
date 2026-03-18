@@ -737,6 +737,73 @@ fn test_no_blank_line_between_imports() {
     );
 }
 
+#[test]
+fn test_one_blank_line_between_import_and_contract_with_doc_comment() {
+    let source = r#"import "./Foo.sol";
+
+/// A doc comment.
+contract A {}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("\"./Foo.sol\";\n\n/// A doc comment."),
+        "expected 1 blank line between import and doc comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\"./Foo.sol\";\n\n\n/// A doc comment."),
+        "should NOT have 2 blank lines between import and doc comment, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_one_blank_line_between_import_and_interface_with_comment() {
+    let source = r#"import "./Foo.sol";
+/// Interface doc.
+interface IFoo {}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("\"./Foo.sol\";\n\n/// Interface doc."),
+        "expected 1 blank line between import and commented interface, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\"./Foo.sol\";\n\n\n/// Interface doc."),
+        "should NOT have 2 blank lines between import and commented interface, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_one_blank_line_between_multiple_imports_and_contract_with_comment() {
+    let source = r#"import "./Foo.sol";
+import "./Bar.sol";
+/// Contract doc.
+contract A {}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("\"./Bar.sol\";\n\n/// Contract doc."),
+        "expected 1 blank line between last import and doc comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("\"./Bar.sol\";\n\n\n/// Contract doc."),
+        "should NOT have 2 blank lines between last import and doc comment, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_two_blank_lines_between_contracts_with_doc_comment() {
+    let source = "contract A {}\n/// Doc for B.\ncontract B {}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("}\n\n\n/// Doc for B."),
+        "expected 2 blank lines between contract and next doc comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("}\n\n\n\n/// Doc for B."),
+        "should NOT have 3 blank lines between contract and next doc comment, got:\n{formatted}"
+    );
+}
+
 // ============================================================================
 // Solidity Style Guide — Yes/No Example Tests
 // https://docs.soliditylang.org/en/latest/style-guide.html

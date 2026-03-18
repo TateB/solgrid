@@ -79,9 +79,10 @@ pub fn format_source_unit(
 
         // Separate items with blank lines (before leading comments so blank line
         // appears before the doc comment block, not between comment and item)
+        let mut extra_blanks = 0;
         if !chunks.is_empty() {
             chunks.push(hardline());
-            let extra = blank_lines_between(
+            extra_blanks = blank_lines_between(
                 if idx > 0 {
                     Some(&ast.items[idx - 1])
                 } else {
@@ -89,15 +90,18 @@ pub fn format_source_unit(
                 },
                 item,
             );
-            for _ in 0..extra {
+            for _ in 0..extra_blanks {
                 chunks.push(hardline());
             }
         }
 
         // Emit leading comments
         let leading = comment_store.take_leading(item_range.start);
-        for comment in &leading {
-            if !chunks.is_empty() {
+        for (i, comment) in leading.iter().enumerate() {
+            // Skip hardline before the first comment when blank_lines_between
+            // already inserted separation — otherwise blank lines stack and we
+            // get one more blank line than intended.
+            if (i > 0 || extra_blanks == 0) && !chunks.is_empty() {
                 chunks.push(hardline());
             }
             chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
