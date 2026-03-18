@@ -20,7 +20,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     return;
   }
 
-  const serverPath = getServerPath(solgridConfig);
+  const serverPath = getServerPath(solgridConfig, context.extensionPath);
 
   // Note: don't set `transport: TransportKind.stdio` — it adds `--stdio` to
   // the command args, which solgrid doesn't accept. Omitting transport defaults

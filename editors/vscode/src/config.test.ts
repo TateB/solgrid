@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   SolgridConfig,
   DEFAULT_CONFIG,
@@ -20,10 +23,12 @@ describe("DEFAULT_CONFIG", () => {
 
 describe("getServerPath", () => {
   let savedEnv: string | undefined;
+  let tempDirs: string[] = [];
 
   beforeEach(() => {
     savedEnv = process.env.SOLGRID_BIN;
     delete process.env.SOLGRID_BIN;
+    tempDirs = [];
   });
 
   afterEach(() => {
@@ -31,6 +36,10 @@ describe("getServerPath", () => {
       process.env.SOLGRID_BIN = savedEnv;
     } else {
       delete process.env.SOLGRID_BIN;
+    }
+
+    for (const dir of tempDirs) {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -57,12 +66,25 @@ describe("getServerPath", () => {
     expect(getServerPath(config)).toBe("/env/bin/solgrid");
   });
 
-  it("returns 'solgrid' when path is null and SOLGRID_BIN is unset", () => {
+  it("returns bundled binary when present", () => {
+    const extensionPath = mkdtempSync(join(tmpdir(), "solgrid-vscode-"));
+    const binaryName = process.platform === "win32" ? "solgrid.exe" : "solgrid";
+    const binDir = join(extensionPath, "bin");
+    tempDirs.push(extensionPath);
+
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, binaryName), "");
+
+    const config: SolgridConfig = { ...DEFAULT_CONFIG, path: null };
+    expect(getServerPath(config, extensionPath)).toBe(join(binDir, binaryName));
+  });
+
+  it("returns 'solgrid' when path is null, SOLGRID_BIN is unset, and no bundled binary exists", () => {
     const config: SolgridConfig = { ...DEFAULT_CONFIG, path: null };
     expect(getServerPath(config)).toBe("solgrid");
   });
 
-  it("returns 'solgrid' when path is empty string and SOLGRID_BIN is unset", () => {
+  it("returns 'solgrid' when path is empty string, SOLGRID_BIN is unset, and no bundled binary exists", () => {
     const config: SolgridConfig = { ...DEFAULT_CONFIG, path: "" };
     expect(getServerPath(config)).toBe("solgrid");
   });

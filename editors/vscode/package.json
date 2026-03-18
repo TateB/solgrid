@@ -5,6 +5,10 @@
   "version": "0.0.1",
   "publisher": "solgrid",
   "license": "MIT",
+  "homepage": "https://github.com/TateB/solgrid#readme",
+  "bugs": {
+    "url": "https://github.com/TateB/solgrid/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/TateB/solgrid"

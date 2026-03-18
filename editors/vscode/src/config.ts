@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 /**
  * Pure configuration helpers for the solgrid VSCode extension.
  *
@@ -31,14 +34,25 @@ export const DEFAULT_CONFIG: SolgridConfig = {
  * Priority:
  * 1. User-configured `solgrid.path`
  * 2. `SOLGRID_BIN` environment variable
- * 3. `"solgrid"` (assumes it's on PATH)
+ * 3. Bundled binary inside the extension
+ * 4. `"solgrid"` (assumes it's on PATH)
  */
-export function getServerPath(config: SolgridConfig): string {
+export function getServerPath(
+  config: SolgridConfig,
+  extensionPath?: string
+): string {
   if (config.path) {
     return config.path;
   }
   if (process.env.SOLGRID_BIN) {
     return process.env.SOLGRID_BIN;
+  }
+  if (extensionPath) {
+    const binaryName = process.platform === "win32" ? "solgrid.exe" : "solgrid";
+    const bundledPath = join(extensionPath, "bin", binaryName);
+    if (existsSync(bundledPath)) {
+      return bundledPath;
+    }
   }
   return "solgrid";
 }
