@@ -219,14 +219,14 @@ jobs:
             release/*.vsix
           generate_release_notes: true
 
-      # Publish to VS Code Marketplace (requires VSCE_PAT secret)
-      - name: Publish to VS Marketplace
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          for vsix in release/*.vsix; do
-            npx @vscode/vsce publish --packagePath "$vsix"
-          done
+      # Publish to VS Code Marketplace — temporarily disabled
+      # - name: Publish to VS Marketplace
+      #   env:
+      #     VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      #   run: |
+      #     for vsix in release/*.vsix; do
+      #       npx @vscode/vsce publish --packagePath "$vsix"
+      #     done
 
       # Publish to Open VSX (requires OVSX_PAT secret)
       - name: Publish to Open VSX
