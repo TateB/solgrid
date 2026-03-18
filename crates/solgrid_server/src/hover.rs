@@ -134,7 +134,10 @@ fn hover_for_user_symbol(
     let signature = extract_signature(source, def, table);
 
     // For parameters/returns, extract the relevant @param/@return from the parent function.
-    let doc_md = if matches!(def.kind, SymbolKind::Parameter | SymbolKind::ReturnParameter) {
+    let doc_md = if matches!(
+        def.kind,
+        SymbolKind::Parameter | SymbolKind::ReturnParameter
+    ) {
         table
             .find_enclosing_function(def.def_span.start)
             .and_then(|func_def| extract_natspec(source, func_def.def_span.start))
@@ -242,11 +245,7 @@ fn is_inside_assembly(source: &str, offset: usize) -> bool {
 }
 
 /// Extract a human-readable signature from a symbol's definition span.
-fn extract_signature(
-    source: &str,
-    def: &SymbolDef,
-    table: &symbols::SymbolTable,
-) -> String {
+fn extract_signature(source: &str, def: &SymbolDef, table: &symbols::SymbolTable) -> String {
     let text = &source[def.def_span.clone()];
 
     match def.kind {
@@ -347,7 +346,10 @@ fn format_container_signature(
             SymbolKind::Enum => format!("enum {}", member.name),
             _ => continue,
         };
-        lines.push(format!("  {};", member_sig.trim_end_matches(';').trim_end()));
+        lines.push(format!(
+            "  {};",
+            member_sig.trim_end_matches(';').trim_end()
+        ));
     }
 
     lines.push("}".to_string());
@@ -452,9 +454,7 @@ fn extract_param_doc(natspec: &str, param_name: &str, is_return: bool) -> Option
     let tag = if is_return { "@return" } else { "@param" };
 
     for line in natspec.lines() {
-        let content = strip_natspec_marker(line)
-            .trim_end_matches("*/")
-            .trim_end();
+        let content = strip_natspec_marker(line).trim_end_matches("*/").trim_end();
         if let Some(rest) = content.strip_prefix(tag) {
             let rest = rest.trim_start();
             if let Some(after_name) = rest.strip_prefix(param_name) {
@@ -1419,10 +1419,7 @@ contract Test {
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
         assert!(val.contains("(return) bool success"), "got: {val}");
-        assert!(
-            val.contains("Whether the transfer succeeded"),
-            "got: {val}"
-        );
+        assert!(val.contains("Whether the transfer succeeded"), "got: {val}");
     }
 
     #[test]
@@ -1440,7 +1437,10 @@ contract Test {
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
         assert!(val.contains("(parameter) uint256 a"), "got: {val}");
-        assert!(!val.contains("---"), "should have no doc separator, got: {val}");
+        assert!(
+            !val.contains("---"),
+            "should have no doc separator, got: {val}"
+        );
     }
 
     #[test]

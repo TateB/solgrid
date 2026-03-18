@@ -353,7 +353,10 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
                 ContractBodySpacing::Compact
             };
         }
-        if let Some(v) = fmt.get("inheritance_brace_new_line").and_then(|v| v.as_bool()) {
+        if let Some(v) = fmt
+            .get("inheritance_brace_new_line")
+            .and_then(|v| v.as_bool())
+        {
             config.format.inheritance_brace_new_line = v;
         }
         if let Some(v) = fmt.get("override_spacing").and_then(|v| v.as_bool()) {
@@ -493,10 +496,7 @@ threads = 4
             config.multiline_func_header,
             MultilineFuncHeader::AttributesFirst
         );
-        assert_eq!(
-            config.contract_body_spacing,
-            ContractBodySpacing::Preserve
-        );
+        assert_eq!(config.contract_body_spacing, ContractBodySpacing::Preserve);
         assert!(config.inheritance_brace_new_line);
     }
 

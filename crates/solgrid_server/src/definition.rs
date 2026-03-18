@@ -325,7 +325,7 @@ contract Main is Token {}
         assert!(result.is_some());
         if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
             let expected_uri =
-                ls_types::Uri::from_file_path(&token_path.canonicalize().unwrap()).unwrap();
+                ls_types::Uri::from_file_path(token_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             // Should point to the "Token" name in the contract definition.
             assert_ne!(loc.range, ls_types::Range::default());
@@ -497,7 +497,7 @@ contract Main {
         );
         if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
             let expected_uri =
-                ls_types::Uri::from_file_path(&token_path.canonicalize().unwrap()).unwrap();
+                ls_types::Uri::from_file_path(token_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             assert_ne!(loc.range, ls_types::Range::default());
         } else {
