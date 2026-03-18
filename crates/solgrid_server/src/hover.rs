@@ -1,5 +1,6 @@
 //! Hover — symbol signatures, NatSpec documentation, and rule documentation.
 
+use crate::builtins::{self, BuiltinDef};
 use crate::symbols::{SymbolDef, SymbolKind};
 use crate::{convert, symbols};
 use solgrid_diagnostics::{FixAvailability, RuleMeta};
@@ -60,27 +61,83 @@ pub fn hover_for_diagnostic(
 ///
 /// Shows the definition signature (e.g., function header, variable type) as a
 /// Solidity code block, followed by any NatSpec documentation.
+/// Falls back to built-in definitions for native Solidity/Yul identifiers.
 pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<ls_types::Hover> {
     let offset = convert::position_to_offset(source, *position);
-    let table = symbols::build_symbol_table(source, "buffer.sol")?;
+    let table = symbols::build_symbol_table(source, "buffer.sol");
 
     // Try member access first: `Container.member`
-    let (def, ident_range) = if let Some((container, _member, member_range)) =
+    if let Some((container, _member, member_range)) =
         symbols::find_member_access_at_offset(source, offset)
     {
-        let container_def = table.resolve(&container, offset)?;
-        let member_def = table.resolve_member(container_def, &source[member_range.clone()])?;
-        (member_def, member_range)
-    } else {
-        let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
-        let def = table.resolve(&name, offset)?;
-        (def, ident_range)
-    };
+        let member_name = &source[member_range.clone()];
 
-    let signature = extract_signature(source, def, &table);
+        // 1a. Try user-defined symbol resolution
+        if let Some(tbl) = &table {
+            if let Some(container_def) = tbl.resolve(&container, offset) {
+                if let Some(member_def) = tbl.resolve_member(container_def, member_name) {
+                    return Some(hover_for_user_symbol(
+                        source,
+                        member_def,
+                        tbl,
+                        &member_range,
+                    ));
+                }
+            }
+        }
+
+        // 1b. Fall back to builtin namespace member (msg.sender, abi.encode, etc.)
+        if let Some(builtin) = builtins::lookup_solidity_member(&container, member_name) {
+            return Some(make_builtin_hover(builtin, source, &member_range));
+        }
+
+        // Could not resolve member access — fall through to try the identifier alone
+    }
+
+    // Try simple identifier
+    let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
+
+    // 2a. Try user-defined symbol resolution
+    if let Some(tbl) = &table {
+        if let Some(def) = tbl.resolve(&name, offset) {
+            return Some(hover_for_user_symbol(source, def, tbl, &ident_range));
+        }
+    }
+
+    // 2b. Try Solidity global function (keccak256, require, etc.)
+    if let Some(builtin) = builtins::lookup_solidity_global(&name) {
+        return Some(make_builtin_hover(builtin, source, &ident_range));
+    }
+
+    // 2c. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
+    if let Some(builtin) = builtins::lookup_solidity_namespace(&name) {
+        return Some(make_builtin_hover(builtin, source, &ident_range));
+    }
+
+    // 2d. Try Yul built-in (only inside assembly blocks)
+    if is_inside_assembly(source, offset) {
+        if let Some(builtin) = builtins::lookup_yul_builtin(&name) {
+            return Some(make_builtin_hover(builtin, source, &ident_range));
+        }
+    }
+
+    None
+}
+
+/// Build a hover response for a user-defined symbol (extracted from the original inline logic).
+fn hover_for_user_symbol(
+    source: &str,
+    def: &SymbolDef,
+    table: &symbols::SymbolTable,
+    ident_range: &std::ops::Range<usize>,
+) -> ls_types::Hover {
+    let signature = extract_signature(source, def, table);
 
     // For parameters/returns, extract the relevant @param/@return from the parent function.
-    let doc_md = if matches!(def.kind, SymbolKind::Parameter | SymbolKind::ReturnParameter) {
+    let doc_md = if matches!(
+        def.kind,
+        SymbolKind::Parameter | SymbolKind::ReturnParameter
+    ) {
         table
             .find_enclosing_function(def.def_span.start)
             .and_then(|func_def| extract_natspec(source, func_def.def_span.start))
@@ -102,23 +159,93 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
         content.push_str(doc);
     }
 
-    let range = convert::span_to_range(source, &ident_range);
+    let range = convert::span_to_range(source, ident_range);
 
-    Some(ls_types::Hover {
+    ls_types::Hover {
         contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
             kind: ls_types::MarkupKind::Markdown,
             value: content,
         }),
         range: Some(range),
-    })
+    }
+}
+
+/// Build a hover response for a built-in definition.
+fn make_builtin_hover(
+    builtin: &BuiltinDef,
+    source: &str,
+    ident_range: &std::ops::Range<usize>,
+) -> ls_types::Hover {
+    let mut content = String::new();
+    content.push_str("```solidity\n");
+    content.push_str(builtin.signature);
+    content.push_str("\n```");
+
+    if !builtin.description.is_empty() {
+        content.push_str("\n\n---\n\n");
+        content.push_str(builtin.description);
+    }
+
+    let range = convert::span_to_range(source, ident_range);
+
+    ls_types::Hover {
+        contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+            kind: ls_types::MarkupKind::Markdown,
+            value: content,
+        }),
+        range: Some(range),
+    }
+}
+
+/// Heuristic check: is the byte offset inside an `assembly { }` block?
+///
+/// Walks backward from `offset`, tracking brace depth. When an unmatched `{`
+/// is found, checks whether it is preceded by the `assembly` keyword.
+/// Braces inside strings and comments are skipped using `source_utils`.
+fn is_inside_assembly(source: &str, offset: usize) -> bool {
+    use solgrid_linter::source_utils::{is_in_non_code_region, scan_source_regions};
+
+    let regions = scan_source_regions(source);
+    let before = &source[..offset.min(source.len())];
+    let bytes = before.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = bytes.len();
+
+    while i > 0 {
+        i -= 1;
+        // Skip braces that are inside strings or comments.
+        if is_in_non_code_region(&regions, i) {
+            continue;
+        }
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' => {
+                depth -= 1;
+                if depth < 0 {
+                    // Found an unmatched opening brace — check for `assembly` keyword.
+                    let preceding = &before[..i];
+                    let trimmed = preceding.trim_end();
+                    if trimmed.ends_with("assembly") {
+                        let before_keyword = trimmed.len() - "assembly".len();
+                        // Make sure it's a standalone keyword (not part of another identifier).
+                        if before_keyword == 0
+                            || !before.as_bytes()[before_keyword - 1].is_ascii_alphanumeric()
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
 }
 
 /// Extract a human-readable signature from a symbol's definition span.
-fn extract_signature(
-    source: &str,
-    def: &SymbolDef,
-    table: &symbols::SymbolTable,
-) -> String {
+fn extract_signature(source: &str, def: &SymbolDef, table: &symbols::SymbolTable) -> String {
     let text = &source[def.def_span.clone()];
 
     match def.kind {
@@ -219,7 +346,10 @@ fn format_container_signature(
             SymbolKind::Enum => format!("enum {}", member.name),
             _ => continue,
         };
-        lines.push(format!("  {};", member_sig.trim_end_matches(';').trim_end()));
+        lines.push(format!(
+            "  {};",
+            member_sig.trim_end_matches(';').trim_end()
+        ));
     }
 
     lines.push("}".to_string());
@@ -324,9 +454,7 @@ fn extract_param_doc(natspec: &str, param_name: &str, is_return: bool) -> Option
     let tag = if is_return { "@return" } else { "@param" };
 
     for line in natspec.lines() {
-        let content = strip_natspec_marker(line)
-            .trim_end_matches("*/")
-            .trim_end();
+        let content = strip_natspec_marker(line).trim_end_matches("*/").trim_end();
         if let Some(rest) = content.strip_prefix(tag) {
             let rest = rest.trim_start();
             if let Some(after_name) = rest.strip_prefix(param_name) {
@@ -1291,10 +1419,7 @@ contract Test {
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
         assert!(val.contains("(return) bool success"), "got: {val}");
-        assert!(
-            val.contains("Whether the transfer succeeded"),
-            "got: {val}"
-        );
+        assert!(val.contains("Whether the transfer succeeded"), "got: {val}");
     }
 
     #[test]
@@ -1312,7 +1437,10 @@ contract Test {
         let pos = convert::offset_to_position(source, offset);
         let val = hover_value(source, pos).unwrap();
         assert!(val.contains("(parameter) uint256 a"), "got: {val}");
-        assert!(!val.contains("---"), "should have no doc separator, got: {val}");
+        assert!(
+            !val.contains("---"),
+            "should have no doc separator, got: {val}"
+        );
     }
 
     #[test]
@@ -1387,5 +1515,218 @@ contract Token {
         assert!(val.contains("uint256 public totalSupply"), "got: {val}");
         assert!(val.contains("function transfer("), "got: {val}");
         assert!(val.contains("event Transfer("), "got: {val}");
+    }
+
+    // -- Built-in hover tests --
+
+    #[test]
+    fn test_hover_builtin_keccak256() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function hash(bytes memory data) public pure returns (bytes32) {
+        return keccak256(data);
+    }
+}
+"#;
+        let offset = source.find("keccak256(data)").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("keccak256"), "got: {val}");
+        assert!(val.contains("bytes32"), "got: {val}");
+        assert!(val.contains("Keccak-256"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_builtin_require() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public pure {
+        require(true);
+    }
+}
+"#;
+        let offset = source.find("require(true)").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("require"), "got: {val}");
+        assert!(val.contains("bool"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_builtin_msg_sender() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public view returns (address) {
+        return msg.sender;
+    }
+}
+"#;
+        // Hover on "sender" in "msg.sender"
+        let offset = source.find("msg.sender").unwrap() + 4; // on 's' of 'sender'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("msg.sender"), "got: {val}");
+        assert!(val.contains("address"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_builtin_msg_namespace() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public view returns (address) {
+        return msg.sender;
+    }
+}
+"#;
+        // Hover on "msg" itself
+        let offset = source.find("msg.sender").unwrap(); // on 'm' of 'msg'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("sender"), "got: {val}");
+        assert!(val.contains("value"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_builtin_abi_encode() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public pure returns (bytes memory) {
+        return abi.encode(uint256(1));
+    }
+}
+"#;
+        // Hover on "encode" in "abi.encode"
+        let offset = source.find("abi.encode(").unwrap() + 4; // on 'e' of 'encode'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("abi.encode"), "got: {val}");
+        assert!(val.contains("bytes memory"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_builtin_block_timestamp() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public view returns (uint256) {
+        return block.timestamp;
+    }
+}
+"#;
+        // Hover on "timestamp" in "block.timestamp"
+        let offset = source.find("block.timestamp").unwrap() + 6; // on 't' of 'timestamp'
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("block.timestamp"), "got: {val}");
+        assert!(val.contains("uint256"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_yul_mload() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public pure returns (uint256 result) {
+        assembly {
+            result := mload(0x40)
+        }
+    }
+}
+"#;
+        let offset = source.find("mload(").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("mload"), "got: {val}");
+        assert!(val.contains("offset"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_yul_sstore() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function foo() public {
+        assembly {
+            sstore(0, 1)
+        }
+    }
+}
+"#;
+        let offset = source.find("sstore(").unwrap();
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        assert!(val.contains("sstore"), "got: {val}");
+        assert!(val.contains("slot"), "got: {val}");
+    }
+
+    #[test]
+    fn test_hover_user_defined_takes_precedence() {
+        // A user-defined function named "gasleft" should shadow the builtin.
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    function gasleft() internal pure returns (uint256) {
+        return 42;
+    }
+    function foo() public pure returns (uint256) {
+        return gasleft();
+    }
+}
+"#;
+        // Hover on "gasleft" at the usage site
+        let offset = source.find("return gasleft()").unwrap() + 7;
+        let val = hover_value(source, convert::offset_to_position(source, offset)).unwrap();
+        // Should show user-defined signature (internal pure), not the builtin
+        assert!(val.contains("internal pure"), "got: {val}");
+    }
+
+    #[test]
+    fn test_is_inside_assembly() {
+        let source = r#"contract T {
+    function f() public {
+        uint256 x = 1;
+        assembly {
+            let y := mload(0x40)
+        }
+        uint256 z = 2;
+    }
+}"#;
+        // Inside assembly block — on 'mload'
+        let inside_offset = source.find("mload").unwrap();
+        assert!(is_inside_assembly(source, inside_offset));
+
+        // Outside assembly block — on 'z'
+        let outside_offset = source.find("uint256 z").unwrap();
+        assert!(!is_inside_assembly(source, outside_offset));
+
+        // Before assembly block — on 'x'
+        let before_offset = source.find("uint256 x").unwrap();
+        assert!(!is_inside_assembly(source, before_offset));
+    }
+
+    #[test]
+    fn test_is_inside_assembly_ignores_braces_in_strings_and_comments() {
+        // Braces inside strings and comments should not confuse the depth tracking.
+        let source = r#"contract T {
+    function f() public {
+        string memory s = "{ }";
+        // a comment with { and }
+        /* block comment { } */
+        assembly {
+            let y := mload(0x40)
+        }
+    }
+}"#;
+        let inside_offset = source.find("mload").unwrap();
+        assert!(is_inside_assembly(source, inside_offset));
+
+        let outside_offset = source.find(r#"string memory"#).unwrap();
+        assert!(!is_inside_assembly(source, outside_offset));
     }
 }

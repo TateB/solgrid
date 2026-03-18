@@ -452,8 +452,14 @@ fn test_preserve_blank_lines_default() {
     let formatted = format_source(source, &default_config()).unwrap();
     // The blank line between x and y should be preserved (indent whitespace on blank line)
     let lines: Vec<&str> = formatted.lines().collect();
-    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
-    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    let x_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public x;"))
+        .unwrap();
+    let y_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public y;"))
+        .unwrap();
     assert!(
         y_line - x_line >= 2,
         "there should be a blank line between x and y, got:\n{formatted}"
@@ -507,8 +513,14 @@ fn test_preserve_blank_line_with_comment() {
     let formatted = format_source(source, &default_config()).unwrap();
     // Blank line before comment should be preserved
     let lines: Vec<&str> = formatted.lines().collect();
-    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
-    let comment_line = lines.iter().position(|l| l.contains("// comment about y")).unwrap();
+    let x_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public x;"))
+        .unwrap();
+    let comment_line = lines
+        .iter()
+        .position(|l| l.contains("// comment about y"))
+        .unwrap();
     assert!(
         comment_line - x_line >= 2,
         "blank line should be preserved before comment, got:\n{formatted}"
@@ -530,8 +542,14 @@ fn test_single_spacing_mode() {
     let formatted = format_source(source, &config).unwrap();
     // Should add blank lines between all items
     let lines: Vec<&str> = formatted.lines().collect();
-    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
-    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    let x_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public x;"))
+        .unwrap();
+    let y_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public y;"))
+        .unwrap();
     assert!(
         y_line - x_line >= 2,
         "single mode should add blank line, got:\n{formatted}"
@@ -561,15 +579,24 @@ fn test_compact_spacing_mode() {
     let formatted = format_source(source, &config).unwrap();
     let lines: Vec<&str> = formatted.lines().collect();
     // Compact: no blank line between single-line items
-    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
-    let y_line = lines.iter().position(|l| l.contains("uint256 public y;")).unwrap();
+    let x_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public x;"))
+        .unwrap();
+    let y_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public y;"))
+        .unwrap();
     assert_eq!(
         y_line - x_line,
         1,
         "compact mode should remove blank lines between single-line items, got:\n{formatted}"
     );
     // But blank line around multiline items (functions with bodies)
-    let foo_line = lines.iter().position(|l| l.contains("function foo()")).unwrap();
+    let foo_line = lines
+        .iter()
+        .position(|l| l.contains("function foo()"))
+        .unwrap();
     assert!(
         foo_line - y_line >= 2,
         "compact mode should keep blank lines around multiline items, got:\n{formatted}"
@@ -642,8 +669,14 @@ fn test_single_spacing_with_comments() {
     let formatted = format_source(source, &config).unwrap();
     // Single mode should still add blank line even with comments between items
     let lines: Vec<&str> = formatted.lines().collect();
-    let x_line = lines.iter().position(|l| l.contains("uint256 public x;")).unwrap();
-    let comment_line = lines.iter().position(|l| l.contains("// comment about y")).unwrap();
+    let x_line = lines
+        .iter()
+        .position(|l| l.contains("uint256 public x;"))
+        .unwrap();
+    let comment_line = lines
+        .iter()
+        .position(|l| l.contains("// comment about y"))
+        .unwrap();
     assert!(
         comment_line - x_line >= 2,
         "single mode should add blank line even with comments, got:\n{formatted}"

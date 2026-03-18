@@ -4,6 +4,7 @@
 //! and suppression comment completion for Solidity files via the LSP protocol.
 
 pub mod actions;
+pub mod builtins;
 pub mod completion;
 pub mod convert;
 pub mod definition;
