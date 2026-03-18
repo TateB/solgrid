@@ -43,7 +43,7 @@ set_json_version() {
   local version="$2"
   local old_version
   old_version=$(get_json_version "$file")
-  sed -i "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
+  sed -i '' "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
 }
 
 # Update version in Cargo.toml workspace
@@ -51,7 +51,7 @@ set_cargo_version() {
   local version="$1"
   local old_version
   old_version=$(get_cargo_version)
-  sed -i "s/^version = \"$old_version\"/version = \"$version\"/" "$CARGO_TOML"
+  sed -i '' "s/^version = \"$old_version\"/version = \"$version\"/" "$CARGO_TOML"
 }
 
 MODE="${1:-check}"
