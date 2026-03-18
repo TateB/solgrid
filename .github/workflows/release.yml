@@ -9,6 +9,7 @@ permissions:
 
 env:
   BINARY_NAME: solgrid
+  NODE_VERSION: 24.14.0
 
 jobs:
   validate-version:
@@ -117,7 +118,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -157,11 +158,12 @@ jobs:
       # Build NAPI native addon for prettier-plugin-solgrid
       - name: Build NAPI addon
         shell: bash
-        run: npx @napi-rs/cli build --release --cargo-cwd crates/solgrid_napi --target ${{ matrix.rust-target }}
+        working-directory: packages/prettier-plugin-solgrid
+        run: pnpm exec napi build --release --cargo-cwd ../../crates/solgrid_napi --target ${{ matrix.rust-target }}
 
       - name: Stage NAPI addon into platform package
         shell: bash
-        run: cp solgrid_napi.node "packages/${{ matrix.napi-pkg }}/solgrid_napi.node"
+        run: cp packages/prettier-plugin-solgrid/index.node "packages/${{ matrix.napi-pkg }}/solgrid_napi.node"
 
       # Upload napi platform package
       - uses: actions/upload-artifact@v4
@@ -174,12 +176,31 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download release binaries
         uses: actions/download-artifact@v4
         with:
-          pattern: "{binary-*,vsix-*}"
+          pattern: "binary-*"
           merge-multiple: true
           path: release/
+
+      - name: Download VSIX artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "vsix-*"
+          merge-multiple: true
+          path: release/
+
+      - name: Restore Unix execute bits
+        run: |
+          for bin in release/solgrid-linux-* release/solgrid-darwin-*; do
+            if [ -f "$bin" ]; then
+              chmod +x "$bin"
+            fi
+          done
 
       # Generate checksums
       - name: Generate checksums
@@ -200,20 +221,21 @@ jobs:
 
       # Publish to VS Code Marketplace (requires VSCE_PAT secret)
       - name: Publish to VS Marketplace
-        if: env.VSCE_PAT != ''
-        run: npx @vscode/vsce publish --packagePath release/*.vsix
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          for vsix in release/*.vsix; do
+            npx @vscode/vsce publish --packagePath "$vsix"
+          done
 
       # Publish to Open VSX (requires OVSX_PAT secret)
       - name: Publish to Open VSX
-        if: env.OVSX_PAT != ''
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           for vsix in release/*.vsix; do
             npx ovsx publish "$vsix" -p "$OVSX_PAT"
           done
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
   npm-publish:
     name: Publish Prettier Plugin to npm
@@ -225,7 +247,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
@@ -276,7 +298,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: https://registry.npmjs.org
@@ -298,6 +320,17 @@ jobs:
             if [ -d "packages/solgrid/npm/$pkg_name" ] && [ -d "$dir" ]; then
               cp "$dir"/* "packages/solgrid/npm/$pkg_name/"
               rm -rf "$dir"
+            fi
+          done
+
+      - name: Restore Unix execute bits in CLI packages
+        run: |
+          for bin in \
+            packages/solgrid/npm/cli-darwin-arm64/solgrid \
+            packages/solgrid/npm/cli-linux-arm64/solgrid \
+            packages/solgrid/npm/cli-linux-x64/solgrid; do
+            if [ -f "$bin" ]; then
+              chmod +x "$bin"
             fi
           done
 
