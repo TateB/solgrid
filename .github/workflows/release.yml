@@ -219,7 +219,6 @@ jobs:
     name: Publish Prettier Plugin to npm
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ vars.NPM_TOKEN != '' || secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -271,7 +270,6 @@ jobs:
     name: Publish CLI to npm
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ vars.NPM_TOKEN != '' || secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
