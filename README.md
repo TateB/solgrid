@@ -1,20 +1,8 @@
 # solgrid
 
-A blazing-fast, Rust-native Solidity linter and formatter. One tool to replace solhint, forge fmt, and prettier-plugin-solidity.
+A Rust-native Solidity linter and formatter.
 
-## Features
-
-- **90+ lint rules** across security, best practices, naming, gas optimization, style, and documentation
-- **Built-in formatter** with Wadler-Lindig line-fitting algorithm, comment preservation, and formatter directives
-- **Three-tier auto-fix** — safe, suggestion, and dangerous fixes with full developer control
-- **Incremental caching** — content-hash-based file cache for near-instant re-runs
-- **Multiple output formats** — text (colored), JSON, GitHub Actions annotations, SARIF 2.1.0
-- **Foundry.toml fallback** — reads `[fmt]` section when no `solgrid.toml` is found
-- **Migration support** — `solgrid migrate --from solhint` converts `.solhint.json` to `solgrid.toml`
-- **LSP server** — real-time linting, code actions, formatting, hover docs, and suppression completions
-- **VSCode extension** — first-class editor integration with fix-on-save and format-on-save
-- **Prettier plugin** — drop-in integration for teams using Prettier (`prettier-plugin-solgrid`)
-- **Sub-second performance** on entire projects, powered by the Solar parser
+90+ lint rules, built-in formatter, auto-fix, incremental caching, LSP server, VSCode extension, and Prettier plugin. Outputs text, JSON, GitHub Actions annotations, or SARIF.
 
 ## Quick Start
 
