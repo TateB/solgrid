@@ -13,7 +13,7 @@
   "publishConfig": { "access": "public" },
   "optionalDependencies": {
     "@solgrid/cli-darwin-arm64": "workspace:*",
-    "@solgrid/cli-darwin-x64": "workspace:*",
+    "@solgrid/cli-linux-arm64": "workspace:*",
     "@solgrid/cli-linux-x64": "workspace:*",
     "@solgrid/cli-win32-x64": "workspace:*"
   }

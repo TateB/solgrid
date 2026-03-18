@@ -29,7 +29,7 @@
   },
   "optionalDependencies": {
     "@solgrid/napi-darwin-arm64": "workspace:*",
-    "@solgrid/napi-darwin-x64": "workspace:*",
+    "@solgrid/napi-linux-arm64": "workspace:*",
     "@solgrid/napi-linux-x64": "workspace:*",
     "@solgrid/napi-win32-x64": "workspace:*"
   },

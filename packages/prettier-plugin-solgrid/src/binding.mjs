@@ -19,7 +19,7 @@ let binding = null;
 
 const PLATFORM_PACKAGES = {
   "darwin-arm64": "@solgrid/napi-darwin-arm64",
-  "darwin-x64": "@solgrid/napi-darwin-x64",
+  "linux-arm64": "@solgrid/napi-linux-arm64",
   "linux-x64": "@solgrid/napi-linux-x64",
   "win32-x64": "@solgrid/napi-win32-x64",
 };

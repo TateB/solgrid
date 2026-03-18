@@ -7,7 +7,7 @@ const { platform, arch, env, argv, exit } = require("process");
 
 const PLATFORMS = {
   "darwin-arm64": "@solgrid/cli-darwin-arm64",
-  "darwin-x64": "@solgrid/cli-darwin-x64",
+  "linux-arm64": "@solgrid/cli-linux-arm64",
   "linux-x64": "@solgrid/cli-linux-x64",
   "win32-x64": "@solgrid/cli-win32-x64",
 };

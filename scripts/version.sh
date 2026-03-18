@@ -19,11 +19,11 @@ VSCODE_PKG="$REPO_ROOT/editors/vscode/package.json"
 PRETTIER_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/package.json"
 SOLGRID_PKG="$REPO_ROOT/packages/solgrid/package.json"
 CLI_DARWIN_ARM64_PKG="$REPO_ROOT/packages/solgrid/npm/cli-darwin-arm64/package.json"
-CLI_DARWIN_X64_PKG="$REPO_ROOT/packages/solgrid/npm/cli-darwin-x64/package.json"
+CLI_LINUX_ARM64_PKG="$REPO_ROOT/packages/solgrid/npm/cli-linux-arm64/package.json"
 CLI_LINUX_X64_PKG="$REPO_ROOT/packages/solgrid/npm/cli-linux-x64/package.json"
 CLI_WIN32_X64_PKG="$REPO_ROOT/packages/solgrid/npm/cli-win32-x64/package.json"
 NAPI_DARWIN_ARM64_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/npm/napi-darwin-arm64/package.json"
-NAPI_DARWIN_X64_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/npm/napi-darwin-x64/package.json"
+NAPI_LINUX_ARM64_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/npm/napi-linux-arm64/package.json"
 NAPI_LINUX_X64_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/npm/napi-linux-x64/package.json"
 NAPI_WIN32_X64_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/npm/napi-win32-x64/package.json"
 
@@ -65,12 +65,12 @@ case "$MODE" in
     set_json_version "$SOLGRID_PKG" "$CARGO_VERSION"
 
     set_json_version "$CLI_DARWIN_ARM64_PKG" "$CARGO_VERSION"
-    set_json_version "$CLI_DARWIN_X64_PKG" "$CARGO_VERSION"
+    set_json_version "$CLI_LINUX_ARM64_PKG" "$CARGO_VERSION"
     set_json_version "$CLI_LINUX_X64_PKG" "$CARGO_VERSION"
     set_json_version "$CLI_WIN32_X64_PKG" "$CARGO_VERSION"
 
     set_json_version "$NAPI_DARWIN_ARM64_PKG" "$CARGO_VERSION"
-    set_json_version "$NAPI_DARWIN_X64_PKG" "$CARGO_VERSION"
+    set_json_version "$NAPI_LINUX_ARM64_PKG" "$CARGO_VERSION"
     set_json_version "$NAPI_LINUX_X64_PKG" "$CARGO_VERSION"
     set_json_version "$NAPI_WIN32_X64_PKG" "$CARGO_VERSION"
     echo "  Updated editors/vscode/package.json -> $CARGO_VERSION"
@@ -95,12 +95,12 @@ case "$MODE" in
     set_json_version "$SOLGRID_PKG" "$NEW_VERSION"
 
     set_json_version "$CLI_DARWIN_ARM64_PKG" "$NEW_VERSION"
-    set_json_version "$CLI_DARWIN_X64_PKG" "$NEW_VERSION"
+    set_json_version "$CLI_LINUX_ARM64_PKG" "$NEW_VERSION"
     set_json_version "$CLI_LINUX_X64_PKG" "$NEW_VERSION"
     set_json_version "$CLI_WIN32_X64_PKG" "$NEW_VERSION"
 
     set_json_version "$NAPI_DARWIN_ARM64_PKG" "$NEW_VERSION"
-    set_json_version "$NAPI_DARWIN_X64_PKG" "$NEW_VERSION"
+    set_json_version "$NAPI_LINUX_ARM64_PKG" "$NEW_VERSION"
     set_json_version "$NAPI_LINUX_X64_PKG" "$NEW_VERSION"
     set_json_version "$NAPI_WIN32_X64_PKG" "$NEW_VERSION"
     echo "  Updated Cargo.toml -> $NEW_VERSION"
@@ -121,11 +121,11 @@ case "$MODE" in
     PRETTIER_VERSION=$(get_json_version "$PRETTIER_PKG")
     SOLGRID_VERSION=$(get_json_version "$SOLGRID_PKG")
     CLI_DARWIN_ARM64_VERSION=$(get_json_version "$CLI_DARWIN_ARM64_PKG")
-    CLI_DARWIN_X64_VERSION=$(get_json_version "$CLI_DARWIN_X64_PKG")
+    CLI_LINUX_ARM64_VERSION=$(get_json_version "$CLI_LINUX_ARM64_PKG")
     CLI_LINUX_X64_VERSION=$(get_json_version "$CLI_LINUX_X64_PKG")
     CLI_WIN32_X64_VERSION=$(get_json_version "$CLI_WIN32_X64_PKG")
     NAPI_DARWIN_ARM64_VERSION=$(get_json_version "$NAPI_DARWIN_ARM64_PKG")
-    NAPI_DARWIN_X64_VERSION=$(get_json_version "$NAPI_DARWIN_X64_PKG")
+    NAPI_LINUX_ARM64_VERSION=$(get_json_version "$NAPI_LINUX_ARM64_PKG")
     NAPI_LINUX_X64_VERSION=$(get_json_version "$NAPI_LINUX_X64_PKG")
     NAPI_WIN32_X64_VERSION=$(get_json_version "$NAPI_WIN32_X64_PKG")
 
@@ -135,11 +135,11 @@ case "$MODE" in
     echo "  packages/prettier-plugin-solgrid/package.json: $PRETTIER_VERSION"
     echo "  packages/solgrid/package.json:              $SOLGRID_VERSION"
     echo "  packages/solgrid/npm/cli-darwin-arm64/package.json:     $CLI_DARWIN_ARM64_VERSION"
-    echo "  packages/solgrid/npm/cli-darwin-x64/package.json:       $CLI_DARWIN_X64_VERSION"
+    echo "  packages/solgrid/npm/cli-linux-arm64/package.json:      $CLI_LINUX_ARM64_VERSION"
     echo "  packages/solgrid/npm/cli-linux-x64/package.json:        $CLI_LINUX_X64_VERSION"
     echo "  packages/solgrid/npm/cli-win32-x64/package.json:        $CLI_WIN32_X64_VERSION"
     echo "  packages/prettier-plugin-solgrid/npm/napi-darwin-arm64/package.json:    $NAPI_DARWIN_ARM64_VERSION"
-    echo "  packages/prettier-plugin-solgrid/npm/napi-darwin-x64/package.json:      $NAPI_DARWIN_X64_VERSION"
+    echo "  packages/prettier-plugin-solgrid/npm/napi-linux-arm64/package.json:     $NAPI_LINUX_ARM64_VERSION"
     echo "  packages/prettier-plugin-solgrid/npm/napi-linux-x64/package.json:       $NAPI_LINUX_X64_VERSION"
     echo "  packages/prettier-plugin-solgrid/npm/napi-win32-x64/package.json:       $NAPI_WIN32_X64_VERSION"
 
@@ -159,7 +159,7 @@ case "$MODE" in
       echo "ERROR: solgrid npm package version ($SOLGRID_VERSION) does not match Cargo.toml ($CARGO_VERSION)" >&2
       MISMATCH=1
     fi
-    for pkg_var in CLI_DARWIN_ARM64 CLI_DARWIN_X64 CLI_LINUX_X64 CLI_WIN32_X64 NAPI_DARWIN_ARM64 NAPI_DARWIN_X64 NAPI_LINUX_X64 NAPI_WIN32_X64; do
+    for pkg_var in CLI_DARWIN_ARM64 CLI_LINUX_ARM64 CLI_LINUX_X64 CLI_WIN32_X64 NAPI_DARWIN_ARM64 NAPI_LINUX_ARM64 NAPI_LINUX_X64 NAPI_WIN32_X64; do
       ver_var="${pkg_var}_VERSION"
       ver="${!ver_var}"
       if [ "$ver" != "$CARGO_VERSION" ]; then

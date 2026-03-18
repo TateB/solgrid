@@ -46,15 +46,15 @@ jobs:
             npm-binary: solgrid
             napi-pkg: prettier-plugin-solgrid/npm/napi-linux-x64
             napi-pkg-name: napi-linux-x64
-          - vscode-target: darwin-x64
-            rust-target: x86_64-apple-darwin
-            os: macos-15
+          - vscode-target: linux-arm64
+            rust-target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
             binary-ext: ""
-            npm-pkg: solgrid/npm/cli-darwin-x64
-            npm-pkg-name: cli-darwin-x64
+            npm-pkg: solgrid/npm/cli-linux-arm64
+            npm-pkg-name: cli-linux-arm64
             npm-binary: solgrid
-            napi-pkg: prettier-plugin-solgrid/npm/napi-darwin-x64
-            napi-pkg-name: napi-darwin-x64
+            napi-pkg: prettier-plugin-solgrid/npm/napi-linux-arm64
+            napi-pkg-name: napi-linux-arm64
           - vscode-target: darwin-arm64
             rust-target: aarch64-apple-darwin
             os: macos-15
@@ -253,7 +253,7 @@ jobs:
       # Publish napi platform packages first (must exist before the main package)
       - name: Publish napi platform packages
         run: |
-          for pkg in napi-darwin-arm64 napi-darwin-x64 napi-linux-x64 napi-win32-x64; do
+          for pkg in napi-darwin-arm64 napi-linux-arm64 napi-linux-x64 napi-win32-x64; do
             echo "Publishing @solgrid/$pkg..."
             pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
           done
@@ -304,7 +304,7 @@ jobs:
       # Publish platform packages first (must exist before the main package)
       - name: Publish platform packages
         run: |
-          for pkg in cli-darwin-arm64 cli-darwin-x64 cli-linux-x64 cli-win32-x64; do
+          for pkg in cli-darwin-arm64 cli-linux-arm64 cli-linux-x64 cli-win32-x64; do
             echo "Publishing @solgrid/$pkg..."
             pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
           done
