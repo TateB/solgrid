@@ -8,6 +8,7 @@
     "url": "https://github.com/TateB/solgrid",
     "directory": "packages/solgrid/npm/cli-linux-x64"
   },
+  "files": ["solgrid"],
   "os": ["linux"],
   "cpu": ["x64"],
   "publishConfig": { "access": "public" }

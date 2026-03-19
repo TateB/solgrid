@@ -8,6 +8,7 @@
     "url": "https://github.com/TateB/solgrid",
     "directory": "packages/solgrid/npm/cli-darwin-arm64"
   },
+  "files": ["solgrid"],
   "os": ["darwin"],
   "cpu": ["arm64"],
   "publishConfig": { "access": "public" }

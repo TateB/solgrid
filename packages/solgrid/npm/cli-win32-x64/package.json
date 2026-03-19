@@ -8,6 +8,7 @@
     "url": "https://github.com/TateB/solgrid",
     "directory": "packages/solgrid/npm/cli-win32-x64"
   },
+  "files": ["solgrid.exe"],
   "os": ["win32"],
   "cpu": ["x64"],
   "publishConfig": { "access": "public" }
