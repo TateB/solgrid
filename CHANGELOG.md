@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fix EACCES error when spawning native binary from npm CLI and VSCode extension (npm tarballs don't preserve execute bits)
+
 ### Added
 - Robust versioning system with single source of truth (`Cargo.toml`)
 - Version sync script (`scripts/version.sh`) for monorepo consistency
