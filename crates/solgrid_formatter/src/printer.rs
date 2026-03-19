@@ -6,6 +6,10 @@
 use crate::ir::{CommentKind, FormatChunk};
 use solgrid_config::FormatConfig;
 
+fn needs_spdx_space(content: &str) -> bool {
+    !content.starts_with(' ') && content.starts_with("SPDX-License-Identifier:")
+}
+
 /// The current printing mode for a group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -112,7 +116,7 @@ pub fn print_chunks(chunk: &FormatChunk, config: &FormatConfig) -> String {
             FormatChunk::Comment(kind, ref content) => match kind {
                 CommentKind::Line => {
                     output.push_str("//");
-                    if !content.is_empty() && !content.starts_with(' ') {
+                    if needs_spdx_space(content) {
                         output.push(' ');
                     }
                     output.push_str(content);
@@ -193,7 +197,10 @@ fn measure_flat_width(chunks: &[FormatChunk]) -> usize {
             FormatChunk::Comment(kind, content) => {
                 let w = match kind {
                     CommentKind::Line => {
-                        2 + if content.is_empty() || content.starts_with(' ') {
+                        2 + if content.is_empty()
+                            || content.starts_with(' ')
+                            || !needs_spdx_space(content)
+                        {
                             0
                         } else {
                             1

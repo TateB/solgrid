@@ -16,6 +16,7 @@ import {
   fullFileRange,
   resetDocumentVersions,
   CodeAction,
+  Diagnostic,
 } from "./helpers";
 
 describe("LSP Code Actions", () => {
@@ -209,5 +210,41 @@ describe("LSP Code Actions", () => {
 
     // The SPDX line shouldn't have fixable diagnostics
     expect(actions).toBeDefined();
+  });
+
+  it("returns contract-layout suggestion for later diagnostic ranges", async () => {
+    const uri = fixtureUri("contract-layout-multi.sol");
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.0;
+contract Test {
+    function foo() external {}
+    error Oops();
+    uint256 x;
+}
+`;
+
+    openDocument(client, uri, content);
+    const result = await waitForDiagnostics(client, uri);
+
+    const contractLayoutDiags = result.diagnostics.filter(
+      (diag): diag is Diagnostic =>
+        diag.code === "style/contract-layout"
+    );
+    expect(contractLayoutDiags.length).toBeGreaterThanOrEqual(2);
+
+    const secondDiag = contractLayoutDiags[1];
+    const actions = await requestCodeActions(
+      client,
+      uri,
+      secondDiag.range,
+      [secondDiag]
+    );
+
+    expect(actions).toContainEqual(
+      expect.objectContaining({
+        title: "Reorder contract members (suggestion)",
+        kind: "refactor",
+      })
+    );
   });
 });

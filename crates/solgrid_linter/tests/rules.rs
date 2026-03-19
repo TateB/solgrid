@@ -1,7 +1,8 @@
 //! Integration tests for lint rules.
 
 use solgrid_linter::testing::{
-    assert_diagnostic_count, assert_no_diagnostics, fix_source, lint_source_for_rule,
+    assert_diagnostic_count, assert_no_diagnostics, fix_source, fix_source_unsafe,
+    lint_source_for_rule,
 };
 
 // =============================================================================
@@ -198,6 +199,31 @@ contract Test {
 }
 "#;
     assert_no_diagnostics(source, "naming/func-name-mixedcase");
+}
+
+#[test]
+fn test_func_name_mixedcase_internal_underscore_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _goodName() internal {}
+    function _otherGoodName() private {}
+}
+"#;
+    assert_no_diagnostics(source, "naming/func-name-mixedcase");
+}
+
+#[test]
+fn test_func_name_mixedcase_public_underscore_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _goodName() public {}
+}
+"#;
+    assert_diagnostic_count(source, "naming/func-name-mixedcase", 1);
 }
 
 #[test]
@@ -2304,6 +2330,650 @@ import "./Zebra.sol";
 contract Test {}
 "#;
     assert_no_diagnostics(source, "style/imports-ordering");
+}
+
+#[test]
+fn test_imports_ordering_fix() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Zebra.sol\";\nimport \"./Alpha.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(fixed.contains("import \"./Alpha.sol\";\nimport \"./Zebra.sol\";"));
+}
+
+#[test]
+fn test_imports_ordering_fix_multiple() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Charlie.sol\";\nimport \"./Alpha.sol\";\nimport \"./Bravo.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(fixed
+        .contains("import \"./Alpha.sol\";\nimport \"./Bravo.sol\";\nimport \"./Charlie.sol\";"));
+}
+
+#[test]
+fn test_imports_ordering_fix_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./C.sol";
+
+import "./B.sol";
+import "./A.sol";
+contract Test {}
+"#;
+    let diags = lint_source_for_rule(source, "style/imports-ordering");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every imports-ordering diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./A.sol";
+
+import "./B.sol";
+import "./C.sol";
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_imports_ordering_fix_multiline_import() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {
+    Zebra
+} from "./Zebra.sol";
+import {Alpha} from "./Alpha.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Alpha} from "./Alpha.sol";
+import {
+    Zebra
+} from "./Zebra.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_source_import_overlaps_do_not_cancel_all_fixes() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Zebra} from "./Zebra.sol";
+import {Alpha} from "./Alpha.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_contract_layout_fix() {
+    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() external {}\n    uint256 x;\n}\n";
+    let diags = lint_source_for_rule(source, "style/contract-layout");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected contract-layout diagnostic to have a fix"
+    );
+    let fixed = fix_source_unsafe(source);
+    let x_pos = fixed.find("uint256 x").unwrap();
+    let foo_pos = fixed.find("function foo").unwrap();
+    assert!(
+        x_pos < foo_pos,
+        "Expected state variable before function after fix"
+    );
+}
+
+#[test]
+fn test_contract_layout_fix_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() external {}
+    error Oops();
+    uint256 x;
+}
+"#;
+    let diags = lint_source_for_rule(source, "style/contract-layout");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every contract-layout diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 x;
+
+    error Oops();
+
+    function foo() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_contract_layout_fix_normalizes_member_spacing() {
+    let source = r#"abstract contract CCIPBatcher is CCIPReader {
+    /// @notice The batch gateway supplied an incorrect number of responses.
+    /// @dev Error selector: `0x4a5c31ea`
+    error InvalidBatchGatewayResponse();
+
+    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
+    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
+    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
+    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
+    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
+    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
+    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
+
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
+
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+
+    /// @dev A batch gateway session.
+    struct Batch {
+        Lookup[] lookups;
+        string[] gateways;
+    }
+
+    function createBatch(
+        bytes memory data
+    ) internal pure returns (Batch memory batch) {}
+}
+"#;
+    let expected = r#"abstract contract CCIPBatcher is CCIPReader {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+
+    /// @dev A batch gateway session.
+    struct Batch {
+        Lookup[] lookups;
+        string[] gateways;
+    }
+
+    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
+    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
+    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
+    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
+    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
+    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
+    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
+
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
+
+    /// @notice The batch gateway supplied an incorrect number of responses.
+    /// @dev Error selector: `0x4a5c31ea`
+    error InvalidBatchGatewayResponse();
+
+    function createBatch(
+        bytes memory data
+    ) internal pure returns (Batch memory batch) {}
+}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_contract_layout_fix_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Performs work.
+    function run() external {}
+
+    /// @dev Failure signal.
+    error Oops();
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Failure signal.
+    error Oops();
+
+    /// @dev Performs work.
+    function run() external {}
+}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_visibility_modifier_order() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function bad() pure public returns (uint256) {\n        return 42;\n    }\n}\n";
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("public pure"),
+        "Expected modifiers reordered to: public pure, got: {}",
+        fixed
+    );
+}
+
+#[test]
+fn test_fix_no_unused_imports_single() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport {Unused} from \"some.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(
+        !fixed.contains("import"),
+        "Expected unused import to be removed"
+    );
+}
+
+#[test]
+fn test_fix_no_unused_imports_partial() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport {Used, Unused} from \"some.sol\";\ncontract Test {\n    Used public x;\n}\n";
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("import"),
+        "Expected import statement to remain"
+    );
+    assert!(
+        !fixed.contains("Unused"),
+        "Expected unused alias to be removed"
+    );
+    assert!(fixed.contains("Used"), "Expected used alias to remain");
+}
+
+#[test]
+fn test_fix_use_constant() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    uint256 public MAX_SUPPLY = 1000000;\n    function get() public view returns (uint256) {\n        return MAX_SUPPLY;\n    }\n}\n";
+    let fixed = fix_source_unsafe(source);
+    assert!(
+        fixed.contains("constant"),
+        "Expected `constant` keyword to be inserted"
+    );
+}
+
+#[test]
+fn test_fix_use_immutable() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    address public owner;\n    constructor() {\n        owner = msg.sender;\n    }\n}\n";
+    let fixed = fix_source_unsafe(source);
+    assert!(
+        fixed.contains("immutable"),
+        "Expected `immutable` keyword to be inserted"
+    );
+}
+
+#[test]
+fn test_fix_func_order() {
+    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() private {}\n    function bar() external {}\n}\n";
+    let diags = lint_source_for_rule(source, "style/func-order");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected func-order diagnostic to have a fix"
+    );
+    let fixed = fix_source_unsafe(source);
+    let bar_pos = fixed.find("function bar").unwrap();
+    let foo_pos = fixed.find("function foo").unwrap();
+    assert!(
+        bar_pos < foo_pos,
+        "Expected external before private after fix"
+    );
+}
+
+#[test]
+fn test_fix_func_order_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function a() private {}
+    function b() public {}
+    function c() external {}
+}
+"#;
+    let diags = lint_source_for_rule(source, "style/func-order");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every func-order diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function c() external {}
+
+    function b() public {}
+
+    function a() private {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_func_order_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Private helper.
+    function a() private {}
+
+    /// @dev External entrypoint.
+    function b() external {}
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev External entrypoint.
+    function b() external {}
+
+    /// @dev Private helper.
+    function a() private {}
+}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_ordering() {
+    let source = "\n// SPDX-License-Identifier: MIT\ncontract Test {}\nimport \"./Foo.sol\";\npragma solidity ^0.8.0;\n";
+    let diags = lint_source_for_rule(source, "style/ordering");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected ordering diagnostic to have a fix"
+    );
+}
+
+#[test]
+fn test_fix_ordering_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+contract Test {}
+library Math {}
+import "./Foo.sol";
+pragma solidity ^0.8.0;
+"#;
+    let diags = lint_source_for_rule(source, "style/ordering");
+    assert_eq!(diags.len(), 3);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every ordering diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Foo.sol";
+library Math {}
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_ordering_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+/// @dev Top-level test contract.
+contract Test {}
+pragma solidity ^0.8.0;
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Top-level test contract.
+contract Test {}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_import_path_format() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./External.sol";
+import "Local.sol";
+import "Other.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "External.sol";
+import "Local.sol";
+import "Other.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+// =============================================================================
+// Edge case tests for autofix bugs
+// =============================================================================
+
+#[test]
+fn test_fix_no_unused_imports_multiple_unused_aliases() {
+    // Bug: when multiple aliases are unused in the same import, each diagnostic
+    // generates a fix that replaces the entire {…} range. The fixer should not
+    // abort due to overlapping edits — all unused aliases should be removed.
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {A, B, C} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {B} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {A, B, C} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let diags = lint_source_for_rule(source, "best-practices/no-unused-imports");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every no-unused-imports diagnostic to have a fix"
+    );
+}
+
+#[test]
+fn test_fix_no_unused_imports_aliased() {
+    // When a single aliased import is unused, the entire import line should be
+    // deleted (same as the non-aliased single-alias case).
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Foo as Bar} from "some.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_removes_attached_comment_block() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Temporary helper import.
+import {Foo} from "some.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_partial_aliased() {
+    // Bug: build_unused_import_fix filters by first_word (original name "Orig")
+    // but unused_name is the alias name ("Unused"). The fix should remove the
+    // unused aliased entry and keep the used one.
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Used, Orig as Unused} from "some.sol";
+contract Test {
+    Used public x;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Used} from "some.sol";
+contract Test {
+    Used public x;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_visibility_modifier_order_preserves_parameterized_modifier() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    modifier onlyOwner(address who) {
+        _;
+    }
+
+    function bad() pure public onlyOwner(msg.sender) returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    modifier onlyOwner(address who) {
+        _;
+    }
+
+    function bad() public pure onlyOwner(msg.sender) returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_func_order_preserves_non_function_members() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+
+    function foo() private {}
+
+    function bar() external {}
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+
+    function bar() external {}
+
+    function foo() private {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_import_path_format_does_not_rewrite_package_imports() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_import_path_format_does_not_rewrite_parent_relative_imports() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+import "A.sol";
+import "B.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+import "A.sol";
+import "B.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
 }
 
 #[test]

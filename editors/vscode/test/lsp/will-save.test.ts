@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TestLspClient } from "./client";
 import {
+  applyEdits,
   initializeServer,
   openDocument,
   waitForDiagnostics,
@@ -64,6 +65,41 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
       expect(edits[0].range).toBeDefined();
       expect(edits[0].newText).toBeDefined();
     }
+  });
+
+  it("applies import formatting and ordering in one save edit", async () => {
+    const uri = "file:///tmp/import-order-on-save.sol";
+    const content = `//SPDX-License-Identifier: MIT
+pragma solidity ~0.8.17;
+
+import {Zebra} from "./Zebra.sol";
+import {Alpha, VeryLongName, AnotherLongName, MoreLongName, FinalLongName} from "./Alpha.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+`;
+
+    openDocument(client, uri, content);
+    await waitForDiagnostics(client, uri);
+
+    const edits = await requestWillSaveWaitUntil(client, uri);
+    expect(edits).not.toBeNull();
+    expect(edits).toHaveLength(1);
+
+    const expected = `// SPDX-License-Identifier: MIT
+pragma solidity ~0.8.17;
+
+import {Alpha} from "./Alpha.sol";
+import {Zebra} from "./Zebra.sol";
+
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+`;
+
+    expect(applyEdits(content, edits ?? [])).toBe(expected);
   });
 
   it("returns null for non-solidity file", async () => {

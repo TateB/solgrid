@@ -19,6 +19,53 @@ static META: RuleMeta = RuleMeta {
 
 pub struct OrderingRule;
 
+fn is_doc_comment_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("///")
+        || trimmed.starts_with("/**")
+        || trimmed.starts_with('*')
+        || trimmed.ends_with("*/")
+}
+
+fn line_start(source: &str, pos: usize) -> usize {
+    source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0)
+}
+
+fn attached_doc_comment_start(source: &str, item_start: usize) -> usize {
+    let mut start = line_start(source, item_start);
+
+    while start > 0 {
+        let prev_line_end = start.saturating_sub(1);
+        let prev_line_start = source[..prev_line_end]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let line = &source[prev_line_start..prev_line_end];
+
+        if line.trim().is_empty() || !is_doc_comment_line(line) {
+            break;
+        }
+
+        start = prev_line_start;
+    }
+
+    start
+}
+
+fn normalize_item_chunk(chunk: &str) -> String {
+    let lines: Vec<&str> = chunk.lines().collect();
+    let first = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let last = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+
+    lines[first..=last].join("\n")
+}
+
 fn item_priority(kind: &ItemKind<'_>) -> Option<u8> {
     match kind {
         ItemKind::Pragma(_) => Some(0),
@@ -43,9 +90,16 @@ impl Rule for OrderingRule {
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
-            let mut max_priority = 0u8;
 
-            for item in source_unit.items.iter() {
+            let items: Vec<_> = source_unit.items.iter().collect();
+            if items.is_empty() {
+                return diagnostics;
+            }
+
+            // First pass: detect violations
+            let mut max_priority = 0u8;
+            let mut violation_diags = Vec::new();
+            for item in items.iter() {
                 if let Some(priority) = item_priority(&item.kind) {
                     if priority < max_priority {
                         let range = solgrid_ast::item_name_range(item);
@@ -61,7 +115,7 @@ impl Rule for OrderingRule {
                             ItemKind::Function(_) => "free function",
                             _ => "declaration",
                         };
-                        diagnostics.push(Diagnostic::new(
+                        violation_diags.push(Diagnostic::new(
                             META.id,
                             format!(
                                 "{kind_name} should appear before higher-priority declarations (expected order: pragma, imports, interfaces, libraries, contracts)"
@@ -74,6 +128,64 @@ impl Rule for OrderingRule {
                     }
                 }
             }
+
+            if violation_diags.is_empty() {
+                return diagnostics;
+            }
+
+            // Build fix: chunk-based reordering
+            // Only include items with known priorities
+            let prioritized: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    item_priority(&item.kind).map(|p| (p, solgrid_ast::span_to_range(item.span)))
+                })
+                .collect();
+
+            if prioritized.len() >= 2 {
+                let first_start = attached_doc_comment_start(ctx.source, prioritized[0].1.start);
+                let last_end = prioritized.last().unwrap().1.end;
+
+                // Build chunks
+                let mut chunks: Vec<(u8, usize, String)> = Vec::new();
+                for (idx, (priority, span_range)) in prioritized.iter().enumerate() {
+                    let prev_end = if idx == 0 {
+                        first_start
+                    } else {
+                        ctx.source[prioritized[idx - 1].1.end..]
+                            .find('\n')
+                            .map_or(prioritized[idx - 1].1.end, |offset| {
+                                prioritized[idx - 1].1.end + offset
+                            })
+                    };
+                    let item_end = ctx.source[span_range.end..]
+                        .find('\n')
+                        .map_or(span_range.end, |offset| span_range.end + offset);
+                    let chunk = normalize_item_chunk(&ctx.source[prev_end..item_end]);
+                    chunks.push((*priority, idx, chunk));
+                }
+
+                // Sort by (priority, original_index)
+                chunks.sort_by_key(|&(p, i, _)| (p, i));
+
+                let replacement: String = chunks
+                    .iter()
+                    .map(|(_, _, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // Replace from first item start to last item end
+                let fix = Fix::suggestion(
+                    "Reorder top-level declarations",
+                    vec![TextEdit::replace(first_start..last_end, replacement)],
+                );
+
+                for diag in &mut violation_diags {
+                    *diag = diag.clone().with_fix(fix.clone());
+                }
+            }
+
+            diagnostics.extend(violation_diags);
             diagnostics
         });
 

@@ -241,6 +241,192 @@ fn test_format_while_loop() {
 }
 
 #[test]
+fn test_preserve_assembly_comment_without_duplication() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256 result) {
+        assembly {
+            // load result
+            result := 1
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256 result) {
+        assembly {
+            // load result
+            result := 1
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+    assert_eq!(formatted.matches("// load result").count(), 1);
+
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(reformatted, expected);
+}
+
+#[test]
+fn test_keep_wrapped_constant_initializer_indented_after_equals() {
+    let source = r#"abstract contract CCIPBatcher is CCIPReader {
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+}
+"#;
+    let expected = r#"abstract contract CCIPBatcher is CCIPReader {
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_struct_field_trailing_comments() {
+    let source = r#"contract T {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+}
+"#;
+    let expected = r#"contract T {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_ternary_continuation_indented() {
+    let source = r#"contract T {
+    function f(Lookup memory lu) internal view returns (uint256) {
+        uint256 flags = detectEIP140(lu.target)
+            ? FLAG_EIP140_AFTER
+            : FLAG_EIP140_BEFORE;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(Lookup memory lu) internal view returns (uint256) {
+        uint256 flags = detectEIP140(lu.target)
+            ? FLAG_EIP140_AFTER
+            : FLAG_EIP140_BEFORE;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comments_inside_empty_if_block() {
+    let source = r#"contract T {
+    function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {
+        if (unsafe && v.length == 0) {
+            // unsafe contracts appear the same for throw and unimplemented fallback
+            // decision: interpret like an unimplemented function selector response
+        } else if (!ok) {
+            lu.flags |= FLAG_CALL_ERROR;
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {
+        if (unsafe && v.length == 0) {
+            // unsafe contracts appear the same for throw and unimplemented fallback
+            // decision: interpret like an unimplemented function selector response
+        } else if (!ok) {
+            lu.flags |= FLAG_CALL_ERROR;
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_single_blank_line_within_function_body() {
+    let source = r#"contract T {
+    function f() internal pure {
+        uint256 x = 1;
+
+        uint256 y = 2;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() internal pure {
+        uint256 x = 1;
+
+        uint256 y = 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_blank_line_below_top_level_comment() {
+    let source = r#"// Something
+
+contract Thing {}
+"#;
+    let expected = r#"// Something
+
+contract Thing {}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_blank_line_below_contract_comment_block() {
+    let source = r#"contract Thing {
+    /* ERC721 internal functions */
+
+    /// @dev Approve `to` to operate on `tokenId`
+    /// Emits an {Approval} event.
+    function _approve(address to, uint256 tokenId) internal virtual {}
+}
+"#;
+    let expected = r#"contract Thing {
+    /* ERC721 internal functions */
+
+    /// @dev Approve `to` to operate on `tokenId`
+    /// Emits an {Approval} event.
+    function _approve(address to, uint256 tokenId) internal virtual {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_format_emit() {
     let source = "contract T {\n    event Foo(uint256 x);\n    function f() public {\n        emit Foo(1);\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();
@@ -291,6 +477,13 @@ fn test_preserve_line_comment() {
     let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n";
     let formatted = format_source(source, &default_config()).unwrap();
     assert!(formatted.contains("// SPDX-License-Identifier: MIT"));
+}
+
+#[test]
+fn test_preserve_regular_line_comment_text() {
+    let source = "//check this stays exact\npragma solidity ^0.8.0;\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("//check this stays exact"));
 }
 
 #[test]
@@ -1581,4 +1774,237 @@ fn test_style_guide_idempotency_emit_statement() {
         "style guide emit statement should be idempotent: {}",
         result.unwrap_err()
     );
+}
+
+#[test]
+fn test_preserve_bare_catch_without_parentheses() {
+    let source = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch Error(string memory reason) {
+            revert(reason);
+        } catch {
+            revert("failed");
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch Error(string memory reason) {
+            revert(reason);
+        } catch {
+            revert("failed");
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(reformatted, expected);
+}
+
+#[test]
+fn test_preserve_subdenomination_without_duplication() {
+    let source = r#"contract T {
+    uint64 private constant GRACE_PERIOD = 90 days;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, source);
+}
+
+#[test]
+fn test_wrap_long_constant_initializer_after_equals() {
+    let source = r#"contract T {
+    bytes32 private constant ETH_NODE = 0x93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae;
+}
+"#;
+    let expected = r#"contract T {
+    bytes32 private constant ETH_NODE =
+        0x93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae;
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_wrap_long_tuple_assignment_after_equals() {
+    let source = r#"contract T {
+    function f(bytes calldata data) public {
+        (string memory label, address owner, uint16 ownerControlledFuses, address resolver) = abi.decode(data, (string, address, uint16, address));
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bytes calldata data) public {
+        (
+            string memory label,
+            address owner,
+            uint16 ownerControlledFuses,
+            address resolver
+        ) =
+            abi.decode(data, (string, address, uint16, address));
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comments_inside_multiline_condition() {
+    let source = r#"contract T {
+    function f(bytes32 parentNode, bytes32 subnode) public view {
+        if (
+            expired &&
+                // protects a name that has been unwrapped
+                (subnodeOwner == address(0)
+                    || ens.owner(subnode) == address(0))
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("// protects a name that has been unwrapped"));
+    assert!(
+        formatted.contains("if (")
+            && formatted.contains("(subnodeOwner == address(0)")
+            && !formatted.contains(") {\n            // protects a name"),
+        "comment should remain inside the condition, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_wrap_modifier_arguments_over_multiple_lines() {
+    let source = r#"contract T {
+    function setRecord(bytes32 node, address owner, address resolver, uint64 ttl)
+        public
+        operationAllowed(node, CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL)
+    {}
+}
+"#;
+    let expected = r#"contract T {
+    function setRecord(bytes32 node, address owner, address resolver, uint64 ttl)
+        public
+        operationAllowed(
+            node,
+            CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL
+        )
+    {}
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_logical_or_chain_without_staircase_indent() {
+    let source = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId
+            || interfaceId == type(IERC721Receiver).interfaceId
+            || super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_if_condition_breaks_after_open_paren() {
+    let source = r#"contract T {
+    function f(address registrant) public view {
+        if (registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)) {
+            revert();
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address registrant) public view {
+        if (
+            registrant != msg.sender
+                && !registrar.isApprovedForAll(registrant, msg.sender)
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_parenthesized_logical_chain_like_forge() {
+    let source = r#"contract T {
+    function f(address owner, address addr, bytes32 node, uint32 fuses, uint64 expiry) public view returns (bool) {
+        return (owner == addr ||
+            isApprovedForAll(owner, addr) ||
+                getApproved(uint256(node)) == addr) &&
+            !_isETH2LDInGracePeriod(fuses, expiry);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        address owner,
+        address addr,
+        bytes32 node,
+        uint32 fuses,
+        uint64 expiry
+    )
+        public
+        view
+        returns (bool)
+    {
+        return (owner == addr
+                || isApprovedForAll(owner, addr)
+                || getApproved(uint256(node)) == addr)
+            && !_isETH2LDInGracePeriod(fuses, expiry);
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
 }

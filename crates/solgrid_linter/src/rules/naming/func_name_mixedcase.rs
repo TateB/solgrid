@@ -5,7 +5,7 @@
 use crate::context::LintContext;
 use crate::rule::Rule;
 use solgrid_diagnostics::*;
-use solgrid_parser::solar_ast::{FunctionKind, ItemKind};
+use solgrid_parser::solar_ast::{FunctionKind, ItemKind, Visibility};
 use solgrid_parser::with_parsed_ast_sequential;
 
 static META: RuleMeta = RuleMeta {
@@ -18,6 +18,19 @@ static META: RuleMeta = RuleMeta {
 };
 
 pub struct FuncNameMixedcaseRule;
+
+fn is_valid_function_name(name: &str, visibility: Option<Visibility>) -> bool {
+    if solgrid_ast::is_camel_case(name) {
+        return true;
+    }
+
+    matches!(
+        visibility,
+        Some(Visibility::Internal) | Some(Visibility::Private) | None
+    ) && name
+        .strip_prefix('_')
+        .is_some_and(solgrid_ast::is_camel_case)
+}
 
 impl Rule for FuncNameMixedcaseRule {
     fn meta(&self) -> &RuleMeta {
@@ -38,7 +51,7 @@ impl Rule for FuncNameMixedcaseRule {
                             }
                             if let Some(name_ident) = func.header.name {
                                 let name = name_ident.as_str();
-                                if !solgrid_ast::is_camel_case(name) {
+                                if !is_valid_function_name(name, func.header.visibility()) {
                                     let range = solgrid_ast::span_to_range(name_ident.span);
                                     diagnostics.push(Diagnostic::new(
                                         META.id,

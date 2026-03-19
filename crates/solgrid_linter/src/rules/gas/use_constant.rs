@@ -67,18 +67,28 @@ impl Rule for UseConstantRule {
                                     if !has_assignments(contract_text, &var_name) {
                                         let name_span =
                                             var.name.map(|n| solgrid_ast::span_to_range(n.span));
-                                        let diag_range = name_span.unwrap_or(var_range.clone());
+                                        let diag_range =
+                                            name_span.clone().unwrap_or(var_range.clone());
 
-                                        diagnostics.push(
-                                            Diagnostic::new(
-                                                META.id,
-                                                format!(
-                                                    "state variable `{var_name}` has a compile-time-known value and is never reassigned; declare it as `constant` to save gas"
-                                                ),
-                                                META.default_severity,
-                                                diag_range,
+                                        let fix = name_span.map(|ns| {
+                                            Fix::suggestion(
+                                                "Add `constant` modifier",
+                                                vec![TextEdit::insert(ns.start, "constant ")],
+                                            )
+                                        });
+
+                                        let mut diag = Diagnostic::new(
+                                            META.id,
+                                            format!(
+                                                "state variable `{var_name}` has a compile-time-known value and is never reassigned; declare it as `constant` to save gas"
                                             ),
+                                            META.default_severity,
+                                            diag_range,
                                         );
+                                        if let Some(fix) = fix {
+                                            diag = diag.with_fix(fix);
+                                        }
+                                        diagnostics.push(diag);
                                     }
                                 }
                             }

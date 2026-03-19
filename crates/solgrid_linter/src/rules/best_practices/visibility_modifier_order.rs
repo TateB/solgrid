@@ -96,7 +96,11 @@ impl Rule for VisibilityModifierOrderRule {
                                 let correct_order: Vec<&str> =
                                     sorted.iter().map(|(word, _)| word.as_str()).collect();
 
-                                let diag = Diagnostic::new(
+                                // Build fix: replace the modifier area with sorted version
+                                let func_range = solgrid_ast::span_to_range(body_item.span);
+                                let fix = build_modifier_fix(ctx.source, func_range, &sorted);
+
+                                let mut diag = Diagnostic::new(
                                     META.id,
                                     format!(
                                         "function `{func_name}` modifiers should be ordered: {}",
@@ -105,6 +109,10 @@ impl Rule for VisibilityModifierOrderRule {
                                     META.default_severity,
                                     range,
                                 );
+
+                                if let Some(fix) = fix {
+                                    diag = diag.with_fix(fix);
+                                }
 
                                 diagnostics.push(diag);
                             }
@@ -172,57 +180,96 @@ fn remove_returns_clause(area: &str) -> &str {
     }
 }
 
-/// Parse modifier keywords from the modifier area text.
+/// Parse modifier entries from the modifier area text.
+/// Entries are split on whitespace outside of parenthesized argument lists so
+/// forms like `override(Base)` and `onlyOwner(msg.sender)` stay intact.
 fn parse_modifiers(area: &str) -> Vec<(String, ModCategory)> {
     let mut modifiers = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
 
-    // Handle override(...) specially by removing the parens content
-    let cleaned = remove_override_params(area);
-
-    for word in cleaned.split_whitespace() {
-        // Skip parenthetical parts (e.g., from override(ISomething))
-        if word.starts_with('(') || word.ends_with(')') || word.contains('(') {
+    for ch in area.chars() {
+        if ch.is_whitespace() && depth == 0 {
+            if !current.is_empty() {
+                let entry = std::mem::take(&mut current);
+                let category = classify_keyword(entry.split('(').next().unwrap_or(""));
+                modifiers.push((entry, category));
+            }
             continue;
         }
 
-        let category = classify_keyword(word);
-        modifiers.push((word.to_string(), category));
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        let category = classify_keyword(current.split('(').next().unwrap_or(""));
+        modifiers.push((current, category));
     }
 
     modifiers
 }
 
-/// Remove parenthetical content after `override` keyword.
-fn remove_override_params(area: &str) -> String {
-    let mut result = String::new();
-    let chars = area.chars().peekable();
-    let mut in_override_parens = false;
-    let mut depth = 0;
+/// Build a fix that reorders the modifier area in a function declaration.
+fn build_modifier_fix(
+    source: &str,
+    func_range: std::ops::Range<usize>,
+    sorted_modifiers: &[(String, ModCategory)],
+) -> Option<Fix> {
+    let func_text = &source[func_range.clone()];
 
-    for ch in chars {
-        if in_override_parens {
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        in_override_parens = false;
-                    }
+    // Find the modifier area within the function text
+    // The modifier area is between the closing ) of params and { or ;
+    let mut depth = 0i32;
+    let mut first_close = None;
+    for (i, ch) in func_text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    first_close = Some(i);
+                    break;
                 }
-                _ => {}
             }
-            continue;
+            _ => {}
         }
-
-        // Check if this is the start of override(...)
-        if ch == '(' && result.trim_end().ends_with("override") {
-            in_override_parens = true;
-            depth = 1;
-            continue;
-        }
-
-        result.push(ch);
     }
 
-    result
+    let params_end = first_close? + 1;
+    let rest = &func_text[params_end..];
+
+    // Find the body start `{` or statement end `;`
+    let body_start = rest.find('{').or_else(|| rest.find(';'))?;
+
+    // Find the returns clause position in rest
+    let returns_pos = rest.find("returns");
+    let modifier_end = returns_pos.unwrap_or(body_start);
+
+    // The modifier area range in absolute source coordinates
+    let area_start = func_range.start + params_end;
+    let area_end = func_range.start + params_end + modifier_end;
+
+    let original_area = &source[area_start..area_end];
+
+    // Preserve leading/trailing whitespace from the original area
+    let leading_ws = &original_area[..original_area.len() - original_area.trim_start().len()];
+    let trailing_ws = &original_area[original_area.trim_end().len()..];
+
+    let sorted_text: Vec<String> = sorted_modifiers
+        .iter()
+        .map(|(word, _)| word.clone())
+        .collect();
+
+    let replacement = format!("{}{}{}", leading_ws, sorted_text.join(" "), trailing_ws);
+
+    Some(Fix::safe(
+        "Reorder function modifiers",
+        vec![TextEdit::replace(area_start..area_end, replacement)],
+    ))
 }

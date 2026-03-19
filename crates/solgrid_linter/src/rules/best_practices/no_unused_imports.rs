@@ -34,33 +34,57 @@ impl Rule for NoUnusedImportsRule {
                     match &import.items {
                         ImportItems::Aliases(aliases) => {
                             // Named imports: import {Foo, Bar as Baz} from "file.sol";
-                            for alias in aliases.iter() {
-                                let imported_name = if let Some(alias_name) = alias.1 {
-                                    // import {Foo as Bar} — check usage of "Bar"
-                                    alias_name.as_str().to_string()
-                                } else {
-                                    // import {Foo} — check usage of "Foo"
-                                    alias.0.as_str().to_string()
-                                };
-                                let imported_name = imported_name.as_str();
+                            let import_range = solgrid_ast::span_to_range(item.span);
+                            let import_end = import_range.end;
 
-                                let import_range = solgrid_ast::span_to_range(item.span);
-                                let import_end = import_range.end;
+                            if import_end >= ctx.source.len() {
+                                continue;
+                            }
 
-                                // Search in source text after the import statement
-                                if import_end < ctx.source.len() {
-                                    let rest = &ctx.source[import_end..];
-                                    if !is_identifier_used(rest, imported_name) {
-                                        let name_range = solgrid_ast::span_to_range(alias.0.span);
-                                        let diag = Diagnostic::new(
-                                            META.id,
-                                            format!("imported symbol `{imported_name}` is unused"),
-                                            META.default_severity,
-                                            name_range,
-                                        );
-                                        diagnostics.push(diag);
-                                    }
+                            let rest = &ctx.source[import_end..];
+                            let unused_aliases: Vec<_> = aliases
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, alias)| {
+                                    let imported_name = if let Some(alias_name) = alias.1 {
+                                        alias_name.as_str().to_string()
+                                    } else {
+                                        alias.0.as_str().to_string()
+                                    };
+
+                                    (!is_identifier_used(rest, &imported_name)).then_some((
+                                        idx,
+                                        imported_name,
+                                        solgrid_ast::span_to_range(
+                                            alias
+                                                .1
+                                                .map(|alias_name| alias_name.span)
+                                                .unwrap_or(alias.0.span),
+                                        ),
+                                    ))
+                                })
+                                .collect();
+
+                            let unused_indexes: Vec<usize> =
+                                unused_aliases.iter().map(|(idx, _, _)| *idx).collect();
+                            let fix = build_unused_import_fix(
+                                ctx.source,
+                                &import_range,
+                                aliases.len(),
+                                &unused_indexes,
+                            );
+
+                            for (_, imported_name, name_range) in unused_aliases.into_iter() {
+                                let mut diag = Diagnostic::new(
+                                    META.id,
+                                    format!("imported symbol `{imported_name}` is unused"),
+                                    META.default_severity,
+                                    name_range,
+                                );
+                                if let Some(fix) = fix.clone() {
+                                    diag = diag.with_fix(fix);
                                 }
+                                diagnostics.push(diag);
                             }
                         }
                         ImportItems::Glob(alias) => {
@@ -73,12 +97,16 @@ impl Rule for NoUnusedImportsRule {
                                 let rest = &ctx.source[import_end..];
                                 if !is_identifier_used(rest, alias_name) {
                                     let name_range = solgrid_ast::span_to_range(alias.span);
-                                    diagnostics.push(Diagnostic::new(
-                                        META.id,
-                                        format!("imported symbol `{alias_name}` is unused"),
-                                        META.default_severity,
-                                        name_range,
-                                    ));
+                                    let fix = delete_import_line_fix(ctx.source, &import_range);
+                                    diagnostics.push(
+                                        Diagnostic::new(
+                                            META.id,
+                                            format!("imported symbol `{alias_name}` is unused"),
+                                            META.default_severity,
+                                            name_range,
+                                        )
+                                        .with_fix(fix),
+                                    );
                                 }
                             }
                         }
@@ -125,6 +153,63 @@ fn is_identifier_used(source: &str, name: &str) -> bool {
     false
 }
 
+/// Build a fix that deletes an entire import line (including trailing newline).
+fn delete_import_line_fix(source: &str, import_range: &std::ops::Range<usize>) -> Fix {
+    let start = find_attached_comment_start(source, import_range.start);
+    let end = if import_range.end < source.len() && source.as_bytes()[import_range.end] == b'\n' {
+        import_range.end + 1
+    } else {
+        import_range.end
+    };
+    Fix::safe("Remove unused import", vec![TextEdit::delete(start..end)])
+}
+
+/// Build a fix for an unused named import alias.
+/// If this is the only alias (or all are unused), delete the entire import line.
+/// Otherwise, remove just this alias from the `{...}` list.
+fn build_unused_import_fix(
+    source: &str,
+    import_range: &std::ops::Range<usize>,
+    total_aliases: usize,
+    unused_indexes: &[usize],
+) -> Option<Fix> {
+    // If only one alias total, or all are unused, delete the entire line
+    if total_aliases == 1 || unused_indexes.len() == total_aliases {
+        return Some(delete_import_line_fix(source, import_range));
+    }
+
+    // Otherwise, remove just this alias from the braces
+    let import_text = &source[import_range.clone()];
+    let brace_open = import_text.find('{')?;
+    let brace_close = import_text.find('}')?;
+    let braces_content = &import_text[brace_open + 1..brace_close];
+
+    // Split by comma, trim each, filter out the unused one
+    let aliases: Vec<&str> = braces_content.split(',').map(|s| s.trim()).collect();
+    let remaining: Vec<&str> = aliases
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !unused_indexes.contains(idx))
+        .map(|(_, alias)| alias)
+        .collect();
+
+    if remaining.is_empty() {
+        return Some(delete_import_line_fix(source, import_range));
+    }
+
+    let new_braces = format!("{{{}}}", remaining.join(", "));
+    let abs_brace_start = import_range.start + brace_open;
+    let abs_brace_end = import_range.start + brace_close + 1;
+
+    Some(Fix::safe(
+        "Remove unused import",
+        vec![TextEdit::replace(
+            abs_brace_start..abs_brace_end,
+            new_braces,
+        )],
+    ))
+}
+
 /// Simple check if a position is inside a line comment.
 fn is_in_line_comment(source: &str, pos: usize) -> bool {
     let before = &source[..pos];
@@ -137,4 +222,57 @@ fn is_in_line_comment(source: &str, pos: usize) -> bool {
         return comment_pos < pos;
     }
     false
+}
+
+fn find_attached_comment_start(source: &str, import_start: usize) -> usize {
+    let mut start = import_start;
+    let mut line_start = source[..import_start]
+        .rfind('\n')
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    let mut in_block_comment = false;
+
+    while line_start > 0 {
+        let prev_line_end = line_start.saturating_sub(1);
+        let prev_line_start = source[..prev_line_end]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        let line = &source[prev_line_start..prev_line_end];
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            break;
+        }
+
+        let is_comment_line = if in_block_comment {
+            true
+        } else {
+            trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.ends_with("*/")
+        };
+
+        if !is_comment_line {
+            break;
+        }
+
+        start = prev_line_start;
+
+        if in_block_comment {
+            if trimmed.starts_with("/*") {
+                in_block_comment = false;
+            }
+        } else if (trimmed.starts_with("/*") && !trimmed.ends_with("*/"))
+            || trimmed.ends_with("*/")
+            || trimmed.starts_with('*')
+        {
+            in_block_comment = !trimmed.starts_with("/*");
+        }
+
+        line_start = prev_line_start;
+    }
+
+    start
 }

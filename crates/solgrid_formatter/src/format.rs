@@ -3,7 +3,7 @@
 
 use crate::comments::CommentStore;
 use crate::directives::{compute_disabled_ranges, is_disabled, parse_directives};
-use crate::format_item::{format_item, sort_imports};
+use crate::format_item::{format_item, has_blank_line_between, sort_imports};
 use crate::ir::*;
 use solar_ast::{ItemKind, SourceUnit};
 use solgrid_ast::span_to_range;
@@ -104,12 +104,22 @@ pub fn format_source_unit(
             if (i > 0 || extra_blanks == 0) && !chunks.is_empty() {
                 chunks.push(hardline());
             }
+            if i > 0
+                && has_blank_line_between(source, leading[i - 1].range.end, comment.range.start)
+            {
+                chunks.push(hardline());
+            }
             chunks.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
         // Need a hardline between leading comments and the item
         if !leading.is_empty() {
             chunks.push(hardline());
+            if leading.last().is_some_and(|comment| {
+                has_blank_line_between(source, comment.range.end, item_range.start)
+            }) {
+                chunks.push(hardline());
+            }
         }
 
         chunks.push(format_item(item, source, config, &mut comment_store));

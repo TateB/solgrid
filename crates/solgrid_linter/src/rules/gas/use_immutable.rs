@@ -95,6 +95,10 @@ impl Rule for UseImmutableRule {
                             .any(|ft| is_assigned_in_text(ft, var_name));
 
                         if assigned_in_constructor && !assigned_elsewhere {
+                            let fix = Fix::suggestion(
+                                "Add `immutable` modifier",
+                                vec![TextEdit::insert(name_range.start, "immutable ")],
+                            );
                             diagnostics.push(
                                 Diagnostic::new(
                                     META.id,
@@ -103,7 +107,8 @@ impl Rule for UseImmutableRule {
                                     ),
                                     META.default_severity,
                                     name_range.clone(),
-                                ),
+                                )
+                                .with_fix(fix),
                             );
                         }
                     }

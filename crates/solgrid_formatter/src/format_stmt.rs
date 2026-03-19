@@ -1,7 +1,8 @@
 //! Statement formatting — converts Solar AST `Stmt` nodes to FormatChunk IR.
 
 use crate::comments::CommentStore;
-use crate::format_expr::{format_call_args, format_expr};
+use crate::format_expr::{format_call_args, format_expr, format_grouped_tuple};
+use crate::format_item::has_blank_line_between;
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
 use solar_ast::*;
@@ -24,9 +25,16 @@ pub fn format_stmt(
         ]),
         StmtKind::If(cond, then_stmt, else_stmt) => {
             let mut parts = vec![
-                text("if ("),
-                format_expr(cond, source, config),
-                text(") "),
+                group(vec![
+                    text("if ("),
+                    indent(vec![
+                        softline(),
+                        format_condition_expr(cond, source, config, comments),
+                    ]),
+                    softline(),
+                    text(")"),
+                ]),
+                space(),
                 format_stmt(then_stmt, source, config, comments),
             ];
             if let Some(else_branch) = else_stmt {
@@ -36,17 +44,31 @@ pub fn format_stmt(
             concat(parts)
         }
         StmtKind::While(cond, body) => concat(vec![
-            text("while ("),
-            format_expr(cond, source, config),
-            text(") "),
+            group(vec![
+                text("while ("),
+                indent(vec![
+                    softline(),
+                    format_condition_expr(cond, source, config, comments),
+                ]),
+                softline(),
+                text(")"),
+            ]),
+            space(),
             format_stmt(body, source, config, comments),
         ]),
         StmtKind::DoWhile(body, cond) => concat(vec![
             text("do "),
             format_stmt(body, source, config, comments),
-            text(" while ("),
-            format_expr(cond, source, config),
-            text(");"),
+            space(),
+            group(vec![
+                text("while ("),
+                indent(vec![
+                    softline(),
+                    format_condition_expr(cond, source, config, comments),
+                ]),
+                softline(),
+                text(");"),
+            ]),
         ]),
         StmtKind::For {
             init,
@@ -59,7 +81,10 @@ pub fn format_stmt(
                 None => text(";"),
             };
             let cond_chunk = match cond {
-                Some(c) => concat(vec![format_expr(c, source, config), text(";")]),
+                Some(c) => concat(vec![
+                    format_condition_expr(c, source, config, comments),
+                    text(";"),
+                ]),
                 None => text(";"),
             };
             let next_chunk = match next {
@@ -119,6 +144,7 @@ pub fn format_stmt(
         }
         StmtKind::Try(try_stmt) => format_try_stmt(try_stmt, source, config, comments),
         StmtKind::Assembly(_) => {
+            comments.take_within(span_to_range(stmt.span));
             // Assembly blocks are emitted verbatim from source.
             let asm_text = span_text(source, stmt.span);
             text(asm_text)
@@ -138,8 +164,9 @@ pub fn format_stmt(
                 parts.push(text(name.as_str()));
             }
             if let Some(init) = &var.initializer {
-                parts.push(text(" = "));
-                parts.push(format_expr(init, source, config));
+                let preserve_multiline = matches!(init.kind, ExprKind::Binary(..))
+                    && span_text(source, var.span).contains('\n');
+                parts.push(format_initializer(init, source, config, preserve_multiline));
             }
             parts.push(text(";"));
             concat(parts)
@@ -163,14 +190,28 @@ pub fn format_stmt(
                     SpannedOption::None(_) => concat(vec![]),
                 })
                 .collect();
-            concat(vec![
-                text("("),
-                join(var_chunks, text(", ")),
-                text(") = "),
-                format_expr(init, source, config),
+            group(vec![
+                format_grouped_tuple(var_chunks),
+                text(" ="),
+                indent(vec![line(), format_expr(init, source, config)]),
                 text(";"),
             ])
         }
+    }
+}
+
+fn format_condition_expr(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let range = span_to_range(expr.span);
+    let inner_comments = comments.take_within(range.clone());
+    if inner_comments.is_empty() {
+        format_expr(expr, source, config)
+    } else {
+        text(span_text(source, expr.span))
     }
 }
 
@@ -182,21 +223,63 @@ pub fn format_block(
     comments: &mut CommentStore,
 ) -> FormatChunk {
     if block.stmts.is_empty() {
-        return text("{}");
+        let inner_comments = comments.take_within(span_to_range(block.span));
+        if inner_comments.is_empty() {
+            return text("{}");
+        }
+
+        let mut body = Vec::new();
+        for comment in &inner_comments {
+            body.push(hardline());
+            body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+        return concat(vec![text("{"), indent(body), hardline(), text("}")]);
     }
 
     let mut body_parts = Vec::new();
+    let mut prev_stmt_end: Option<usize> = None;
     for stmt in block.stmts.iter() {
         let stmt_range = span_to_range(stmt.span);
+        let need_blank_line = prev_stmt_end
+            .map(|end| has_blank_line_between(source, end, stmt_range.start))
+            .unwrap_or(false);
 
         // Emit leading comments for this statement
         let leading = comments.take_leading(stmt_range.start);
-        for comment in &leading {
+        let prefix_lines = if prev_stmt_end.is_some() {
+            1 + usize::from(need_blank_line)
+        } else {
+            1
+        };
+
+        if leading.is_empty() {
+            for _ in 0..prefix_lines {
+                body_parts.push(hardline());
+            }
+        } else {
+            for (i, comment) in leading.iter().enumerate() {
+                if i == 0 {
+                    for _ in 0..prefix_lines {
+                        body_parts.push(hardline());
+                    }
+                } else {
+                    body_parts.push(hardline());
+                    if has_blank_line_between(source, leading[i - 1].range.end, comment.range.start)
+                    {
+                        body_parts.push(hardline());
+                    }
+                }
+                body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
+
             body_parts.push(hardline());
-            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            if leading.last().is_some_and(|comment| {
+                has_blank_line_between(source, comment.range.end, stmt_range.start)
+            }) {
+                body_parts.push(hardline());
+            }
         }
 
-        body_parts.push(hardline());
         body_parts.push(format_stmt(stmt, source, config, comments));
 
         // Trailing comments on the same line
@@ -205,9 +288,27 @@ pub fn format_block(
             body_parts.push(space());
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
+
+        prev_stmt_end = Some(stmt_range.end);
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])
+}
+
+fn format_initializer(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    preserve_multiline: bool,
+) -> FormatChunk {
+    let value = format_expr(expr, source, config);
+    if preserve_multiline {
+        concat(vec![text(" ="), indent(vec![hardline(), value])])
+    } else if matches!(expr.kind, ExprKind::Ternary(..)) {
+        concat(vec![text(" = "), value])
+    } else {
+        group(vec![text(" ="), indent(vec![line(), value])])
+    }
 }
 
 /// Format a try statement.
@@ -239,10 +340,13 @@ fn format_try_stmt(
                 parts.push(space());
                 parts.push(text(name.as_str()));
             }
-            parts.push(text("("));
-            let params = format_params(&clause.args, source, config);
-            parts.push(params);
-            parts.push(text(") "));
+            if !clause.args.is_empty() {
+                parts.push(text("("));
+                let params = format_params(&clause.args, source, config);
+                parts.push(params);
+                parts.push(text(")"));
+            }
+            parts.push(space());
             parts.push(format_block(&clause.block, source, config, comments));
         }
     }
