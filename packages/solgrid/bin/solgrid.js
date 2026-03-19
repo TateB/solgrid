@@ -3,6 +3,7 @@
 "use strict";
 
 const { spawnSync } = require("child_process");
+const { chmodSync } = require("fs");
 const { platform, arch, env, argv, exit } = require("process");
 
 const PLATFORMS = {
@@ -49,6 +50,15 @@ function getBinaryPath() {
 }
 
 const binary = getBinaryPath();
+
+// Some package managers install non-bin payload files without the execute bit,
+// so ensure the native binary is executable before spawning it.
+if (platform !== "win32") {
+  try {
+    chmodSync(binary, 0o755);
+  } catch {}
+}
+
 const result = spawnSync(binary, argv.slice(2), {
   stdio: "inherit",
 });

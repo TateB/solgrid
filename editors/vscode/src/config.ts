@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -51,6 +51,11 @@ export function getServerPath(
     const binaryName = process.platform === "win32" ? "solgrid.exe" : "solgrid";
     const bundledPath = join(extensionPath, "bin", binaryName);
     if (existsSync(bundledPath)) {
+      if (process.platform !== "win32") {
+        try {
+          chmodSync(bundledPath, 0o755);
+        } catch {}
+      }
       return bundledPath;
     }
   }
