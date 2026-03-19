@@ -129,8 +129,9 @@ impl Rule for ContractLayoutRule {
                             vec![TextEdit::replace(body_start..body_end, replacement)],
                         );
 
-                        // Attach fix to the first diagnostic only
-                        violation_diags[0] = violation_diags[0].clone().with_fix(fix);
+                        for diag in &mut violation_diags {
+                            *diag = diag.clone().with_fix(fix.clone());
+                        }
                     }
 
                     diagnostics.extend(violation_diags);

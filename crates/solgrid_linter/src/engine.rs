@@ -4,7 +4,7 @@ use crate::context::LintContext;
 use crate::registry::RuleRegistry;
 use crate::suppression::parse_suppressions;
 use solgrid_config::Config;
-use solgrid_diagnostics::{apply_fixes, Diagnostic, FileResult, Fix, FixSafety};
+use solgrid_diagnostics::{apply_fixes, Diagnostic, FileResult, Fix, FixSafety, TextEdit};
 use std::path::Path;
 
 /// The main lint engine.
@@ -95,17 +95,30 @@ impl LintEngine {
         let result = self.lint_source(source, path, config);
 
         // Collect applicable fixes
-        let applicable_fixes: Vec<&Fix> = result
-            .diagnostics
-            .iter()
-            .filter_map(|d| {
-                d.fix.as_ref().filter(|f| match f.safety {
-                    FixSafety::Safe => true,
-                    FixSafety::Suggestion => include_unsafe,
-                    FixSafety::Dangerous => false,
-                })
-            })
-            .collect();
+        let mut applicable_fixes: Vec<&Fix> = Vec::new();
+        for diag in &result.diagnostics {
+            let Some(fix) = diag.fix.as_ref() else {
+                continue;
+            };
+
+            let allowed = match fix.safety {
+                FixSafety::Safe => true,
+                FixSafety::Suggestion => include_unsafe,
+                FixSafety::Dangerous => false,
+            };
+            if !allowed {
+                continue;
+            }
+
+            if applicable_fixes
+                .iter()
+                .any(|existing| same_fix(existing, fix))
+            {
+                continue;
+            }
+
+            applicable_fixes.push(fix);
+        }
 
         let fixed_source = apply_fixes(source, &applicable_fixes);
 
@@ -114,6 +127,19 @@ impl LintEngine {
 
         (fixed_source, remaining)
     }
+}
+
+fn same_fix(a: &Fix, b: &Fix) -> bool {
+    a.safety == b.safety
+        && a.edits.len() == b.edits.len()
+        && a.edits
+            .iter()
+            .zip(&b.edits)
+            .all(|(left, right)| same_edit(left, right))
+}
+
+fn same_edit(a: &TextEdit, b: &TextEdit) -> bool {
+    a.range == b.range && a.replacement == b.replacement
 }
 
 impl Default for LintEngine {

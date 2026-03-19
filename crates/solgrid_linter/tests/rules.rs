@@ -2341,6 +2341,35 @@ fn test_contract_layout_fix() {
 }
 
 #[test]
+fn test_contract_layout_fix_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function foo() external {}
+    error Oops();
+    uint256 x;
+}
+"#;
+    let diags = lint_source_for_rule(source, "style/contract-layout");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every contract-layout diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 x;
+    error Oops();
+    function foo() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_fix_visibility_modifier_order() {
     let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function bad() pure public returns (uint256) {\n        return 42;\n    }\n}\n";
     let fixed = fix_source(source);
