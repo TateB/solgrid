@@ -33,8 +33,12 @@ impl Rule for StateVisibilityRule {
                         if let solgrid_parser::solar_ast::ItemKind::Variable(var) = &body_item.kind
                         {
                             if var.visibility.is_none() {
-                                let span = body_item.span;
-                                let range = solgrid_ast::span_to_range(span);
+                                let range_start = solgrid_ast::span_to_range(body_item.span).start;
+                                let range_end = var
+                                    .name
+                                    .map(|n| solgrid_ast::span_to_range(n.span).end)
+                                    .unwrap_or(solgrid_ast::span_to_range(body_item.span).end);
+                                let range = range_start..range_end;
                                 let name = var
                                     .name
                                     .map(|n| n.as_str().to_string())

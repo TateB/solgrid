@@ -7,12 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- Extract shared build job in CI so VSCode integration and E2E tests reuse a single `cargo build --release` artifact instead of building independently
-- Release process now uses PR-based flow via `Release PR` and `Release Tag` workflows instead of direct push to main
-
 ### Fixed
-- Make `sed -i` calls portable across macOS (BSD) and Linux (GNU) in `version.sh` and `changelog.sh`
+- Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
+- Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 
 ## [0.0.3] - 2026-03-19
 

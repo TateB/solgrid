@@ -77,7 +77,7 @@ impl Rule for BoolStorageRule {
             // Only flag state variables (inside contract, outside functions)
             if in_contract && !in_function {
                 // Look for bool state variable declarations
-                if let Some(bool_pos) = find_bool_state_var(trimmed) {
+                if let Some(bool_pos) = find_bool_state_var(line) {
                     let line_start = (line.as_ptr() as usize) - (ctx.source.as_ptr() as usize);
                     let abs_pos = line_start + bool_pos;
                     diagnostics.push(Diagnostic::new(

@@ -1573,6 +1573,25 @@ contract Test {
 }
 
 #[test]
+fn test_bool_storage_span_covers_bool_keyword() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    bool public paused;
+}
+"#;
+    let diagnostics = lint_source_for_rule(source, "gas/bool-storage");
+    assert_eq!(diagnostics.len(), 1);
+    let span = &diagnostics[0].span;
+    assert_eq!(
+        &source[span.clone()],
+        "bool",
+        "span should cover 'bool' keyword, not whitespace"
+    );
+}
+
+#[test]
 fn test_bool_storage_clean() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -2651,6 +2670,25 @@ contract Test {
 }
 "#;
     assert_diagnostic_count(source, "security/state-visibility", 1);
+}
+
+#[test]
+fn test_state_visibility_span_excludes_initializer() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant X = 1;
+}
+"#;
+    let diagnostics = lint_source_for_rule(source, "security/state-visibility");
+    assert_eq!(diagnostics.len(), 1);
+    let span = &diagnostics[0].span;
+    assert_eq!(
+        &source[span.clone()],
+        "uint256 constant X",
+        "span should cover declaration up to the name, not the initializer"
+    );
 }
 
 #[test]
