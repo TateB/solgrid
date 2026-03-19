@@ -29,6 +29,8 @@ jobs:
           fi
       - name: Verify all package versions are in sync
         run: bash scripts/version.sh
+      - name: Verify changelog has entry for this version
+        run: bash scripts/changelog.sh --check "${GITHUB_REF_NAME#v}"
 
   build:
     name: Build ${{ matrix.vscode-target }}
@@ -176,9 +178,21 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Extract release notes from CHANGELOG.md
+        id: release-notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BODY=$(bash scripts/changelog.sh --extract "$VERSION")
+          # Use GH Actions delimiter for multiline output
+          echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
       - name: Download release binaries
         uses: actions/download-artifact@v4
@@ -213,11 +227,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          body: ${{ steps.release-notes.outputs.body }}
           files: |
             release/solgrid-*
             release/checksums-sha256.txt
             release/*.vsix
-          generate_release_notes: true
 
       # Publish to VS Code Marketplace — temporarily disabled
       # - name: Publish to VS Marketplace

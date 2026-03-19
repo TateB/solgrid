@@ -108,9 +108,9 @@ prettier-build-debug: install
 prettier-test: prettier-build
     pnpm --filter prettier-plugin-solgrid test
 
-# --- Version ---
+# --- Version & Changelog ---
 
-# Check/set version: `just version`, `just version set 0.2.0`, `just version write`
+# Check/set version (also stamps CHANGELOG.md): `just version`, `just version set 0.2.0`, `just version write`
 version action="" ver="":
     #!/usr/bin/env bash
     case "{{action}}" in
@@ -123,6 +123,10 @@ version action="" ver="":
             ./scripts/version.sh --set "{{ver}}" ;;
         *) echo "Usage: just version [check|write|set X.Y.Z]" >&2; exit 1 ;;
     esac
+
+# Extract release notes for a version from CHANGELOG.md
+changelog-extract ver:
+    @bash scripts/changelog.sh --extract "{{ver}}"
 
 # --- npm CLI ---
 
