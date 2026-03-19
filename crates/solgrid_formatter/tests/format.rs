@@ -480,6 +480,13 @@ fn test_preserve_line_comment() {
 }
 
 #[test]
+fn test_preserve_regular_line_comment_text() {
+    let source = "//check this stays exact\npragma solidity ^0.8.0;\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("//check this stays exact"));
+}
+
+#[test]
 fn test_preserve_block_comment() {
     let source = "/* Multi-line comment */\npragma solidity ^0.8.0;\n";
     let formatted = format_source(source, &default_config()).unwrap();
@@ -1801,4 +1808,203 @@ fn test_preserve_bare_catch_without_parentheses() {
 
     let reformatted = format_source(&formatted, &default_config()).unwrap();
     assert_eq!(reformatted, expected);
+}
+
+#[test]
+fn test_preserve_subdenomination_without_duplication() {
+    let source = r#"contract T {
+    uint64 private constant GRACE_PERIOD = 90 days;
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, source);
+}
+
+#[test]
+fn test_wrap_long_constant_initializer_after_equals() {
+    let source = r#"contract T {
+    bytes32 private constant ETH_NODE = 0x93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae;
+}
+"#;
+    let expected = r#"contract T {
+    bytes32 private constant ETH_NODE =
+        0x93cdeb708b7545dc668eb9280176169d1c33cfd8ed6f04690a0bcc88a93fc4ae;
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_wrap_long_tuple_assignment_after_equals() {
+    let source = r#"contract T {
+    function f(bytes calldata data) public {
+        (string memory label, address owner, uint16 ownerControlledFuses, address resolver) = abi.decode(data, (string, address, uint16, address));
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bytes calldata data) public {
+        (
+            string memory label,
+            address owner,
+            uint16 ownerControlledFuses,
+            address resolver
+        ) =
+            abi.decode(data, (string, address, uint16, address));
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comments_inside_multiline_condition() {
+    let source = r#"contract T {
+    function f(bytes32 parentNode, bytes32 subnode) public view {
+        if (
+            expired &&
+                // protects a name that has been unwrapped
+                (subnodeOwner == address(0)
+                    || ens.owner(subnode) == address(0))
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("// protects a name that has been unwrapped"));
+    assert!(
+        formatted.contains("if (")
+            && formatted.contains("(subnodeOwner == address(0)")
+            && !formatted.contains(") {\n            // protects a name"),
+        "comment should remain inside the condition, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_wrap_modifier_arguments_over_multiple_lines() {
+    let source = r#"contract T {
+    function setRecord(bytes32 node, address owner, address resolver, uint64 ttl)
+        public
+        operationAllowed(node, CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL)
+    {}
+}
+"#;
+    let expected = r#"contract T {
+    function setRecord(bytes32 node, address owner, address resolver, uint64 ttl)
+        public
+        operationAllowed(
+            node,
+            CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL
+        )
+    {}
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_logical_or_chain_without_staircase_indent() {
+    let source = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId
+            || interfaceId == type(IERC721Receiver).interfaceId
+            || super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_if_condition_breaks_after_open_paren() {
+    let source = r#"contract T {
+    function f(address registrant) public view {
+        if (registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)) {
+            revert();
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address registrant) public view {
+        if (
+            registrant != msg.sender
+                && !registrar.isApprovedForAll(registrant, msg.sender)
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_parenthesized_logical_chain_like_forge() {
+    let source = r#"contract T {
+    function f(address owner, address addr, bytes32 node, uint32 fuses, uint64 expiry) public view returns (bool) {
+        return (owner == addr ||
+            isApprovedForAll(owner, addr) ||
+                getApproved(uint256(node)) == addr) &&
+            !_isETH2LDInGracePeriod(fuses, expiry);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        address owner,
+        address addr,
+        bytes32 node,
+        uint32 fuses,
+        uint64 expiry
+    )
+        public
+        view
+        returns (bool)
+    {
+        return (owner == addr
+                || isApprovedForAll(owner, addr)
+                || getApproved(uint256(node)) == addr)
+            && !_isETH2LDInGracePeriod(fuses, expiry);
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
 }

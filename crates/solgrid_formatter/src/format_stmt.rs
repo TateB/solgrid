@@ -1,7 +1,7 @@
 //! Statement formatting — converts Solar AST `Stmt` nodes to FormatChunk IR.
 
 use crate::comments::CommentStore;
-use crate::format_expr::{format_call_args, format_expr};
+use crate::format_expr::{format_call_args, format_expr, format_grouped_tuple};
 use crate::format_item::has_blank_line_between;
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
@@ -25,9 +25,16 @@ pub fn format_stmt(
         ]),
         StmtKind::If(cond, then_stmt, else_stmt) => {
             let mut parts = vec![
-                text("if ("),
-                format_expr(cond, source, config),
-                text(") "),
+                group(vec![
+                    text("if ("),
+                    indent(vec![
+                        softline(),
+                        format_condition_expr(cond, source, config, comments),
+                    ]),
+                    softline(),
+                    text(")"),
+                ]),
+                space(),
                 format_stmt(then_stmt, source, config, comments),
             ];
             if let Some(else_branch) = else_stmt {
@@ -37,17 +44,31 @@ pub fn format_stmt(
             concat(parts)
         }
         StmtKind::While(cond, body) => concat(vec![
-            text("while ("),
-            format_expr(cond, source, config),
-            text(") "),
+            group(vec![
+                text("while ("),
+                indent(vec![
+                    softline(),
+                    format_condition_expr(cond, source, config, comments),
+                ]),
+                softline(),
+                text(")"),
+            ]),
+            space(),
             format_stmt(body, source, config, comments),
         ]),
         StmtKind::DoWhile(body, cond) => concat(vec![
             text("do "),
             format_stmt(body, source, config, comments),
-            text(" while ("),
-            format_expr(cond, source, config),
-            text(");"),
+            space(),
+            group(vec![
+                text("while ("),
+                indent(vec![
+                    softline(),
+                    format_condition_expr(cond, source, config, comments),
+                ]),
+                softline(),
+                text(");"),
+            ]),
         ]),
         StmtKind::For {
             init,
@@ -60,7 +81,10 @@ pub fn format_stmt(
                 None => text(";"),
             };
             let cond_chunk = match cond {
-                Some(c) => concat(vec![format_expr(c, source, config), text(";")]),
+                Some(c) => concat(vec![
+                    format_condition_expr(c, source, config, comments),
+                    text(";"),
+                ]),
                 None => text(";"),
             };
             let next_chunk = match next {
@@ -166,14 +190,28 @@ pub fn format_stmt(
                     SpannedOption::None(_) => concat(vec![]),
                 })
                 .collect();
-            concat(vec![
-                text("("),
-                join(var_chunks, text(", ")),
-                text(") = "),
-                format_expr(init, source, config),
+            group(vec![
+                format_grouped_tuple(var_chunks),
+                text(" ="),
+                indent(vec![line(), format_expr(init, source, config)]),
                 text(";"),
             ])
         }
+    }
+}
+
+fn format_condition_expr(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let range = span_to_range(expr.span);
+    let inner_comments = comments.take_within(range.clone());
+    if inner_comments.is_empty() {
+        format_expr(expr, source, config)
+    } else {
+        text(span_text(source, expr.span))
     }
 }
 
@@ -266,8 +304,10 @@ fn format_initializer(
     let value = format_expr(expr, source, config);
     if preserve_multiline {
         concat(vec![text(" ="), indent(vec![hardline(), value])])
-    } else {
+    } else if matches!(expr.kind, ExprKind::Ternary(..)) {
         concat(vec![text(" = "), value])
+    } else {
+        group(vec![text(" ="), indent(vec![line(), value])])
     }
 }
 

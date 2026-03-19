@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation
 - Fix formatter removing intentional single blank lines inside functions and around comment blocks
 - Fix formatter emitting invalid `catch()` syntax for bare catch clauses and allow underscore-prefixed internal/private function names
+- Fix formatter wrapping for long initializers, tuple assignments, modifier arguments, and multiline condition comments
+- Fix import autofixes on save so multiline imports still reorder and overlapping import fixes no longer cancel each other
 - Fix `style/contract-layout` code action not appearing in VSCode when cursor is on non-first violation
 - Fix `style/contract-layout` autofix producing awkward member spacing and detached trailing comments
 - Fix `style/ordering` and `style/func-order` code actions only appearing on the first violation in a reordered group

@@ -4,7 +4,7 @@
 //! errors, UDVTs, using-for, and variable declarations.
 
 use crate::comments::CommentStore;
-use crate::format_expr::format_expr;
+use crate::format_expr::{format_expr, format_grouped_items};
 use crate::format_stmt::{format_block, format_params};
 use crate::format_ty::{
     format_data_location, format_state_mutability, format_type, format_visibility,
@@ -159,7 +159,7 @@ fn format_contract(
                     concat(vec![
                         path_chunk,
                         text("("),
-                        join(args, text(", ")),
+                        format_grouped_items(args),
                         text(")"),
                     ])
                 }
@@ -404,7 +404,7 @@ fn format_function(
             attrs.push(concat(vec![
                 text(mod_name),
                 text("("),
-                join(args, text(", ")),
+                format_grouped_items(args),
                 text(")"),
             ]));
         }
@@ -571,8 +571,10 @@ fn format_initializer(
     let value = format_expr(expr, source, config);
     if preserve_multiline {
         concat(vec![text(" ="), indent(vec![hardline(), value])])
-    } else {
+    } else if matches!(expr.kind, ExprKind::Ternary(..)) {
         concat(vec![text(" = "), value])
+    } else {
+        group(vec![text(" ="), indent(vec![line(), value])])
     }
 }
 

@@ -18,9 +18,9 @@ static META: RuleMeta = RuleMeta {
 pub struct ImportsOrderingRule;
 
 #[derive(Clone)]
-struct ImportLine {
-    line_start: usize,
-    line_end: usize,
+struct ImportStatement {
+    start: usize,
+    end: usize,
     path: String,
     blank_before: bool,
 }
@@ -33,29 +33,7 @@ impl Rule for ImportsOrderingRule {
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
-        // Collect import statements and their paths
-        let mut imports: Vec<ImportLine> = Vec::new();
-        let mut offset = 0;
-        let mut previous_import_end: Option<usize> = None;
-
-        for line in ctx.source.split('\n') {
-            let trimmed = line.trim();
-            if trimmed.starts_with("import ") {
-                if let Some(path) = extract_import_path(trimmed) {
-                    let blank_before = previous_import_end
-                        .map(|prev_end| has_blank_line_between(&ctx.source[prev_end..offset]))
-                        .unwrap_or(false);
-                    imports.push(ImportLine {
-                        line_start: offset,
-                        line_end: offset + line.len(),
-                        path,
-                        blank_before,
-                    });
-                    previous_import_end = Some(offset + line.len());
-                }
-            }
-            offset += line.len() + 1;
-        }
+        let imports = collect_import_statements(ctx.source);
 
         // Check consecutive import groups are sorted
         if imports.len() < 2 {
@@ -68,8 +46,8 @@ impl Rule for ImportsOrderingRule {
             let mut group_end = group_start + 1;
             while group_end < imports.len() {
                 // Check if imports are on consecutive or near-consecutive lines
-                let prev_end = imports[group_end - 1].line_end;
-                let curr_start = imports[group_end].line_start;
+                let prev_end = imports[group_end - 1].end;
+                let curr_start = imports[group_end].start;
                 // Allow a small gap (blank lines between imports are okay)
                 let gap = &ctx.source[prev_end..curr_start];
                 if gap.trim().is_empty() || gap.split('\n').count() <= 2 {
@@ -100,7 +78,7 @@ impl Rule for ImportsOrderingRule {
                 let mut sorted = imports[group_start..group_end].to_vec();
                 sorted.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
 
-                let group_range = imports[group_start].line_start..imports[group_end - 1].line_end;
+                let group_range = imports[group_start].start..imports[group_end - 1].end;
                 let mut sorted_text = String::new();
                 for (idx, import) in sorted.iter().enumerate() {
                     if idx > 0 {
@@ -110,7 +88,7 @@ impl Rule for ImportsOrderingRule {
                             sorted_text.push('\n');
                         }
                     }
-                    sorted_text.push_str(&ctx.source[import.line_start..import.line_end]);
+                    sorted_text.push_str(&ctx.source[import.start..import.end]);
                 }
 
                 let fix = Fix::safe(
@@ -128,7 +106,7 @@ impl Rule for ImportsOrderingRule {
                                 imports[violation_idx - 1].path
                             ),
                             META.default_severity,
-                            imports[violation_idx].line_start..imports[violation_idx].line_end,
+                            imports[violation_idx].start..imports[violation_idx].end,
                         )
                         .with_fix(fix.clone()),
                     );
@@ -140,6 +118,45 @@ impl Rule for ImportsOrderingRule {
 
         diagnostics
     }
+}
+
+fn collect_import_statements(source: &str) -> Vec<ImportStatement> {
+    let mut imports = Vec::new();
+    let mut offset = 0;
+    let mut previous_import_end: Option<usize> = None;
+    let mut current_start: Option<usize> = None;
+
+    for line in source.split('\n') {
+        let line_end = offset + line.len();
+        let trimmed = line.trim();
+
+        if current_start.is_none() && trimmed.starts_with("import ") {
+            current_start = Some(offset);
+        }
+
+        if let Some(start) = current_start {
+            if trimmed.ends_with(';') {
+                let statement = &source[start..line_end];
+                if let Some(path) = extract_import_path(statement) {
+                    let blank_before = previous_import_end
+                        .map(|prev_end| has_blank_line_between(&source[prev_end..start]))
+                        .unwrap_or(false);
+                    imports.push(ImportStatement {
+                        start,
+                        end: line_end,
+                        path,
+                        blank_before,
+                    });
+                    previous_import_end = Some(line_end);
+                }
+                current_start = None;
+            }
+        }
+
+        offset = line_end + 1;
+    }
+
+    imports
 }
 
 fn has_blank_line_between(gap: &str) -> bool {

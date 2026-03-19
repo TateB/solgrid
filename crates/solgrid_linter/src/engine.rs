@@ -92,41 +92,107 @@ impl LintEngine {
         config: &Config,
         include_unsafe: bool,
     ) -> (String, FileResult) {
-        let result = self.lint_source(source, path, config);
+        let mut current_source = source.to_string();
 
-        // Collect applicable fixes
-        let mut applicable_fixes: Vec<&Fix> = Vec::new();
-        for diag in &result.diagnostics {
-            let Some(fix) = diag.fix.as_ref() else {
-                continue;
-            };
+        for _ in 0..8 {
+            let result = self.lint_source(&current_source, path, config);
+            let applicable_fixes = collect_applicable_fixes(&result.diagnostics, include_unsafe);
+            let selected_fixes = select_non_overlapping_fixes(&applicable_fixes);
 
-            let allowed = match fix.safety {
-                FixSafety::Safe => true,
-                FixSafety::Suggestion => include_unsafe,
-                FixSafety::Dangerous => false,
-            };
-            if !allowed {
-                continue;
+            if selected_fixes.is_empty() {
+                break;
             }
 
-            if applicable_fixes
-                .iter()
-                .any(|existing| same_fix(existing, fix))
-            {
-                continue;
+            let next_source = apply_fixes(&current_source, &selected_fixes);
+            if next_source == current_source {
+                break;
             }
 
-            applicable_fixes.push(fix);
+            current_source = next_source;
         }
 
-        let fixed_source = apply_fixes(source, &applicable_fixes);
-
-        // Re-lint the fixed source to get remaining diagnostics
-        let remaining = self.lint_source(&fixed_source, path, config);
-
-        (fixed_source, remaining)
+        let remaining = self.lint_source(&current_source, path, config);
+        (current_source, remaining)
     }
+}
+
+fn collect_applicable_fixes(diagnostics: &[Diagnostic], include_unsafe: bool) -> Vec<Fix> {
+    let mut fixes = Vec::new();
+
+    for diag in diagnostics {
+        let Some(fix) = diag.fix.as_ref() else {
+            continue;
+        };
+
+        let allowed = match fix.safety {
+            FixSafety::Safe => true,
+            FixSafety::Suggestion => include_unsafe,
+            FixSafety::Dangerous => false,
+        };
+        if !allowed {
+            continue;
+        }
+
+        if fixes.iter().any(|existing| same_fix(existing, fix)) {
+            continue;
+        }
+
+        fixes.push(fix.clone());
+    }
+
+    fixes
+}
+
+fn select_non_overlapping_fixes(fixes: &[Fix]) -> Vec<&Fix> {
+    let mut ordered: Vec<&Fix> = fixes.iter().collect();
+    ordered.sort_by(|left, right| {
+        let left_start = left
+            .edits
+            .iter()
+            .map(|edit| edit.range.start)
+            .min()
+            .unwrap_or(0);
+        let right_start = right
+            .edits
+            .iter()
+            .map(|edit| edit.range.start)
+            .min()
+            .unwrap_or(0);
+
+        left_start
+            .cmp(&right_start)
+            .then_with(|| total_fix_span(left).cmp(&total_fix_span(right)))
+            .then_with(|| left.edits.len().cmp(&right.edits.len()))
+    });
+
+    let mut selected = Vec::new();
+    let mut selected_edits: Vec<&TextEdit> = Vec::new();
+
+    for fix in ordered {
+        if fix.edits.iter().any(|edit| {
+            selected_edits
+                .iter()
+                .any(|existing| edits_overlap(edit, existing))
+        }) {
+            continue;
+        }
+
+        selected_edits.extend(fix.edits.iter());
+        selected.push(fix);
+    }
+
+    selected
+}
+
+fn total_fix_span(fix: &Fix) -> usize {
+    fix.edits
+        .iter()
+        .map(|edit| edit.range.end.saturating_sub(edit.range.start))
+        .sum()
+}
+
+fn edits_overlap(left: &TextEdit, right: &TextEdit) -> bool {
+    left.range.start < right.range.end && right.range.start < left.range.end
 }
 
 fn same_fix(a: &Fix, b: &Fix) -> bool {

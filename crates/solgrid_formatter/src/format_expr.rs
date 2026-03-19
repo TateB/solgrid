@@ -21,15 +21,21 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
                 concat(vec![text(op_str), format_expr(operand, source, config)])
             }
         }
-        ExprKind::Binary(lhs, op, rhs) => {
-            let op_str = span_text(source, op.span);
-            group(vec![
-                format_expr(lhs, source, config),
-                space(),
-                text(op_str),
-                indent(vec![line(), format_expr(rhs, source, config)]),
-            ])
-        }
+        ExprKind::Binary(lhs, op, rhs) => match op.kind {
+            BinOpKind::And | BinOpKind::Or => format_logical_chain(lhs, *op, rhs, source, config),
+            _ => {
+                let op_str = span_text(source, op.span);
+                group(vec![
+                    format_expr(lhs, source, config),
+                    indent(vec![
+                        line(),
+                        text(op_str),
+                        space(),
+                        format_expr(rhs, source, config),
+                    ]),
+                ])
+            }
+        },
         ExprKind::Ternary(cond, if_true, if_false) => {
             let cond_chunk = format_expr(cond, source, config);
             let true_chunk = format_expr(if_true, source, config);
@@ -123,6 +129,14 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             text(member.as_str()),
         ]),
         ExprKind::Tuple(elements) => {
+            if let [SpannedOption::Some(expr)] = elements.as_ref() {
+                return group(vec![
+                    text("("),
+                    indent(vec![format_expr(expr, source, config)]),
+                    text(")"),
+                ]);
+            }
+
             let items: Vec<FormatChunk> = elements
                 .iter()
                 .map(|elem| match elem {
@@ -130,8 +144,7 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
                     SpannedOption::None(_) => concat(vec![]),
                 })
                 .collect();
-            let inner = join(items, text(", "));
-            group(vec![text("("), inner, text(")")])
+            format_grouped_tuple(items)
         }
         ExprKind::Type(ty) => format_type(ty, source, config),
         ExprKind::TypeCall(ty) => concat(vec![
@@ -158,6 +171,47 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
     }
 }
 
+fn format_logical_chain(
+    lhs: &Expr<'_>,
+    op: BinOp,
+    rhs: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+) -> FormatChunk {
+    let mut parts = Vec::new();
+    collect_logical_terms(lhs, op.kind, source, config, &mut parts);
+    collect_logical_terms(rhs, op.kind, source, config, &mut parts);
+
+    let mut iter = parts.into_iter();
+    let first = iter
+        .next()
+        .unwrap_or_else(|| format_expr(lhs, source, config));
+    let op_str = span_text(source, op.span).to_string();
+    let rest = iter
+        .flat_map(|part| vec![line(), text(op_str.clone()), space(), part])
+        .collect();
+
+    group(vec![first, indent(rest)])
+}
+
+fn collect_logical_terms(
+    expr: &Expr<'_>,
+    op_kind: BinOpKind,
+    source: &str,
+    config: &FormatConfig,
+    out: &mut Vec<FormatChunk>,
+) {
+    if let ExprKind::Binary(lhs, op, rhs) = &expr.kind {
+        if op.kind == op_kind {
+            collect_logical_terms(lhs, op_kind, source, config, out);
+            collect_logical_terms(rhs, op_kind, source, config, out);
+            return;
+        }
+    }
+
+    out.push(format_expr(expr, source, config));
+}
+
 /// Format call arguments (positional or named).
 pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
     match &args.kind {
@@ -169,13 +223,7 @@ pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig
                 .iter()
                 .map(|e| format_expr(e, source, config))
                 .collect();
-            group(vec![
-                indent(vec![
-                    softline(),
-                    join(items, concat(vec![text(","), line()])),
-                ]),
-                softline(),
-            ])
+            format_grouped_items(items)
         }
         CallArgsKind::Named(named) => {
             if named.is_empty() {
@@ -200,6 +248,20 @@ pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig
     }
 }
 
+pub fn format_grouped_items(items: Vec<FormatChunk>) -> FormatChunk {
+    group(vec![
+        indent(vec![
+            softline(),
+            join(items, concat(vec![text(","), line()])),
+        ]),
+        softline(),
+    ])
+}
+
+pub fn format_grouped_tuple(items: Vec<FormatChunk>) -> FormatChunk {
+    group(vec![text("("), format_grouped_items(items), text(")")])
+}
+
 /// Format a literal value.
 fn format_literal(
     lit: &Lit<'_>,
@@ -217,7 +279,7 @@ fn format_literal(
         _ => raw.to_string(),
     };
 
-    let mut result = text(formatted);
+    let mut result = text(formatted.clone());
 
     if let Some(denom) = sub_denom {
         let denom_str = match denom {
@@ -235,7 +297,9 @@ fn format_literal(
                 TimeSubDenomination::Years => "years",
             },
         };
-        result = concat(vec![result, space(), text(denom_str)]);
+        if !formatted.split_whitespace().any(|part| part == denom_str) {
+            result = concat(vec![result, space(), text(denom_str)]);
+        }
     }
 
     result

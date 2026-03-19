@@ -2377,6 +2377,50 @@ contract Test {}
 }
 
 #[test]
+fn test_imports_ordering_fix_multiline_import() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {
+    Zebra
+} from "./Zebra.sol";
+import {Alpha} from "./Alpha.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Alpha} from "./Alpha.sol";
+import {
+    Zebra
+} from "./Zebra.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_source_import_overlaps_do_not_cancel_all_fixes() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Zebra} from "./Zebra.sol";
+import {Alpha} from "./Alpha.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_contract_layout_fix() {
     let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() external {}\n    uint256 x;\n}\n";
     let diags = lint_source_for_rule(source, "style/contract-layout");
