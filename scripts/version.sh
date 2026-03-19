@@ -109,11 +109,16 @@ case "$MODE" in
     echo "  Updated packages/solgrid/package.json -> $NEW_VERSION"
     echo "  Updated packages/solgrid/npm/cli-*/package.json -> $NEW_VERSION"
     echo "  Updated packages/prettier-plugin-solgrid/npm/napi-*/package.json -> $NEW_VERSION"
+
+    # Stamp CHANGELOG.md: move [Unreleased] content into the new version
+    bash "$REPO_ROOT/scripts/changelog.sh" --stamp "$NEW_VERSION"
+
     echo ""
     echo "Next steps:"
-    echo "  1. git add -A && git commit -m 'chore: bump version to $NEW_VERSION'"
-    echo "  2. git tag v$NEW_VERSION"
-    echo "  3. git push origin main --tags"
+    echo "  1. Review CHANGELOG.md — edit the new [$NEW_VERSION] section if needed"
+    echo "  2. git add -A && git commit -m 'chore: bump version to $NEW_VERSION'"
+    echo "  3. git tag v$NEW_VERSION"
+    echo "  4. git push origin main --tags"
     ;;
 
   check|*)
