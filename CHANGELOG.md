@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 - Fix autofix regressions in modifier ordering, unused import cleanup, function ordering, and import path normalization
 - Fix formatter duplicating inline assembly comments on repeated save/format
+- Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation
 - Fix `style/contract-layout` code action not appearing in VSCode when cursor is on non-first violation
+- Fix `style/contract-layout` autofix producing awkward member spacing and detached trailing comments
+- Avoid double formatting on save in VSCode when `editor.formatOnSave` already uses solgrid
 - Deduplicate identical fixes in the fix engine to prevent overlapping-edit aborts
 
 ## [0.0.3] - 2026-03-19

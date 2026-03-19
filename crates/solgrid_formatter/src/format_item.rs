@@ -29,7 +29,7 @@ pub fn format_item(
         }
         ItemKind::Function(func) => format_function(func, source, config, comments),
         ItemKind::Variable(var) => format_variable_def(var, source, config),
-        ItemKind::Struct(s) => format_struct(s, source, config),
+        ItemKind::Struct(s) => format_struct(s, source, config, comments),
         ItemKind::Enum(e) => format_enum(e),
         ItemKind::Udvt(udvt) => format_udvt(udvt, source, config),
         ItemKind::Event(event) => format_event(event, source, config),
@@ -215,19 +215,33 @@ fn format_contract(
             false
         };
 
-        // Add blank line before leading comments if needed
-        if need_blank_line {
-            body_parts.push(hardline());
-        }
-
-        // Emit leading comments for this body item
         let leading = comments.take_leading(item_range.start);
-        for comment in &leading {
+
+        let prefix_lines = if prev_kind.is_some() {
+            1 + usize::from(need_blank_line)
+        } else {
+            1
+        };
+
+        if leading.is_empty() {
+            for _ in 0..prefix_lines {
+                body_parts.push(hardline());
+            }
+        } else {
+            for (i, comment) in leading.iter().enumerate() {
+                if i == 0 {
+                    for _ in 0..prefix_lines {
+                        body_parts.push(hardline());
+                    }
+                } else {
+                    body_parts.push(hardline());
+                }
+                body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
+
             body_parts.push(hardline());
-            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
-        body_parts.push(hardline());
         body_parts.push(format_item(item, source, config, comments));
 
         // Trailing comments on the same line
@@ -485,8 +499,9 @@ fn format_variable_def(
     }
 
     if let Some(init) = &var.initializer {
-        parts.push(text(" = "));
-        parts.push(format_expr(init, source, config));
+        let preserve_multiline =
+            matches!(init.kind, ExprKind::Binary(..)) && span_text(source, var.span).contains('\n');
+        parts.push(format_initializer(init, source, config, preserve_multiline));
     }
 
     parts.push(text(";"));
@@ -494,7 +509,12 @@ fn format_variable_def(
 }
 
 /// Format a struct definition.
-fn format_struct(s: &ItemStruct<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+fn format_struct(
+    s: &ItemStruct<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     let mut parts = vec![text("struct "), text(s.name.as_str()), text(" {")];
 
     if s.fields.is_empty() {
@@ -504,6 +524,13 @@ fn format_struct(s: &ItemStruct<'_>, source: &str, config: &FormatConfig) -> For
 
     let mut body = Vec::new();
     for field in s.fields.iter() {
+        let field_range = span_to_range(field.span);
+        let leading = comments.take_leading(field_range.start);
+        for comment in &leading {
+            body.push(hardline());
+            body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
         body.push(hardline());
         let mut field_parts = vec![format_type(&field.ty, source, config)];
         if let Some(name) = &field.name {
@@ -512,12 +539,32 @@ fn format_struct(s: &ItemStruct<'_>, source: &str, config: &FormatConfig) -> For
         }
         field_parts.push(text(";"));
         body.push(concat(field_parts));
+
+        let trailing = comments.take_trailing(source, field_range.end);
+        for comment in &trailing {
+            body.push(space());
+            body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
     }
 
     parts.push(indent(body));
     parts.push(hardline());
     parts.push(text("}"));
     concat(parts)
+}
+
+fn format_initializer(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    preserve_multiline: bool,
+) -> FormatChunk {
+    let value = format_expr(expr, source, config);
+    if preserve_multiline {
+        concat(vec![text(" ="), indent(vec![hardline(), value])])
+    } else {
+        concat(vec![text(" = "), value])
+    }
 }
 
 /// Format an enum definition.

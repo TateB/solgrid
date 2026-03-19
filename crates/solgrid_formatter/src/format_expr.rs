@@ -27,19 +27,40 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
                 format_expr(lhs, source, config),
                 space(),
                 text(op_str),
-                line(),
-                format_expr(rhs, source, config),
+                indent(vec![line(), format_expr(rhs, source, config)]),
             ])
         }
-        ExprKind::Ternary(cond, if_true, if_false) => group(vec![
-            format_expr(cond, source, config),
-            line(),
-            text("? "),
-            format_expr(if_true, source, config),
-            line(),
-            text(": "),
-            format_expr(if_false, source, config),
-        ]),
+        ExprKind::Ternary(cond, if_true, if_false) => {
+            let cond_chunk = format_expr(cond, source, config);
+            let true_chunk = format_expr(if_true, source, config);
+            let false_chunk = format_expr(if_false, source, config);
+
+            if span_text(source, expr.span).contains('\n') {
+                concat(vec![
+                    cond_chunk,
+                    indent(vec![
+                        hardline(),
+                        text("? "),
+                        true_chunk,
+                        hardline(),
+                        text(": "),
+                        false_chunk,
+                    ]),
+                ])
+            } else {
+                group(vec![
+                    cond_chunk,
+                    indent(vec![
+                        line(),
+                        text("? "),
+                        true_chunk,
+                        line(),
+                        text(": "),
+                        false_chunk,
+                    ]),
+                ])
+            }
+        }
         ExprKind::Assign(lhs, op, rhs) => {
             let op_str = if let Some(binop) = op {
                 format!("{} ", span_text(source, binop.span))

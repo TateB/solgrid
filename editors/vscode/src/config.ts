@@ -18,6 +18,11 @@ export interface SolgridConfig {
   configPath: string | null;
 }
 
+export interface EditorSaveConfig {
+  formatOnSave: boolean;
+  defaultFormatter: string | null;
+}
+
 /** Default configuration values. */
 export const DEFAULT_CONFIG: SolgridConfig = {
   enable: true,
@@ -26,6 +31,11 @@ export const DEFAULT_CONFIG: SolgridConfig = {
   fixOnSaveUnsafe: false,
   formatOnSave: true,
   configPath: null,
+};
+
+export const DEFAULT_EDITOR_SAVE_CONFIG: EditorSaveConfig = {
+  formatOnSave: false,
+  defaultFormatter: null,
 };
 
 /**
@@ -66,12 +76,13 @@ export function getServerPath(
  * Build initialization options sent to the LSP server on startup.
  */
 export function getInitializationOptions(
-  config: SolgridConfig
+  config: SolgridConfig,
+  editorConfig: EditorSaveConfig = DEFAULT_EDITOR_SAVE_CONFIG
 ): Record<string, unknown> {
   return {
     fixOnSave: config.fixOnSave,
     fixOnSaveUnsafe: config.fixOnSaveUnsafe,
-    formatOnSave: config.formatOnSave,
+    formatOnSave: getEffectiveServerFormatOnSave(config, editorConfig),
     configPath: config.configPath,
   };
 }
@@ -79,10 +90,24 @@ export function getInitializationOptions(
 /**
  * Build settings payload sent to the LSP server on configuration change.
  */
-export function getSettings(config: SolgridConfig): Record<string, unknown> {
+export function getSettings(
+  config: SolgridConfig,
+  editorConfig: EditorSaveConfig = DEFAULT_EDITOR_SAVE_CONFIG
+): Record<string, unknown> {
   return {
     fixOnSave: config.fixOnSave,
     fixOnSaveUnsafe: config.fixOnSaveUnsafe,
-    formatOnSave: config.formatOnSave,
+    formatOnSave: getEffectiveServerFormatOnSave(config, editorConfig),
   };
+}
+
+export function getEffectiveServerFormatOnSave(
+  config: SolgridConfig,
+  editorConfig: EditorSaveConfig = DEFAULT_EDITOR_SAVE_CONFIG
+): boolean {
+  return !(
+    config.formatOnSave &&
+    editorConfig.formatOnSave &&
+    editorConfig.defaultFormatter === "solgrid.solgrid-vscode"
+  ) && config.formatOnSave;
 }

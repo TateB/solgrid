@@ -270,6 +270,102 @@ fn test_preserve_assembly_comment_without_duplication() {
 }
 
 #[test]
+fn test_keep_wrapped_constant_initializer_indented_after_equals() {
+    let source = r#"abstract contract CCIPBatcher is CCIPReader {
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+}
+"#;
+    let expected = r#"abstract contract CCIPBatcher is CCIPReader {
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_struct_field_trailing_comments() {
+    let source = r#"contract T {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+}
+"#;
+    let expected = r#"contract T {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_ternary_continuation_indented() {
+    let source = r#"contract T {
+    function f(Lookup memory lu) internal view returns (uint256) {
+        uint256 flags = detectEIP140(lu.target)
+            ? FLAG_EIP140_AFTER
+            : FLAG_EIP140_BEFORE;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(Lookup memory lu) internal view returns (uint256) {
+        uint256 flags = detectEIP140(lu.target)
+            ? FLAG_EIP140_AFTER
+            : FLAG_EIP140_BEFORE;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comments_inside_empty_if_block() {
+    let source = r#"contract T {
+    function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {
+        if (unsafe && v.length == 0) {
+            // unsafe contracts appear the same for throw and unimplemented fallback
+            // decision: interpret like an unimplemented function selector response
+        } else if (!ok) {
+            lu.flags |= FLAG_CALL_ERROR;
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {
+        if (unsafe && v.length == 0) {
+            // unsafe contracts appear the same for throw and unimplemented fallback
+            // decision: interpret like an unimplemented function selector response
+        } else if (!ok) {
+            lu.flags |= FLAG_CALL_ERROR;
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_format_emit() {
     let source = "contract T {\n    event Foo(uint256 x);\n    function f() public {\n        emit Foo(1);\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();

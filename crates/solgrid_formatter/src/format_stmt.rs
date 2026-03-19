@@ -139,8 +139,9 @@ pub fn format_stmt(
                 parts.push(text(name.as_str()));
             }
             if let Some(init) = &var.initializer {
-                parts.push(text(" = "));
-                parts.push(format_expr(init, source, config));
+                let preserve_multiline = matches!(init.kind, ExprKind::Binary(..))
+                    && span_text(source, var.span).contains('\n');
+                parts.push(format_initializer(init, source, config, preserve_multiline));
             }
             parts.push(text(";"));
             concat(parts)
@@ -183,7 +184,17 @@ pub fn format_block(
     comments: &mut CommentStore,
 ) -> FormatChunk {
     if block.stmts.is_empty() {
-        return text("{}");
+        let inner_comments = comments.take_within(span_to_range(block.span));
+        if inner_comments.is_empty() {
+            return text("{}");
+        }
+
+        let mut body = Vec::new();
+        for comment in &inner_comments {
+            body.push(hardline());
+            body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+        return concat(vec![text("{"), indent(body), hardline(), text("}")]);
     }
 
     let mut body_parts = Vec::new();
@@ -209,6 +220,20 @@ pub fn format_block(
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])
+}
+
+fn format_initializer(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    preserve_multiline: bool,
+) -> FormatChunk {
+    let value = format_expr(expr, source, config);
+    if preserve_multiline {
+        concat(vec![text(" ="), indent(vec![hardline(), value])])
+    } else {
+        concat(vec![text(" = "), value])
+    }
 }
 
 /// Format a try statement.

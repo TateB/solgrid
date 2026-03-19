@@ -5,6 +5,7 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 import {
+  EditorSaveConfig,
   SolgridConfig,
   getServerPath,
   getInitializationOptions,
@@ -15,6 +16,7 @@ let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
   const solgridConfig = readVSCodeConfig();
+  const editorSaveConfig = readEditorSaveConfig();
 
   if (!solgridConfig.enable) {
     return;
@@ -36,7 +38,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       configurationSection: "solgrid",
       fileEvents: workspace.createFileSystemWatcher("**/solgrid.toml"),
     },
-    initializationOptions: getInitializationOptions(solgridConfig),
+    initializationOptions: getInitializationOptions(solgridConfig, editorSaveConfig),
     middleware: {
       workspace: {
         configuration: async (params, token, next) => {
@@ -59,10 +61,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Watch for configuration changes
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("solgrid")) {
+      if (
+        e.affectsConfiguration("solgrid") ||
+        e.affectsConfiguration("editor.formatOnSave") ||
+        e.affectsConfiguration("[solidity]")
+      ) {
         const newConfig = readVSCodeConfig();
+        const newEditorSaveConfig = readEditorSaveConfig();
         client?.sendNotification("workspace/didChangeConfiguration", {
-          settings: getSettings(newConfig),
+          settings: getSettings(newConfig, newEditorSaveConfig),
         });
       }
     })
@@ -107,5 +114,26 @@ function readVSCodeConfig(): SolgridConfig {
     fixOnSaveUnsafe: config.get<boolean>("fixOnSave.unsafeFixes", false),
     formatOnSave: config.get<boolean>("formatOnSave", true),
     configPath: config.get<string | null>("configPath", null),
+  };
+}
+
+function readEditorSaveConfig(): EditorSaveConfig {
+  const editorConfig = workspace.getConfiguration("editor");
+  const solidityOverrides =
+    workspace.getConfiguration().get<Record<string, unknown>>("[solidity]") ?? {};
+
+  const defaultFormatter =
+    typeof solidityOverrides["editor.defaultFormatter"] === "string"
+      ? (solidityOverrides["editor.defaultFormatter"] as string)
+      : editorConfig.get<string | null>("defaultFormatter", null);
+
+  const formatOnSave =
+    typeof solidityOverrides["editor.formatOnSave"] === "boolean"
+      ? (solidityOverrides["editor.formatOnSave"] as boolean)
+      : editorConfig.get<boolean>("formatOnSave", false);
+
+  return {
+    formatOnSave,
+    defaultFormatter,
   };
 }

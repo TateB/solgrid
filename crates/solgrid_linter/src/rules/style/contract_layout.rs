@@ -45,6 +45,27 @@ fn priority_label(priority: u8) -> &'static str {
     }
 }
 
+fn leading_blank_lines(chunk: &str) -> usize {
+    chunk
+        .lines()
+        .take_while(|line| line.trim().is_empty())
+        .count()
+}
+
+fn normalize_member_chunk(chunk: &str) -> String {
+    let lines: Vec<&str> = chunk.lines().collect();
+    let first = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let last = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+
+    lines[first..=last].join("\n")
+}
+
 impl Rule for ContractLayoutRule {
     fn meta(&self) -> &RuleMeta {
         &META
@@ -96,33 +117,55 @@ impl Rule for ContractLayoutRule {
                         let body_start = contract_range.start + brace_open + 1;
                         let body_end = contract_range.start + brace_close;
 
-                        // Build chunks: each chunk is (priority, original_index, text from prev_end to item_end)
-                        let mut chunks: Vec<(u8, usize, String)> = Vec::new();
+                        // Build chunks: each chunk carries any comments directly
+                        // above the member, but surrounding blank lines are
+                        // normalized after sorting so the replacement has
+                        // stable spacing regardless of the original order.
+                        let mut chunks: Vec<(u8, usize, bool, String)> = Vec::new();
                         for (idx, body_item) in body_items.iter().enumerate() {
                             let item_range = solgrid_ast::span_to_range(body_item.span);
                             let priority = body_item_priority(&body_item.kind);
                             let prev_end = if idx == 0 {
                                 body_start
                             } else {
-                                solgrid_ast::span_to_range(body_items[idx - 1].span).end
+                                let prev_range =
+                                    solgrid_ast::span_to_range(body_items[idx - 1].span);
+                                ctx.source[prev_range.end..]
+                                    .find('\n')
+                                    .map_or(prev_range.end, |offset| prev_range.end + offset)
                             };
-                            let chunk = ctx.source[prev_end..item_range.end].to_string();
-                            chunks.push((priority, idx, chunk));
+                            let item_end = ctx.source[item_range.end..]
+                                .find('\n')
+                                .map_or(item_range.end, |offset| item_range.end + offset);
+                            let raw_chunk = &ctx.source[prev_end..item_end];
+                            let had_blank_before = leading_blank_lines(raw_chunk) > 1;
+                            let chunk = normalize_member_chunk(raw_chunk);
+                            chunks.push((priority, idx, had_blank_before, chunk));
                         }
 
-                        // Trailing text after last item (whitespace before closing brace)
-                        let last_end =
-                            solgrid_ast::span_to_range(body_items.last().unwrap().span).end;
-                        let trailing = &ctx.source[last_end..body_end];
-
                         // Sort by (priority, original_index) for stable ordering
-                        chunks.sort_by_key(|&(p, i, _)| (p, i));
+                        chunks.sort_by_key(|&(p, i, _, _)| (p, i));
 
-                        let replacement: String = chunks
-                            .iter()
-                            .map(|(_, _, text)| text.as_str())
-                            .collect::<String>()
-                            + trailing;
+                        let replacement = if chunks.is_empty() {
+                            String::new()
+                        } else {
+                            let mut replacement = String::from("\n");
+                            for (idx, (priority, _, had_blank_before, text)) in
+                                chunks.iter().enumerate()
+                            {
+                                if idx > 0 {
+                                    let prev_priority = chunks[idx - 1].0;
+                                    if prev_priority != *priority || *had_blank_before {
+                                        replacement.push_str("\n\n");
+                                    } else {
+                                        replacement.push('\n');
+                                    }
+                                }
+                                replacement.push_str(text);
+                            }
+                            replacement.push('\n');
+                            replacement
+                        };
 
                         let fix = Fix::suggestion(
                             "Reorder contract members",

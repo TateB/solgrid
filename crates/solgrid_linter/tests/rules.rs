@@ -2361,10 +2361,91 @@ contract Test {
 pragma solidity ^0.8.0;
 contract Test {
     uint256 x;
+
     error Oops();
+
     function foo() external {}
 }
 "#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_contract_layout_fix_normalizes_member_spacing() {
+    let source = r#"abstract contract CCIPBatcher is CCIPReader {
+    /// @notice The batch gateway supplied an incorrect number of responses.
+    /// @dev Error selector: `0x4a5c31ea`
+    error InvalidBatchGatewayResponse();
+
+    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
+    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
+    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
+    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
+    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
+    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
+    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
+
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
+
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+
+    /// @dev A batch gateway session.
+    struct Batch {
+        Lookup[] lookups;
+        string[] gateways;
+    }
+
+    function createBatch(
+        bytes memory data
+    ) internal pure returns (Batch memory batch) {}
+}
+"#;
+    let expected = r#"abstract contract CCIPBatcher is CCIPReader {
+    /// @dev An independent `OffchainLookup` session.
+    struct Lookup {
+        address target; // contract to call
+        bytes call; // initial calldata
+        bytes data; // response or error
+        uint256 flags; // see: FLAG_*
+    }
+
+    /// @dev A batch gateway session.
+    struct Batch {
+        Lookup[] lookups;
+        string[] gateways;
+    }
+
+    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
+    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
+    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
+    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
+    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
+    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
+    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
+
+    uint256 constant FLAGS_ANY_ERROR =
+        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
+    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
+
+    /// @notice The batch gateway supplied an incorrect number of responses.
+    /// @dev Error selector: `0x4a5c31ea`
+    error InvalidBatchGatewayResponse();
+
+    function createBatch(
+        bytes memory data
+    ) internal pure returns (Batch memory batch) {}
+}
+"#;
+
     let fixed = fix_source_unsafe(source);
     assert_eq!(fixed, expected);
 }

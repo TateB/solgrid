@@ -3,8 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  DEFAULT_EDITOR_SAVE_CONFIG,
   SolgridConfig,
   DEFAULT_CONFIG,
+  getEffectiveServerFormatOnSave,
   getServerPath,
   getInitializationOptions,
   getSettings,
@@ -117,6 +119,19 @@ describe("getInitializationOptions", () => {
       configPath: "/path/to/solgrid.toml",
     });
   });
+
+  it("disables server-side format-on-save when VS Code already formats with solgrid", () => {
+    const opts = getInitializationOptions(DEFAULT_CONFIG, {
+      formatOnSave: true,
+      defaultFormatter: "solgrid.solgrid-vscode",
+    });
+    expect(opts).toEqual({
+      fixOnSave: true,
+      fixOnSaveUnsafe: false,
+      formatOnSave: false,
+      configPath: null,
+    });
+  });
 });
 
 describe("getSettings", () => {
@@ -149,5 +164,46 @@ describe("getSettings", () => {
       fixOnSaveUnsafe: true,
       formatOnSave: false,
     });
+  });
+
+  it("keeps server-side format-on-save when VS Code uses another formatter", () => {
+    const settings = getSettings(DEFAULT_CONFIG, {
+      formatOnSave: true,
+      defaultFormatter: "esbenp.prettier-vscode",
+    });
+    expect(settings).toEqual({
+      fixOnSave: true,
+      fixOnSaveUnsafe: false,
+      formatOnSave: true,
+    });
+  });
+});
+
+describe("getEffectiveServerFormatOnSave", () => {
+  it("returns the solgrid setting when editor format on save is off", () => {
+    expect(
+      getEffectiveServerFormatOnSave(DEFAULT_CONFIG, DEFAULT_EDITOR_SAVE_CONFIG)
+    ).toBe(true);
+  });
+
+  it("returns false when editor format-on-save already uses solgrid", () => {
+    expect(
+      getEffectiveServerFormatOnSave(DEFAULT_CONFIG, {
+        formatOnSave: true,
+        defaultFormatter: "solgrid.solgrid-vscode",
+      })
+    ).toBe(false);
+  });
+
+  it("returns false when solgrid format-on-save is disabled", () => {
+    expect(
+      getEffectiveServerFormatOnSave(
+        { ...DEFAULT_CONFIG, formatOnSave: false },
+        {
+          formatOnSave: true,
+          defaultFormatter: "solgrid.solgrid-vscode",
+        }
+      )
+    ).toBe(false);
   });
 });
