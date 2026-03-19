@@ -241,6 +241,35 @@ fn test_format_while_loop() {
 }
 
 #[test]
+fn test_preserve_assembly_comment_without_duplication() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256 result) {
+        assembly {
+            // load result
+            result := 1
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256 result) {
+        assembly {
+            // load result
+            result := 1
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+    assert_eq!(formatted.matches("// load result").count(), 1);
+
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(reformatted, expected);
+}
+
+#[test]
 fn test_format_emit() {
     let source = "contract T {\n    event Foo(uint256 x);\n    function f() public {\n        emit Foo(1);\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();

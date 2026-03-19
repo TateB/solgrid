@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
 - Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 - Fix autofix regressions in modifier ordering, unused import cleanup, function ordering, and import path normalization
+- Fix formatter duplicating inline assembly comments on repeated save/format
 - Fix `style/contract-layout` code action not appearing in VSCode when cursor is on non-first violation
 - Deduplicate identical fixes in the fix engine to prevent overlapping-edit aborts
 

@@ -119,6 +119,7 @@ pub fn format_stmt(
         }
         StmtKind::Try(try_stmt) => format_try_stmt(try_stmt, source, config, comments),
         StmtKind::Assembly(_) => {
+            comments.take_within(span_to_range(stmt.span));
             // Assembly blocks are emitted verbatim from source.
             let asm_text = span_text(source, stmt.span);
             text(asm_text)
