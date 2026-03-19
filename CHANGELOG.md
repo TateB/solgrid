@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-03-19
+
 ### Fixed
 - Fix EACCES error when spawning native binary from npm CLI and VSCode extension (npm tarballs don't preserve execute bits)
 
@@ -58,6 +60,7 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.2...HEAD
-[0.0.2]: https://github.com/TateB/solgrid/compare/v0.0.1...v0.0.2
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/TateB/solgrid/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2
 [0.0.1]: https://github.com/TateB/solgrid/releases/tag/v0.0.1
