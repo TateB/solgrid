@@ -164,3 +164,27 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify versions are in sync
         run: bash scripts/version.sh
+
+  changelog-check:
+    name: Changelog
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check CHANGELOG.md was updated
+        run: |
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q '^CHANGELOG\.md$'; then
+            echo "CHANGELOG.md was updated"
+          else
+            echo "::error::CHANGELOG.md was not updated. Add an entry under the [Unreleased] section."
+            echo ""
+            echo "Expected format (under ## [Unreleased]):"
+            echo ""
+            echo "  ### Added|Changed|Fixed|Removed"
+            echo "  - Description of your change"
+            echo ""
+            echo "To skip this check, add the 'skip-changelog' label to the PR."
+            exit 1
+          fi
