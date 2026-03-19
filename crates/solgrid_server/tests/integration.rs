@@ -2,9 +2,21 @@
 
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
-use solgrid_server::{actions, completion, convert, diagnostics, format, hover};
+use solgrid_server::{actions, completion, convert, diagnostics, format, hover, resolve};
 use std::path::Path;
 use tower_lsp_server::ls_types;
+
+fn noop_uri() -> ls_types::Uri {
+    "file:///test.sol".parse().unwrap()
+}
+
+fn noop_source(_path: &Path) -> Option<String> {
+    None
+}
+
+fn noop_resolver() -> resolve::ImportResolver {
+    resolve::ImportResolver::new(None)
+}
 
 /// Helper: create a standard test source with known issues.
 fn source_with_issues() -> &'static str {
@@ -231,7 +243,15 @@ fn test_hover_shows_rule_docs_for_known_rule() {
         ..Default::default()
     }];
 
-    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(4, 20), "");
+    let hover = hover::hover_at_position(
+        &engine,
+        &diags,
+        &ls_types::Position::new(4, 20),
+        "",
+        &noop_uri(),
+        &noop_source,
+        &noop_resolver(),
+    );
     assert!(hover.is_some());
 
     let hover = hover.unwrap();
@@ -265,7 +285,15 @@ fn test_hover_returns_none_for_non_diagnostic_position() {
     }];
 
     // Position on a different line — should return None
-    let hover = hover::hover_at_position(&engine, &diags, &ls_types::Position::new(0, 0), "");
+    let hover = hover::hover_at_position(
+        &engine,
+        &diags,
+        &ls_types::Position::new(0, 0),
+        "",
+        &noop_uri(),
+        &noop_source,
+        &noop_resolver(),
+    );
     assert!(hover.is_none());
 }
 
@@ -379,7 +407,15 @@ contract Test {
     let tx_diag = tx_diag.unwrap();
     let hover_pos =
         ls_types::Position::new(tx_diag.range.start.line, tx_diag.range.start.character + 1);
-    let hover = hover::hover_at_position(&engine, &diags, &hover_pos, "");
+    let hover = hover::hover_at_position(
+        &engine,
+        &diags,
+        &hover_pos,
+        "",
+        &noop_uri(),
+        &noop_source,
+        &noop_resolver(),
+    );
     assert!(
         hover.is_some(),
         "should find hover info for tx-origin diagnostic"
