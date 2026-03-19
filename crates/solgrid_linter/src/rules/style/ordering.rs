@@ -43,9 +43,16 @@ impl Rule for OrderingRule {
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
-            let mut max_priority = 0u8;
 
-            for item in source_unit.items.iter() {
+            let items: Vec<_> = source_unit.items.iter().collect();
+            if items.is_empty() {
+                return diagnostics;
+            }
+
+            // First pass: detect violations
+            let mut max_priority = 0u8;
+            let mut violation_diags = Vec::new();
+            for item in items.iter() {
                 if let Some(priority) = item_priority(&item.kind) {
                     if priority < max_priority {
                         let range = solgrid_ast::item_name_range(item);
@@ -61,7 +68,7 @@ impl Rule for OrderingRule {
                             ItemKind::Function(_) => "free function",
                             _ => "declaration",
                         };
-                        diagnostics.push(Diagnostic::new(
+                        violation_diags.push(Diagnostic::new(
                             META.id,
                             format!(
                                 "{kind_name} should appear before higher-priority declarations (expected order: pragma, imports, interfaces, libraries, contracts)"
@@ -74,6 +81,57 @@ impl Rule for OrderingRule {
                     }
                 }
             }
+
+            if violation_diags.is_empty() {
+                return diagnostics;
+            }
+
+            // Build fix: chunk-based reordering
+            // Only include items with known priorities
+            let prioritized: Vec<_> = items
+                .iter()
+                .filter_map(|item| {
+                    item_priority(&item.kind).map(|p| (p, solgrid_ast::span_to_range(item.span)))
+                })
+                .collect();
+
+            if prioritized.len() >= 2 {
+                let first_start = prioritized[0].1.start;
+                let last_end = prioritized.last().unwrap().1.end;
+
+                // Build chunks
+                let mut chunks: Vec<(u8, usize, String)> = Vec::new();
+                for (idx, (priority, span_range)) in prioritized.iter().enumerate() {
+                    let prev_end = if idx == 0 {
+                        first_start
+                    } else {
+                        prioritized[idx - 1].1.end
+                    };
+                    let chunk = ctx.source[prev_end..span_range.end].to_string();
+                    chunks.push((*priority, idx, chunk));
+                }
+
+                // Sort by (priority, original_index)
+                chunks.sort_by_key(|&(p, i, _)| (p, i));
+
+                let replacement: String = chunks
+                    .iter()
+                    .map(|(_, _, text)| text.as_str())
+                    .collect::<String>();
+
+                // Replace from first item start to last item end
+                let fix = Fix::suggestion(
+                    "Reorder top-level declarations",
+                    vec![TextEdit::replace(
+                        first_start..last_end,
+                        replacement.trim_end().to_string(),
+                    )],
+                );
+
+                violation_diags[0] = violation_diags[0].clone().with_fix(fix);
+            }
+
+            diagnostics.extend(violation_diags);
             diagnostics
         });
 

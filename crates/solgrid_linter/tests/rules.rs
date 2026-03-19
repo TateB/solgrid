@@ -2341,6 +2341,102 @@ fn test_contract_layout_fix() {
 }
 
 #[test]
+fn test_fix_visibility_modifier_order() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function bad() pure public returns (uint256) {\n        return 42;\n    }\n}\n";
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("public pure"),
+        "Expected modifiers reordered to: public pure, got: {}",
+        fixed
+    );
+}
+
+#[test]
+fn test_fix_no_unused_imports_single() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport {Unused} from \"some.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(
+        !fixed.contains("import"),
+        "Expected unused import to be removed"
+    );
+}
+
+#[test]
+fn test_fix_no_unused_imports_partial() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport {Used, Unused} from \"some.sol\";\ncontract Test {\n    Used public x;\n}\n";
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains("import"),
+        "Expected import statement to remain"
+    );
+    assert!(
+        !fixed.contains("Unused"),
+        "Expected unused alias to be removed"
+    );
+    assert!(fixed.contains("Used"), "Expected used alias to remain");
+}
+
+#[test]
+fn test_fix_use_constant() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    uint256 public MAX_SUPPLY = 1000000;\n    function get() public view returns (uint256) {\n        return MAX_SUPPLY;\n    }\n}\n";
+    let fixed = fix_source_unsafe(source);
+    assert!(
+        fixed.contains("constant"),
+        "Expected `constant` keyword to be inserted"
+    );
+}
+
+#[test]
+fn test_fix_use_immutable() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    address public owner;\n    constructor() {\n        owner = msg.sender;\n    }\n}\n";
+    let fixed = fix_source_unsafe(source);
+    assert!(
+        fixed.contains("immutable"),
+        "Expected `immutable` keyword to be inserted"
+    );
+}
+
+#[test]
+fn test_fix_func_order() {
+    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() private {}\n    function bar() external {}\n}\n";
+    let diags = lint_source_for_rule(source, "style/func-order");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected func-order diagnostic to have a fix"
+    );
+    let fixed = fix_source_unsafe(source);
+    let bar_pos = fixed.find("function bar").unwrap();
+    let foo_pos = fixed.find("function foo").unwrap();
+    assert!(
+        bar_pos < foo_pos,
+        "Expected external before private after fix"
+    );
+}
+
+#[test]
+fn test_fix_ordering() {
+    let source = "\n// SPDX-License-Identifier: MIT\ncontract Test {}\nimport \"./Foo.sol\";\npragma solidity ^0.8.0;\n";
+    let diags = lint_source_for_rule(source, "style/ordering");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected ordering diagnostic to have a fix"
+    );
+}
+
+#[test]
+fn test_fix_import_path_format() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Local.sol\";\nimport \"./Other.sol\";\nimport \"lib/External.sol\";\ncontract Test {}\n";
+    let diags = lint_source_for_rule(source, "style/import-path-format");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected import-path-format diagnostic to have a fix"
+    );
+}
+
+#[test]
 fn test_import_path_format_detected() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;

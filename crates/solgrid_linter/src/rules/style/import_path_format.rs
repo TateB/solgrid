@@ -55,19 +55,66 @@ impl Rule for ImportPathFormatRule {
             };
 
             for (start, end, path) in minority {
-                diagnostics.push(Diagnostic::new(
+                let fix = build_path_fix(ctx.source, *start, *end, path, majority_style);
+
+                let mut diag = Diagnostic::new(
                     META.id,
                     format!(
                         "import path `{path}` should use {majority_style} format for consistency"
                     ),
                     META.default_severity,
                     *start..*end,
-                ));
+                );
+                if let Some(fix) = fix {
+                    diag = diag.with_fix(fix);
+                }
+                diagnostics.push(diag);
             }
         }
 
         diagnostics
     }
+}
+
+/// Build a fix that converts an import path to the target style.
+fn build_path_fix(
+    source: &str,
+    line_start: usize,
+    line_end: usize,
+    path: &str,
+    target_style: &str,
+) -> Option<Fix> {
+    let line_text = &source[line_start..line_end];
+
+    // Find the path string within the line (between quotes)
+    let path_offset = line_text.find(path)?;
+    let abs_path_start = line_start + path_offset;
+    let abs_path_end = abs_path_start + path.len();
+
+    let new_path = match target_style {
+        "absolute" => {
+            // Remove leading ./ or ../
+            let mut p = path;
+            while p.starts_with("./") {
+                p = &p[2..];
+            }
+            // Strip ../ prefixes too (best effort)
+            while p.starts_with("../") {
+                p = &p[3..];
+            }
+            p.to_string()
+        }
+        "relative" => {
+            // Prepend ./ to make it relative
+            format!("./{path}")
+        }
+        _ => return None,
+    };
+
+    Some(Fix::suggestion(
+        format!("Convert to {target_style} import path"),
+        vec![TextEdit::replace(abs_path_start..abs_path_end, new_path)],
+    ))
 }
 
 /// Extract the import path from an import statement.

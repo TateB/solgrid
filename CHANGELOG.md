@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
 - Implement autofix for `style/imports-ordering` rule (sorts import groups alphabetically)
 - Implement autofix for `style/contract-layout` rule (reorders contract members by type)
+- Implement autofix for `best-practices/visibility-modifier-order` rule (reorders function modifiers)
+- Implement autofix for `best-practices/no-unused-imports` rule (removes unused import aliases)
+- Implement autofix for `gas/use-constant` rule (adds `constant` modifier)
+- Implement autofix for `gas/use-immutable` rule (adds `immutable` modifier)
+- Implement autofix for `style/func-order` rule (reorders functions by visibility)
+- Implement autofix for `style/ordering` rule (reorders top-level declarations)
+- Implement autofix for `style/import-path-format` rule (converts import paths to consistent format)
 
 ### Fixed
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration

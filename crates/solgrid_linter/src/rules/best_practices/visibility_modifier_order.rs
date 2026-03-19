@@ -96,7 +96,11 @@ impl Rule for VisibilityModifierOrderRule {
                                 let correct_order: Vec<&str> =
                                     sorted.iter().map(|(word, _)| word.as_str()).collect();
 
-                                let diag = Diagnostic::new(
+                                // Build fix: replace the modifier area with sorted version
+                                let func_range = solgrid_ast::span_to_range(body_item.span);
+                                let fix = build_modifier_fix(ctx.source, func_range, &sorted);
+
+                                let mut diag = Diagnostic::new(
                                     META.id,
                                     format!(
                                         "function `{func_name}` modifiers should be ordered: {}",
@@ -105,6 +109,10 @@ impl Rule for VisibilityModifierOrderRule {
                                     META.default_severity,
                                     range,
                                 );
+
+                                if let Some(fix) = fix {
+                                    diag = diag.with_fix(fix);
+                                }
 
                                 diagnostics.push(diag);
                             }
@@ -190,6 +198,100 @@ fn parse_modifiers(area: &str) -> Vec<(String, ModCategory)> {
     }
 
     modifiers
+}
+
+/// Build a fix that reorders the modifier area in a function declaration.
+fn build_modifier_fix(
+    source: &str,
+    func_range: std::ops::Range<usize>,
+    sorted_modifiers: &[(String, ModCategory)],
+) -> Option<Fix> {
+    let func_text = &source[func_range.clone()];
+
+    // Find the modifier area within the function text
+    // The modifier area is between the closing ) of params and { or ;
+    let mut depth = 0i32;
+    let mut first_close = None;
+    for (i, ch) in func_text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    first_close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let params_end = first_close? + 1;
+    let rest = &func_text[params_end..];
+
+    // Find the body start `{` or statement end `;`
+    let body_start = rest.find('{').or_else(|| rest.find(';'))?;
+
+    // Find the returns clause position in rest
+    let returns_pos = rest.find("returns");
+    let modifier_end = returns_pos.unwrap_or(body_start);
+
+    // The modifier area range in absolute source coordinates
+    let area_start = func_range.start + params_end;
+    let area_end = func_range.start + params_end + modifier_end;
+
+    let original_area = &source[area_start..area_end];
+
+    // Preserve leading/trailing whitespace from the original area
+    let leading_ws = &original_area[..original_area.len() - original_area.trim_start().len()];
+    let trailing_ws = &original_area[original_area.trim_end().len()..];
+
+    // Rebuild sorted modifier text, preserving override(...) params
+    let original_func_text_after_params = &func_text[params_end..params_end + modifier_end];
+    let override_params = extract_override_params(original_func_text_after_params);
+
+    let sorted_text: Vec<String> = sorted_modifiers
+        .iter()
+        .map(|(word, cat)| {
+            if *cat == ModCategory::Override {
+                if let Some(ref params) = override_params {
+                    return format!("{word}({params})");
+                }
+            }
+            word.clone()
+        })
+        .collect();
+
+    let replacement = format!("{}{}{}", leading_ws, sorted_text.join(" "), trailing_ws);
+
+    Some(Fix::safe(
+        "Reorder function modifiers",
+        vec![TextEdit::replace(area_start..area_end, replacement)],
+    ))
+}
+
+/// Extract the parenthetical content after `override`, if any.
+fn extract_override_params(area: &str) -> Option<String> {
+    if let Some(pos) = area.find("override") {
+        let after = &area[pos + 8..];
+        let trimmed = after.trim_start();
+        if trimmed.starts_with('(') {
+            let mut depth = 0;
+            for (i, ch) in trimmed.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(trimmed[1..i].to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Remove parenthetical content after `override` keyword.

@@ -34,30 +34,55 @@ impl Rule for NoUnusedImportsRule {
                     match &import.items {
                         ImportItems::Aliases(aliases) => {
                             // Named imports: import {Foo, Bar as Baz} from "file.sol";
+                            let import_range = solgrid_ast::span_to_range(item.span);
+                            let import_end = import_range.end;
+
+                            // Count how many aliases are unused
+                            let mut unused_count = 0;
+                            if import_end < ctx.source.len() {
+                                let rest = &ctx.source[import_end..];
+                                for alias in aliases.iter() {
+                                    let name = if let Some(alias_name) = alias.1 {
+                                        alias_name.as_str().to_string()
+                                    } else {
+                                        alias.0.as_str().to_string()
+                                    };
+                                    if !is_identifier_used(rest, &name) {
+                                        unused_count += 1;
+                                    }
+                                }
+                            }
+
                             for alias in aliases.iter() {
                                 let imported_name = if let Some(alias_name) = alias.1 {
-                                    // import {Foo as Bar} — check usage of "Bar"
                                     alias_name.as_str().to_string()
                                 } else {
-                                    // import {Foo} — check usage of "Foo"
                                     alias.0.as_str().to_string()
                                 };
                                 let imported_name = imported_name.as_str();
 
-                                let import_range = solgrid_ast::span_to_range(item.span);
-                                let import_end = import_range.end;
-
-                                // Search in source text after the import statement
                                 if import_end < ctx.source.len() {
                                     let rest = &ctx.source[import_end..];
                                     if !is_identifier_used(rest, imported_name) {
                                         let name_range = solgrid_ast::span_to_range(alias.0.span);
-                                        let diag = Diagnostic::new(
+
+                                        let fix = build_unused_import_fix(
+                                            ctx.source,
+                                            &import_range,
+                                            aliases.len(),
+                                            unused_count,
+                                            imported_name,
+                                        );
+
+                                        let mut diag = Diagnostic::new(
                                             META.id,
                                             format!("imported symbol `{imported_name}` is unused"),
                                             META.default_severity,
                                             name_range,
                                         );
+                                        if let Some(fix) = fix {
+                                            diag = diag.with_fix(fix);
+                                        }
                                         diagnostics.push(diag);
                                     }
                                 }
@@ -73,12 +98,16 @@ impl Rule for NoUnusedImportsRule {
                                 let rest = &ctx.source[import_end..];
                                 if !is_identifier_used(rest, alias_name) {
                                     let name_range = solgrid_ast::span_to_range(alias.span);
-                                    diagnostics.push(Diagnostic::new(
-                                        META.id,
-                                        format!("imported symbol `{alias_name}` is unused"),
-                                        META.default_severity,
-                                        name_range,
-                                    ));
+                                    let fix = delete_import_line_fix(ctx.source, &import_range);
+                                    diagnostics.push(
+                                        Diagnostic::new(
+                                            META.id,
+                                            format!("imported symbol `{alias_name}` is unused"),
+                                            META.default_severity,
+                                            name_range,
+                                        )
+                                        .with_fix(fix),
+                                    );
                                 }
                             }
                         }
@@ -123,6 +152,69 @@ fn is_identifier_used(source: &str, name: &str) -> bool {
         search_from = abs_pos + name.len();
     }
     false
+}
+
+/// Build a fix that deletes an entire import line (including trailing newline).
+fn delete_import_line_fix(source: &str, import_range: &std::ops::Range<usize>) -> Fix {
+    let end = if import_range.end < source.len() && source.as_bytes()[import_range.end] == b'\n' {
+        import_range.end + 1
+    } else {
+        import_range.end
+    };
+    Fix::safe(
+        "Remove unused import",
+        vec![TextEdit::delete(import_range.start..end)],
+    )
+}
+
+/// Build a fix for an unused named import alias.
+/// If this is the only alias (or all are unused), delete the entire import line.
+/// Otherwise, remove just this alias from the `{...}` list.
+fn build_unused_import_fix(
+    source: &str,
+    import_range: &std::ops::Range<usize>,
+    total_aliases: usize,
+    unused_count: usize,
+    unused_name: &str,
+) -> Option<Fix> {
+    // If only one alias total, or all are unused, delete the entire line
+    if total_aliases == 1 || unused_count == total_aliases {
+        return Some(delete_import_line_fix(source, import_range));
+    }
+
+    // Otherwise, remove just this alias from the braces
+    let import_text = &source[import_range.clone()];
+    let brace_open = import_text.find('{')?;
+    let brace_close = import_text.find('}')?;
+    let braces_content = &import_text[brace_open + 1..brace_close];
+
+    // Split by comma, trim each, filter out the unused one
+    let aliases: Vec<&str> = braces_content.split(',').map(|s| s.trim()).collect();
+    let remaining: Vec<&str> = aliases
+        .into_iter()
+        .filter(|a| {
+            // Check if this alias entry matches the unused name
+            // Handle "Foo as Bar" form — match against the original name (first word)
+            let first_word = a.split_whitespace().next().unwrap_or("");
+            first_word != unused_name
+        })
+        .collect();
+
+    if remaining.is_empty() {
+        return Some(delete_import_line_fix(source, import_range));
+    }
+
+    let new_braces = format!("{{{}}}", remaining.join(", "));
+    let abs_brace_start = import_range.start + brace_open;
+    let abs_brace_end = import_range.start + brace_close + 1;
+
+    Some(Fix::safe(
+        "Remove unused import",
+        vec![TextEdit::replace(
+            abs_brace_start..abs_brace_end,
+            new_braces,
+        )],
+    ))
 }
 
 /// Simple check if a position is inside a line comment.
