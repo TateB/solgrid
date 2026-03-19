@@ -74,19 +74,15 @@ impl Rule for NoUnusedImportsRule {
                                 &unused_indexes,
                             );
 
-                            for (diag_idx, (_, imported_name, name_range)) in
-                                unused_aliases.into_iter().enumerate()
-                            {
+                            for (_, imported_name, name_range) in unused_aliases.into_iter() {
                                 let mut diag = Diagnostic::new(
                                     META.id,
                                     format!("imported symbol `{imported_name}` is unused"),
                                     META.default_severity,
                                     name_range,
                                 );
-                                if diag_idx == 0 {
-                                    if let Some(fix) = fix.clone() {
-                                        diag = diag.with_fix(fix);
-                                    }
+                                if let Some(fix) = fix.clone() {
+                                    diag = diag.with_fix(fix);
                                 }
                                 diagnostics.push(diag);
                             }
@@ -159,15 +155,13 @@ fn is_identifier_used(source: &str, name: &str) -> bool {
 
 /// Build a fix that deletes an entire import line (including trailing newline).
 fn delete_import_line_fix(source: &str, import_range: &std::ops::Range<usize>) -> Fix {
+    let start = find_attached_comment_start(source, import_range.start);
     let end = if import_range.end < source.len() && source.as_bytes()[import_range.end] == b'\n' {
         import_range.end + 1
     } else {
         import_range.end
     };
-    Fix::safe(
-        "Remove unused import",
-        vec![TextEdit::delete(import_range.start..end)],
-    )
+    Fix::safe("Remove unused import", vec![TextEdit::delete(start..end)])
 }
 
 /// Build a fix for an unused named import alias.
@@ -228,4 +222,57 @@ fn is_in_line_comment(source: &str, pos: usize) -> bool {
         return comment_pos < pos;
     }
     false
+}
+
+fn find_attached_comment_start(source: &str, import_start: usize) -> usize {
+    let mut start = import_start;
+    let mut line_start = source[..import_start]
+        .rfind('\n')
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    let mut in_block_comment = false;
+
+    while line_start > 0 {
+        let prev_line_end = line_start.saturating_sub(1);
+        let prev_line_start = source[..prev_line_end]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        let line = &source[prev_line_start..prev_line_end];
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            break;
+        }
+
+        let is_comment_line = if in_block_comment {
+            true
+        } else {
+            trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+                || trimmed.ends_with("*/")
+        };
+
+        if !is_comment_line {
+            break;
+        }
+
+        start = prev_line_start;
+
+        if in_block_comment {
+            if trimmed.starts_with("/*") {
+                in_block_comment = false;
+            }
+        } else if (trimmed.starts_with("/*") && !trimmed.ends_with("*/"))
+            || trimmed.ends_with("*/")
+            || trimmed.starts_with('*')
+        {
+            in_block_comment = !trimmed.starts_with("/*");
+        }
+
+        line_start = prev_line_start;
+    }
+
+    start
 }

@@ -2,6 +2,7 @@
 
 use crate::comments::CommentStore;
 use crate::format_expr::{format_call_args, format_expr};
+use crate::format_item::has_blank_line_between;
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
 use solar_ast::*;
@@ -198,17 +199,49 @@ pub fn format_block(
     }
 
     let mut body_parts = Vec::new();
+    let mut prev_stmt_end: Option<usize> = None;
     for stmt in block.stmts.iter() {
         let stmt_range = span_to_range(stmt.span);
+        let need_blank_line = prev_stmt_end
+            .map(|end| has_blank_line_between(source, end, stmt_range.start))
+            .unwrap_or(false);
 
         // Emit leading comments for this statement
         let leading = comments.take_leading(stmt_range.start);
-        for comment in &leading {
+        let prefix_lines = if prev_stmt_end.is_some() {
+            1 + usize::from(need_blank_line)
+        } else {
+            1
+        };
+
+        if leading.is_empty() {
+            for _ in 0..prefix_lines {
+                body_parts.push(hardline());
+            }
+        } else {
+            for (i, comment) in leading.iter().enumerate() {
+                if i == 0 {
+                    for _ in 0..prefix_lines {
+                        body_parts.push(hardline());
+                    }
+                } else {
+                    body_parts.push(hardline());
+                    if has_blank_line_between(source, leading[i - 1].range.end, comment.range.start)
+                    {
+                        body_parts.push(hardline());
+                    }
+                }
+                body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
+
             body_parts.push(hardline());
-            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            if leading.last().is_some_and(|comment| {
+                has_blank_line_between(source, comment.range.end, stmt_range.start)
+            }) {
+                body_parts.push(hardline());
+            }
         }
 
-        body_parts.push(hardline());
         body_parts.push(format_stmt(stmt, source, config, comments));
 
         // Trailing comments on the same line
@@ -217,6 +250,8 @@ pub fn format_block(
             body_parts.push(space());
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
+
+        prev_stmt_end = Some(stmt_range.end);
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])

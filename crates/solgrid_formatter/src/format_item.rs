@@ -235,11 +235,20 @@ fn format_contract(
                     }
                 } else {
                     body_parts.push(hardline());
+                    if has_blank_line_between(source, leading[i - 1].range.end, comment.range.start)
+                    {
+                        body_parts.push(hardline());
+                    }
                 }
                 body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
             }
 
             body_parts.push(hardline());
+            if leading.last().is_some_and(|comment| {
+                has_blank_line_between(source, comment.range.end, item_range.start)
+            }) {
+                body_parts.push(hardline());
+            }
         }
 
         body_parts.push(format_item(item, source, config, comments));
@@ -666,7 +675,7 @@ fn format_error(error: &ItemError<'_>, source: &str, config: &FormatConfig) -> F
 /// Check if there's a blank line in the source between two byte positions.
 /// A blank line is one that contains only whitespace — comments don't count
 /// as whitespace, so a comment between items doesn't create or suppress a gap.
-fn has_blank_line_between(source: &str, start: usize, end: usize) -> bool {
+pub(crate) fn has_blank_line_between(source: &str, start: usize, end: usize) -> bool {
     if start >= end || end > source.len() {
         return false;
     }

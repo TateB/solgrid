@@ -366,6 +366,67 @@ fn test_preserve_comments_inside_empty_if_block() {
 }
 
 #[test]
+fn test_preserve_single_blank_line_within_function_body() {
+    let source = r#"contract T {
+    function f() internal pure {
+        uint256 x = 1;
+
+        uint256 y = 2;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() internal pure {
+        uint256 x = 1;
+
+        uint256 y = 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_blank_line_below_top_level_comment() {
+    let source = r#"// Something
+
+contract Thing {}
+"#;
+    let expected = r#"// Something
+
+contract Thing {}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_blank_line_below_contract_comment_block() {
+    let source = r#"contract Thing {
+    /* ERC721 internal functions */
+
+    /// @dev Approve `to` to operate on `tokenId`
+    /// Emits an {Approval} event.
+    function _approve(address to, uint256 tokenId) internal virtual {}
+}
+"#;
+    let expected = r#"contract Thing {
+    /* ERC721 internal functions */
+
+    /// @dev Approve `to` to operate on `tokenId`
+    /// Emits an {Approval} event.
+    function _approve(address to, uint256 tokenId) internal virtual {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_format_emit() {
     let source = "contract T {\n    event Foo(uint256 x);\n    function f() public {\n        emit Foo(1);\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();

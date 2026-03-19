@@ -26,9 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix autofix regressions in modifier ordering, unused import cleanup, function ordering, and import path normalization
 - Fix formatter duplicating inline assembly comments on repeated save/format
 - Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation
+- Fix formatter removing intentional single blank lines inside functions and around comment blocks
 - Fix `style/contract-layout` code action not appearing in VSCode when cursor is on non-first violation
 - Fix `style/contract-layout` autofix producing awkward member spacing and detached trailing comments
 - Fix `style/ordering` and `style/func-order` code actions only appearing on the first violation in a reordered group
+- Fix `style/imports-ordering` collapsing blank-line grouping and only exposing the sort fix on the first violation
+- Fix `best-practices/no-unused-imports` leaving attached import comments behind when deleting whole import statements
 - Avoid double formatting on save in VSCode when `editor.formatOnSave` already uses solgrid
 - Deduplicate identical fixes in the fix engine to prevent overlapping-edit aborts
 

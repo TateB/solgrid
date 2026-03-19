@@ -2323,6 +2323,35 @@ fn test_imports_ordering_fix_multiple() {
 }
 
 #[test]
+fn test_imports_ordering_fix_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./C.sol";
+
+import "./B.sol";
+import "./A.sol";
+contract Test {}
+"#;
+    let diags = lint_source_for_rule(source, "style/imports-ordering");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every imports-ordering diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./A.sol";
+
+import "./B.sol";
+import "./C.sol";
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_contract_layout_fix() {
     let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() external {}\n    uint256 x;\n}\n";
     let diags = lint_source_for_rule(source, "style/contract-layout");
@@ -2639,12 +2668,45 @@ contract Test {
 }
 
 #[test]
+fn test_fix_no_unused_imports_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {A, B, C} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let diags = lint_source_for_rule(source, "best-practices/no-unused-imports");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every no-unused-imports diagnostic to have a fix"
+    );
+}
+
+#[test]
 fn test_fix_no_unused_imports_aliased() {
     // When a single aliased import is unused, the entire import line should be
     // deleted (same as the non-aliased single-alias case).
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 import {Foo as Bar} from "some.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_removes_attached_comment_block() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Temporary helper import.
+import {Foo} from "some.sol";
 contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
