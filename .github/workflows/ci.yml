@@ -91,15 +91,32 @@ jobs:
       - run: pnpm --filter solgrid-vscode run compile
       - run: pnpm --filter solgrid-vscode test
 
-  vscode-integration-tests:
-    name: VSCode Integration Tests
+  build:
+    name: Build Binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Build solgrid binary
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p solgrid
+      - uses: actions/upload-artifact@v4
+        with:
+          name: solgrid-binary
+          path: target/release/solgrid
+          if-no-files-found: error
+
+  vscode-integration-tests:
+    name: VSCode Integration Tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Download pre-built binary
+      - uses: actions/download-artifact@v4
+        with:
+          name: solgrid-binary
+          path: target/release
+      - run: chmod +x target/release/solgrid
       # Setup Node.js + pnpm
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -115,13 +132,16 @@ jobs:
 
   vscode-e2e-tests:
     name: VSCode E2E Tests
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Build solgrid binary
-      - uses: dtolnay/rust-toolchain@1.93
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p solgrid
+      # Download pre-built binary
+      - uses: actions/download-artifact@v4
+        with:
+          name: solgrid-binary
+          path: target/release
+      - run: chmod +x target/release/solgrid
       # Setup Node.js + pnpm
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4

@@ -14,6 +14,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Portable sed -i (BSD vs GNU)
+if [[ "$OSTYPE" == darwin* ]]; then
+  sedi() { sed -i '' "$@"; }
+else
+  sedi() { sed -i "$@"; }
+fi
+
 CARGO_TOML="$REPO_ROOT/Cargo.toml"
 VSCODE_PKG="$REPO_ROOT/editors/vscode/package.json"
 PRETTIER_PKG="$REPO_ROOT/packages/prettier-plugin-solgrid/package.json"
@@ -43,7 +50,7 @@ set_json_version() {
   local version="$2"
   local old_version
   old_version=$(get_json_version "$file")
-  sed -i '' "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
+  sedi "s/\"version\": \"$old_version\"/\"version\": \"$version\"/" "$file"
 }
 
 # Update version in Cargo.toml workspace
@@ -51,7 +58,7 @@ set_cargo_version() {
   local version="$1"
   local old_version
   old_version=$(get_cargo_version)
-  sed -i '' "s/^version = \"$old_version\"/version = \"$version\"/" "$CARGO_TOML"
+  sedi "s/^version = \"$old_version\"/version = \"$version\"/" "$CARGO_TOML"
 }
 
 MODE="${1:-check}"
@@ -115,10 +122,14 @@ case "$MODE" in
 
     echo ""
     echo "Next steps:"
-    echo "  1. Review CHANGELOG.md — edit the new [$NEW_VERSION] section if needed"
-    echo "  2. git add -A && git commit -m 'chore: bump version to $NEW_VERSION'"
-    echo "  3. git tag v$NEW_VERSION"
-    echo "  4. git push origin main --tags"
+    echo "  If using the Release PR workflow (recommended):"
+    echo "    Run the 'Release PR' workflow from GitHub Actions with version $NEW_VERSION"
+    echo ""
+    echo "  If releasing manually:"
+    echo "    1. Review CHANGELOG.md — edit the new [$NEW_VERSION] section if needed"
+    echo "    2. git add -A && git commit -m 'chore: bump version to $NEW_VERSION'"
+    echo "    3. Open a PR to main"
+    echo "    4. After merge, tag: git tag v$NEW_VERSION && git push origin v$NEW_VERSION"
     ;;
 
   check|*)

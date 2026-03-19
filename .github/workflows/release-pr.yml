@@ -1,0 +1,55 @@
+name: Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.2.3, without 'v' prefix)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-release-pr:
+    name: Create Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: Version must be semver format X.Y.Z, got: ${{ inputs.version }}" >&2
+            exit 1
+          fi
+
+      - name: Create release branch and bump version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "release/v${{ inputs.version }}"
+          bash scripts/version.sh --set "${{ inputs.version }}"
+          git add -A
+          git commit -m "chore: bump version to ${{ inputs.version }}"
+          git push origin "release/v${{ inputs.version }}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "release/v${{ inputs.version }}" \
+            --title "chore: release v${{ inputs.version }}" \
+            --body "## Release v${{ inputs.version }}
+
+          This PR bumps the version to ${{ inputs.version }} across all packages and stamps the changelog.
+
+          **After merging**, the tag will be created automatically and the release workflow will run.
+
+          ---
+          _Created by the Release PR workflow._" \
+            --label "skip-changelog"
