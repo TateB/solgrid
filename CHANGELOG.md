@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Cross-file hover support: imported symbols (errors, functions, contracts, etc.) now show signature and NatSpec documentation
+- Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
+
 ### Fixed
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
 - Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword

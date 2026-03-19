@@ -1,10 +1,13 @@
 //! Hover — symbol signatures, NatSpec documentation, and rule documentation.
 
 use crate::builtins::{self, BuiltinDef};
+use crate::definition;
+use crate::resolve::ImportResolver;
 use crate::symbols::{SymbolDef, SymbolKind};
 use crate::{convert, symbols};
 use solgrid_diagnostics::{FixAvailability, RuleMeta};
 use solgrid_linter::LintEngine;
+use std::path::Path;
 use tower_lsp_server::ls_types;
 
 /// Generate hover information for a position in a document.
@@ -16,6 +19,9 @@ pub fn hover_at_position(
     lsp_diagnostics: &[ls_types::Diagnostic],
     position: &ls_types::Position,
     source: &str,
+    uri: &ls_types::Uri,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
 ) -> Option<ls_types::Hover> {
     // First: check if hovering over a diagnostic
     if let Some(hover) = hover_for_diagnostic(engine, lsp_diagnostics, position) {
@@ -23,7 +29,7 @@ pub fn hover_at_position(
     }
 
     // Second: try code intelligence (signature + NatSpec)
-    hover_for_symbol(source, position)
+    hover_for_symbol(source, position, uri, get_source, resolver)
 }
 
 pub fn hover_for_diagnostic(
@@ -62,7 +68,13 @@ pub fn hover_for_diagnostic(
 /// Shows the definition signature (e.g., function header, variable type) as a
 /// Solidity code block, followed by any NatSpec documentation.
 /// Falls back to built-in definitions for native Solidity/Yul identifiers.
-pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<ls_types::Hover> {
+pub fn hover_for_symbol(
+    source: &str,
+    position: &ls_types::Position,
+    uri: &ls_types::Uri,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<ls_types::Hover> {
     let offset = convert::position_to_offset(source, *position);
     let table = symbols::build_symbol_table(source, "buffer.sol");
 
@@ -72,7 +84,7 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
     {
         let member_name = &source[member_range.clone()];
 
-        // 1a. Try user-defined symbol resolution
+        // 1a. Try user-defined symbol resolution (same file)
         if let Some(tbl) = &table {
             if let Some(container_def) = tbl.resolve(&container, offset) {
                 if let Some(member_def) = tbl.resolve_member(container_def, member_name) {
@@ -86,7 +98,29 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
             }
         }
 
-        // 1b. Fall back to builtin namespace member (msg.sender, abi.encode, etc.)
+        // 1b. Try cross-file member access
+        if let Some(tbl) = &table {
+            if let Some(importing_file) = definition::uri_to_path(uri) {
+                if let Some(cross) = definition::resolve_cross_file_member_symbol(
+                    tbl,
+                    &container,
+                    member_name,
+                    &importing_file,
+                    get_source,
+                    resolver,
+                ) {
+                    let hover_range = convert::span_to_range(source, &member_range);
+                    return Some(hover_for_cross_file_symbol(
+                        &cross.source,
+                        &cross.def,
+                        &cross.table,
+                        hover_range,
+                    ));
+                }
+            }
+        }
+
+        // 1c. Fall back to builtin namespace member (msg.sender, abi.encode, etc.)
         if let Some(builtin) = builtins::lookup_solidity_member(&container, member_name) {
             return Some(make_builtin_hover(builtin, source, &member_range));
         }
@@ -97,24 +131,45 @@ pub fn hover_for_symbol(source: &str, position: &ls_types::Position) -> Option<l
     // Try simple identifier
     let (name, ident_range) = symbols::find_ident_at_offset(source, offset)?;
 
-    // 2a. Try user-defined symbol resolution
+    // 2a. Try user-defined symbol resolution (same file)
     if let Some(tbl) = &table {
         if let Some(def) = tbl.resolve(&name, offset) {
             return Some(hover_for_user_symbol(source, def, tbl, &ident_range));
         }
     }
 
-    // 2b. Try Solidity global function (keccak256, require, etc.)
+    // 2b. Try cross-file symbol resolution
+    if let Some(tbl) = &table {
+        if let Some(importing_file) = definition::uri_to_path(uri) {
+            if let Some(cross) = definition::resolve_cross_file_symbol(
+                tbl,
+                &name,
+                &importing_file,
+                get_source,
+                resolver,
+            ) {
+                let hover_range = convert::span_to_range(source, &ident_range);
+                return Some(hover_for_cross_file_symbol(
+                    &cross.source,
+                    &cross.def,
+                    &cross.table,
+                    hover_range,
+                ));
+            }
+        }
+    }
+
+    // 2c. Try Solidity global function (keccak256, require, etc.)
     if let Some(builtin) = builtins::lookup_solidity_global(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
 
-    // 2c. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
+    // 2d. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
     if let Some(builtin) = builtins::lookup_solidity_namespace(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
 
-    // 2d. Try Yul built-in (only inside assembly blocks)
+    // 2e. Try Yul built-in (only inside assembly blocks)
     if is_inside_assembly(source, offset) {
         if let Some(builtin) = builtins::lookup_yul_builtin(&name) {
             return Some(make_builtin_hover(builtin, source, &ident_range));
@@ -167,6 +222,39 @@ fn hover_for_user_symbol(
             value: content,
         }),
         range: Some(range),
+    }
+}
+
+/// Build a hover response for a symbol resolved from an imported file.
+///
+/// Uses `def_source` (the imported file) for signature/NatSpec extraction,
+/// and `hover_range` (computed from the current file) for the highlight range.
+fn hover_for_cross_file_symbol(
+    def_source: &str,
+    def: &SymbolDef,
+    table: &symbols::SymbolTable,
+    hover_range: ls_types::Range,
+) -> ls_types::Hover {
+    let signature = extract_signature(def_source, def, table);
+
+    let doc_md = extract_natspec(def_source, def.def_span.start).map(|doc| format_natspec(&doc));
+
+    let mut content = String::new();
+    content.push_str("```solidity\n");
+    content.push_str(&signature);
+    content.push_str("\n```");
+
+    if let Some(doc) = &doc_md {
+        content.push_str("\n\n---\n\n");
+        content.push_str(doc);
+    }
+
+    ls_types::Hover {
+        contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+            kind: ls_types::MarkupKind::Markdown,
+            value: content,
+        }),
+        range: Some(hover_range),
     }
 }
 
@@ -646,8 +734,26 @@ mod tests {
         assert!(hover.is_none());
     }
 
+    fn noop_uri() -> ls_types::Uri {
+        "file:///test.sol".parse().unwrap()
+    }
+
+    fn noop_source(_path: &std::path::Path) -> Option<String> {
+        None
+    }
+
+    fn noop_resolver() -> ImportResolver {
+        ImportResolver::new(None)
+    }
+
     fn hover_value(source: &str, position: ls_types::Position) -> Option<String> {
-        let hover = hover_for_symbol(source, &position)?;
+        let hover = hover_for_symbol(
+            source,
+            &position,
+            &noop_uri(),
+            &noop_source,
+            &noop_resolver(),
+        )?;
         match hover.contents {
             ls_types::HoverContents::Markup(m) => Some(m.value),
             _ => None,
@@ -798,7 +904,14 @@ pragma solidity ^0.8.0;
 contract Test {}
 "#;
         // Position on a space
-        assert!(hover_for_symbol(source, &ls_types::Position::new(0, 0)).is_none());
+        assert!(hover_for_symbol(
+            source,
+            &ls_types::Position::new(0, 0),
+            &noop_uri(),
+            &noop_source,
+            &noop_resolver(),
+        )
+        .is_none());
     }
 
     // -- Mapping and complex type tests --
@@ -1728,5 +1841,256 @@ contract Test {
 
         let outside_offset = source.find(r#"string memory"#).unwrap();
         assert!(!is_inside_assembly(source, outside_offset));
+    }
+
+    // -- Error usage hover tests --
+
+    #[test]
+    fn test_hover_error_usage_in_revert() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    /// @notice Thrown when balance is insufficient.
+    /// @param balance The current balance
+    /// @param amount The requested amount
+    error InsufficientBalance(uint256 balance, uint256 amount);
+
+    function withdraw(uint256 amount) external {
+        revert InsufficientBalance(0, amount);
+    }
+}
+"#;
+        // Hover on "InsufficientBalance" at usage site in revert statement
+        let offset = source.find("revert InsufficientBalance").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+        let val = hover_value(source, pos).unwrap();
+        assert!(
+            val.contains("error InsufficientBalance(uint256 balance, uint256 amount)"),
+            "should show error signature, got: {val}"
+        );
+        assert!(
+            val.contains("Thrown when balance is insufficient"),
+            "should show NatSpec, got: {val}"
+        );
+    }
+
+    // -- Cross-file hover tests --
+
+    #[test]
+    fn test_hover_cross_file_imported_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errors_path = dir.path().join("Errors.sol");
+        let errors_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @notice Thrown when the balance is insufficient.
+/// @param balance Current balance
+/// @param amount Requested amount
+error InsufficientBalance(uint256 balance, uint256 amount);
+"#;
+        std::fs::write(&errors_path, errors_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {InsufficientBalance} from "./Errors.sol";
+
+contract Vault {
+    function withdraw(uint256 amount) external {
+        revert InsufficientBalance(0, amount);
+    }
+}
+"#;
+        let main_path = dir.path().join("Vault.sol");
+        std::fs::write(&main_path, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source =
+            |path: &std::path::Path| -> Option<String> { std::fs::read_to_string(path).ok() };
+
+        // Hover on "InsufficientBalance" in `revert InsufficientBalance(0, amount);`
+        let offset = main_source.find("revert InsufficientBalance").unwrap() + 7;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let hover = hover_for_symbol(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(hover.is_some(), "should resolve cross-file error hover");
+
+        let val = match hover.unwrap().contents {
+            ls_types::HoverContents::Markup(m) => m.value,
+            _ => panic!("expected markup"),
+        };
+
+        assert!(
+            val.contains("error InsufficientBalance(uint256 balance, uint256 amount)"),
+            "should show error signature, got: {val}"
+        );
+        assert!(
+            val.contains("Thrown when the balance is insufficient"),
+            "should show NatSpec, got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_cross_file_member_access() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let lib_path = dir.path().join("MathLib.sol");
+        let lib_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+library MathLib {
+    /// @notice Safely adds two numbers.
+    /// @param a First operand
+    /// @param b Second operand
+    /// @return The sum
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+}
+"#;
+        std::fs::write(&lib_path, lib_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {MathLib} from "./MathLib.sol";
+
+contract Calculator {
+    function sum(uint256 x, uint256 y) external pure returns (uint256) {
+        return MathLib.add(x, y);
+    }
+}
+"#;
+        let main_path = dir.path().join("Calculator.sol");
+        std::fs::write(&main_path, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source =
+            |path: &std::path::Path| -> Option<String> { std::fs::read_to_string(path).ok() };
+
+        // Hover on "add" in `MathLib.add(x, y)`
+        let offset = main_source.find("MathLib.add(x").unwrap() + 8;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let hover = hover_for_symbol(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            hover.is_some(),
+            "should resolve cross-file member access hover"
+        );
+
+        let val = match hover.unwrap().contents {
+            ls_types::HoverContents::Markup(m) => m.value,
+            _ => panic!("expected markup"),
+        };
+
+        assert!(
+            val.contains("function add(uint256 a, uint256 b) internal pure returns (uint256)"),
+            "should show function signature, got: {val}"
+        );
+        assert!(
+            val.contains("Safely adds two numbers"),
+            "should show NatSpec, got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_cross_file_unresolvable_returns_none() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {Missing} from "./NonExistent.sol";
+
+contract Test {
+    function foo() external {
+        revert Missing();
+    }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test/Test.sol".parse().unwrap();
+        let resolver = ImportResolver::new(None);
+        let get_source = |_: &std::path::Path| -> Option<String> { None };
+
+        let offset = source.find("revert Missing").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+
+        let hover = hover_for_symbol(source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            hover.is_none(),
+            "should return None for unresolvable import"
+        );
+    }
+
+    #[test]
+    fn test_hover_transitive_import() {
+        use std::fs;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        let file_a = dir.path().join("FileA.sol");
+        fs::write(
+            &file_a,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+/// @notice Something went wrong
+error ThingOne(uint256 code);
+"#,
+        )
+        .unwrap();
+
+        let file_b = dir.path().join("FileB.sol");
+        fs::write(
+            &file_b,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {ThingOne} from "./FileA.sol";
+"#,
+        )
+        .unwrap();
+
+        let file_c_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {ThingOne} from "./FileB.sol";
+
+contract Test {
+    function fail() external {
+        revert ThingOne(1);
+    }
+}
+"#;
+        let file_c = dir.path().join("FileC.sol");
+        fs::write(&file_c, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&file_c).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source =
+            |path: &std::path::Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        let offset = file_c_source.find("revert ThingOne").unwrap() + 7;
+        let pos = convert::offset_to_position(file_c_source, offset);
+
+        let hover = hover_for_symbol(file_c_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            hover.is_some(),
+            "should resolve transitively imported symbol for hover"
+        );
+        let content = match hover.unwrap().contents {
+            ls_types::HoverContents::Markup(m) => m.value,
+            _ => panic!("expected markup"),
+        };
+        assert!(
+            content.contains("error ThingOne"),
+            "should show error signature"
+        );
+        assert!(
+            content.contains("Something went wrong"),
+            "should show NatSpec from FileA"
+        );
     }
 }

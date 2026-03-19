@@ -2,9 +2,22 @@
 
 use crate::convert;
 use crate::resolve::ImportResolver;
-use crate::symbols::{self, ImportedSymbols};
-use std::path::Path;
+use crate::symbols::{self, ImportedSymbols, SymbolDef, SymbolTable};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
+
+/// A symbol resolved from an imported file.
+pub(crate) struct CrossFileSymbol {
+    /// Source text of the file where the symbol is defined.
+    pub source: String,
+    /// Symbol table of the file where the symbol is defined.
+    pub table: SymbolTable,
+    /// The resolved symbol definition.
+    pub def: SymbolDef,
+    /// Filesystem path of the file where the symbol is defined.
+    pub resolved_path: PathBuf,
+}
 
 /// Handle a go-to-definition request.
 ///
@@ -85,91 +98,46 @@ pub fn goto_definition(
         ));
     }
 
-    // Cross-file: check imports for the symbol.
+    // Cross-file: check for alias/glob imports first (navigate to the file).
     let importing_file = uri_to_path(uri)?;
-
     for import in &table.imports {
-        let target_name = match &import.symbols {
-            ImportedSymbols::Named(names) => {
-                // Check if `name` matches any imported symbol or alias.
-                let mut found = None;
-                for (original, alias) in names {
-                    let local_name = alias.as_deref().unwrap_or(original.as_str());
-                    if local_name == name {
-                        // We need to look up `original` in the imported file.
-                        found = Some(original.as_str());
-                        break;
-                    }
-                }
-                match found {
-                    Some(n) => n,
-                    None => continue,
-                }
+        match &import.symbols {
+            ImportedSymbols::Plain(Some(alias)) if alias == &name => {
+                let resolved = resolver.resolve(&import.path, &importing_file)?;
+                let target_uri = path_to_uri(&resolved)?;
+                return Some(ls_types::GotoDefinitionResponse::Scalar(
+                    ls_types::Location {
+                        uri: target_uri,
+                        range: ls_types::Range::default(),
+                    },
+                ));
             }
-            ImportedSymbols::Plain(alias) => {
-                if let Some(alias) = alias {
-                    if alias == &name {
-                        // `import "file.sol" as Alias` — go to the file.
-                        let resolved = resolver.resolve(&import.path, &importing_file)?;
-                        let target_uri = path_to_uri(&resolved)?;
-                        return Some(ls_types::GotoDefinitionResponse::Scalar(
-                            ls_types::Location {
-                                uri: target_uri,
-                                range: ls_types::Range::default(),
-                            },
-                        ));
-                    }
-                    continue;
-                }
-                // Plain import without alias — all file-level symbols are in scope.
-                name.as_str()
+            ImportedSymbols::Glob(alias) if alias == &name => {
+                let resolved = resolver.resolve(&import.path, &importing_file)?;
+                let target_uri = path_to_uri(&resolved)?;
+                return Some(ls_types::GotoDefinitionResponse::Scalar(
+                    ls_types::Location {
+                        uri: target_uri,
+                        range: ls_types::Range::default(),
+                    },
+                ));
             }
-            ImportedSymbols::Glob(alias) => {
-                if alias == &name {
-                    // Clicking on the glob alias itself — go to the file.
-                    let resolved = resolver.resolve(&import.path, &importing_file)?;
-                    let target_uri = path_to_uri(&resolved)?;
-                    return Some(ls_types::GotoDefinitionResponse::Scalar(
-                        ls_types::Location {
-                            uri: target_uri,
-                            range: ls_types::Range::default(),
-                        },
-                    ));
-                }
-                continue;
-            }
-        };
-
-        // Resolve the import path and look up the symbol in the imported file.
-        let resolved = resolver.resolve(&import.path, &importing_file);
-        let resolved = match resolved {
-            Some(p) => p,
-            None => continue,
-        };
-
-        let imported_source = get_source(&resolved);
-        let imported_source = match imported_source {
-            Some(s) => s,
-            None => continue,
-        };
-
-        let filename = resolved.to_string_lossy().to_string();
-        let imported_table = match symbols::build_symbol_table(&imported_source, &filename) {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Look for the symbol at file scope (offset 0 matches file-level scope).
-        if let Some(def) = imported_table.resolve(target_name, 0) {
-            let range = convert::span_to_range(&imported_source, &def.name_span);
-            let target_uri = path_to_uri(&resolved)?;
-            return Some(ls_types::GotoDefinitionResponse::Scalar(
-                ls_types::Location {
-                    uri: target_uri,
-                    range,
-                },
-            ));
+            _ => {}
         }
+    }
+
+    // Cross-file: resolve the symbol (with transitive import support).
+    if let Some(cross) =
+        resolve_cross_file_symbol(&table, &name, &importing_file, get_source, resolver)
+    {
+        let range = convert::span_to_range(&cross.source, &cross.def.name_span);
+        let target_uri = path_to_uri(&cross.resolved_path)?;
+        return Some(ls_types::GotoDefinitionResponse::Scalar(
+            ls_types::Location {
+                uri: target_uri,
+                range,
+            },
+        ));
     }
 
     None
@@ -187,8 +155,158 @@ fn resolve_cross_file_member(
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
 ) -> Option<ls_types::GotoDefinitionResponse> {
-    for import in &table.imports {
-        // Check if this import provides the container symbol.
+    let cross = resolve_cross_file_member_symbol(
+        table,
+        container_name,
+        member_name,
+        importing_file,
+        get_source,
+        resolver,
+    )?;
+    let range = convert::span_to_range(&cross.source, &cross.def.name_span);
+    let target_uri = path_to_uri(&cross.resolved_path)?;
+    Some(ls_types::GotoDefinitionResponse::Scalar(
+        ls_types::Location {
+            uri: target_uri,
+            range,
+        },
+    ))
+}
+
+/// Resolve a symbol name by searching the current file's imports.
+///
+/// Follows import chains transitively (e.g., FileC imports from FileB which
+/// re-exports from FileA) with cycle detection.
+pub(crate) fn resolve_cross_file_symbol(
+    current_table: &SymbolTable,
+    name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<CrossFileSymbol> {
+    let mut visited = HashSet::new();
+    resolve_cross_file_symbol_inner(
+        current_table,
+        name,
+        importing_file,
+        get_source,
+        resolver,
+        &mut visited,
+    )
+}
+
+fn resolve_cross_file_symbol_inner(
+    current_table: &SymbolTable,
+    name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    visited: &mut HashSet<PathBuf>,
+) -> Option<CrossFileSymbol> {
+    for import in &current_table.imports {
+        let target_name = match &import.symbols {
+            ImportedSymbols::Named(names) => {
+                let mut found = None;
+                for (original, alias) in names {
+                    let local_name = alias.as_deref().unwrap_or(original.as_str());
+                    if local_name == name {
+                        found = Some(original.as_str());
+                        break;
+                    }
+                }
+                match found {
+                    Some(n) => n,
+                    None => continue,
+                }
+            }
+            ImportedSymbols::Plain(alias) => {
+                if alias.is_some() {
+                    continue;
+                }
+                // Plain import without alias — all file-level symbols are in scope.
+                name
+            }
+            ImportedSymbols::Glob(_) => continue,
+        };
+
+        let resolved = match resolver.resolve(&import.path, importing_file) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        if !visited.insert(resolved.clone()) {
+            continue;
+        }
+
+        let imported_source = match get_source(&resolved) {
+            Some(s) => s,
+            None => continue,
+        };
+        let filename = resolved.to_string_lossy().to_string();
+        let imported_table = match symbols::build_symbol_table(&imported_source, &filename) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Try direct resolution in this file.
+        if let Some(def) = imported_table.resolve(target_name, 0) {
+            let def = def.clone();
+            return Some(CrossFileSymbol {
+                source: imported_source,
+                def,
+                table: imported_table,
+                resolved_path: resolved,
+            });
+        }
+
+        // Not defined here — follow this file's imports transitively.
+        if let Some(result) = resolve_cross_file_symbol_inner(
+            &imported_table,
+            target_name,
+            &resolved,
+            get_source,
+            resolver,
+            visited,
+        ) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Resolve a `Container.member` access across file boundaries.
+///
+/// Follows import chains transitively with cycle detection.
+pub(crate) fn resolve_cross_file_member_symbol(
+    current_table: &SymbolTable,
+    container_name: &str,
+    member_name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<CrossFileSymbol> {
+    let mut visited = HashSet::new();
+    resolve_cross_file_member_symbol_inner(
+        current_table,
+        container_name,
+        member_name,
+        importing_file,
+        get_source,
+        resolver,
+        &mut visited,
+    )
+}
+
+fn resolve_cross_file_member_symbol_inner(
+    current_table: &SymbolTable,
+    container_name: &str,
+    member_name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    visited: &mut HashSet<PathBuf>,
+) -> Option<CrossFileSymbol> {
+    for import in &current_table.imports {
         let target_name = match &import.symbols {
             ImportedSymbols::Named(names) => {
                 let mut found = None;
@@ -212,6 +330,11 @@ fn resolve_cross_file_member(
             Some(p) => p,
             None => continue,
         };
+
+        if !visited.insert(resolved.clone()) {
+            continue;
+        }
+
         let imported_source = match get_source(&resolved) {
             Some(s) => s,
             None => continue,
@@ -222,24 +345,36 @@ fn resolve_cross_file_member(
             None => continue,
         };
 
-        // Find the container in the imported file, then resolve the member inside it.
+        // Try direct resolution: find the container, then the member.
         if let Some(container_def) = imported_table.resolve(target_name, 0) {
             if let Some(member_def) = imported_table.resolve_member(container_def, member_name) {
-                let range = convert::span_to_range(&imported_source, &member_def.name_span);
-                let target_uri = path_to_uri(&resolved)?;
-                return Some(ls_types::GotoDefinitionResponse::Scalar(
-                    ls_types::Location {
-                        uri: target_uri,
-                        range,
-                    },
-                ));
+                let def = member_def.clone();
+                return Some(CrossFileSymbol {
+                    source: imported_source,
+                    def,
+                    table: imported_table,
+                    resolved_path: resolved,
+                });
             }
+        }
+
+        // Not defined here — follow this file's imports transitively.
+        if let Some(result) = resolve_cross_file_member_symbol_inner(
+            &imported_table,
+            target_name,
+            member_name,
+            &resolved,
+            get_source,
+            resolver,
+            visited,
+        ) {
+            return Some(result);
         }
     }
     None
 }
 
-fn uri_to_path(uri: &ls_types::Uri) -> Option<std::path::PathBuf> {
+pub(crate) fn uri_to_path(uri: &ls_types::Uri) -> Option<std::path::PathBuf> {
     uri.to_file_path().map(|p| p.into_owned())
 }
 
@@ -525,5 +660,219 @@ contract Main {
         let result = goto_definition(source, &pos, &uri, &noop_source, &noop_resolver());
         // Should return None since the import can't be resolved.
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_goto_definition_error_usage_in_revert() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    error CustomError(uint256 code);
+
+    function fail() external {
+        revert CustomError(1);
+    }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+
+        // Click on "CustomError" in `revert CustomError(1);`
+        let offset = source.find("revert CustomError").unwrap() + 7;
+        let pos = convert::offset_to_position(source, offset);
+
+        let result = goto_definition(source, &pos, &uri, &noop_source, &noop_resolver());
+        assert!(result.is_some(), "should resolve error in revert statement");
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            assert_eq!(loc.uri, uri);
+            // Should point to the error declaration name
+            let name_offset = source.find("error CustomError").unwrap() + 6;
+            let expected_pos = convert::offset_to_position(source, name_offset);
+            assert_eq!(loc.range.start, expected_pos);
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_goto_definition_cross_file_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errors_path = dir.path().join("Errors.sol");
+        let errors_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+error CustomError(uint256 code);
+"#;
+        fs::write(&errors_path, errors_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {CustomError} from "./Errors.sol";
+
+contract Test {
+    function fail() external {
+        revert CustomError(1);
+    }
+}
+"#;
+        let main_path = dir.path().join("Main.sol");
+        fs::write(&main_path, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        // Click on "CustomError" in `revert CustomError(1);`
+        let offset = main_source.find("revert CustomError").unwrap() + 7;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "should resolve cross-file error in revert"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            let expected_uri =
+                ls_types::Uri::from_file_path(errors_path.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_transitive_import_goto_definition() {
+        // FileA defines ThingOne, FileB re-exports it, FileC imports from FileB.
+        let dir = tempfile::tempdir().unwrap();
+
+        let file_a = dir.path().join("FileA.sol");
+        fs::write(
+            &file_a,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+error ThingOne(uint256 code);
+"#,
+        )
+        .unwrap();
+
+        let file_b = dir.path().join("FileB.sol");
+        fs::write(
+            &file_b,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {ThingOne} from "./FileA.sol";
+"#,
+        )
+        .unwrap();
+
+        let file_c_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {ThingOne} from "./FileB.sol";
+
+contract Test {
+    function fail() external {
+        revert ThingOne(1);
+    }
+}
+"#;
+        let file_c = dir.path().join("FileC.sol");
+        fs::write(&file_c, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&file_c).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        // Click on "ThingOne" in `revert ThingOne(1);`
+        let offset = file_c_source.find("revert ThingOne").unwrap() + 7;
+        let pos = convert::offset_to_position(file_c_source, offset);
+
+        let result = goto_definition(file_c_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "should resolve transitively imported symbol"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            // Should navigate to FileA where ThingOne is actually defined.
+            let expected_uri =
+                ls_types::Uri::from_file_path(file_a.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_transitive_import_member_access() {
+        // FileA defines a library, FileB re-exports it, FileC uses Lib.method().
+        let dir = tempfile::tempdir().unwrap();
+
+        let file_a = dir.path().join("FileA.sol");
+        fs::write(
+            &file_a,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+library MathLib {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let file_b = dir.path().join("FileB.sol");
+        fs::write(
+            &file_b,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {MathLib} from "./FileA.sol";
+"#,
+        )
+        .unwrap();
+
+        let file_c_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {MathLib} from "./FileB.sol";
+
+contract Test {
+    function foo() public pure returns (uint256) {
+        return MathLib.add(1, 2);
+    }
+}
+"#;
+        let file_c = dir.path().join("FileC.sol");
+        fs::write(&file_c, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&file_c).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        // Click on "add" in `MathLib.add(1, 2)`
+        let offset = file_c_source.find("MathLib.add(1").unwrap() + 8;
+        let pos = convert::offset_to_position(file_c_source, offset);
+
+        let result = goto_definition(file_c_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "should resolve transitively imported member access"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            let expected_uri =
+                ls_types::Uri::from_file_path(file_a.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
     }
 }

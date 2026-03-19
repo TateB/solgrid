@@ -456,15 +456,35 @@ impl LanguageServer for SolgridServer {
 
         let documents = self.documents.read().await;
         let source = documents.get(uri).map(|d| d.content.clone());
+        // Collect open document contents for cross-file lookups.
+        let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
+            .uris()
+            .filter_map(|u| {
+                let path = uri_to_path(u);
+                let content = documents.get(u).map(|d| d.content.clone())?;
+                Some((path, content))
+            })
+            .collect();
         drop(documents);
 
         let source = source.unwrap_or_default();
+
+        let resolver = self.resolver.read().await;
+        let get_source = |path: &std::path::Path| -> Option<String> {
+            if let Some(content) = open_docs.get(path) {
+                return Some(content.clone());
+            }
+            std::fs::read_to_string(path).ok()
+        };
 
         Ok(hover::hover_at_position(
             &self.engine,
             &lsp_diags,
             position,
             &source,
+            uri,
+            &get_source,
+            &resolver,
         ))
     }
 

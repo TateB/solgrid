@@ -54,6 +54,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
     clientOptions
   );
 
+  client.outputChannel.appendLine(`Using solgrid binary: ${serverPath}`);
+
   // Watch for configuration changes
   context.subscriptions.push(
     workspace.onDidChangeConfiguration((e) => {
