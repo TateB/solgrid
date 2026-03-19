@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-03-19
+
 ### Added
 - Cross-file hover support: imported symbols (errors, functions, contracts, etc.) now show signature and NatSpec documentation
 - Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
@@ -92,7 +94,8 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.3...HEAD
-[0.0.3]: https://github.com/TateB/solgrid/compare/v0.0.2...v0.0.3
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/TateB/solgrid/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/TateB/solgrid/releases/tag/v0.0.3
 [0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2
 [0.0.1]: https://github.com/TateB/solgrid/releases/tag/v0.0.1
