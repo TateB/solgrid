@@ -22,4 +22,6 @@ Format:
 - Bug fix description
 ```
 
+If the PR has no consumer-facing changes (CI config, internal tooling, docs-only), apply the `skip-changelog` label instead of adding an entry.
+
 For version bumps, use `just version set X.Y.Z` which updates all packages and stamps the changelog automatically.
