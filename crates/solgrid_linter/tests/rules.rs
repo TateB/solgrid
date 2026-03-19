@@ -202,6 +202,31 @@ contract Test {
 }
 
 #[test]
+fn test_func_name_mixedcase_internal_underscore_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _goodName() internal {}
+    function _otherGoodName() private {}
+}
+"#;
+    assert_no_diagnostics(source, "naming/func-name-mixedcase");
+}
+
+#[test]
+fn test_func_name_mixedcase_public_underscore_detected() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _goodName() public {}
+}
+"#;
+    assert_diagnostic_count(source, "naming/func-name-mixedcase", 1);
+}
+
+#[test]
 fn test_const_name_snakecase_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -2480,6 +2505,33 @@ fn test_contract_layout_fix_normalizes_member_spacing() {
 }
 
 #[test]
+fn test_contract_layout_fix_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Performs work.
+    function run() external {}
+
+    /// @dev Failure signal.
+    error Oops();
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Failure signal.
+    error Oops();
+
+    /// @dev Performs work.
+    function run() external {}
+}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_fix_visibility_modifier_order() {
     let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function bad() pure public returns (uint256) {\n        return 42;\n    }\n}\n";
     let fixed = fix_source(source);
@@ -2585,6 +2637,33 @@ contract Test {
 }
 
 #[test]
+fn test_fix_func_order_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Private helper.
+    function a() private {}
+
+    /// @dev External entrypoint.
+    function b() external {}
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev External entrypoint.
+    function b() external {}
+
+    /// @dev Private helper.
+    function a() private {}
+}
+"#;
+
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_fix_ordering() {
     let source = "\n// SPDX-License-Identifier: MIT\ncontract Test {}\nimport \"./Foo.sol\";\npragma solidity ^0.8.0;\n";
     let diags = lint_source_for_rule(source, "style/ordering");
@@ -2616,6 +2695,23 @@ import "./Foo.sol";
 library Math {}
 contract Test {}
 "#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_ordering_preserves_natspec() {
+    let source = r#"// SPDX-License-Identifier: MIT
+/// @dev Top-level test contract.
+contract Test {}
+pragma solidity ^0.8.0;
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Top-level test contract.
+contract Test {}
+"#;
+
     let fixed = fix_source_unsafe(source);
     assert_eq!(fixed, expected);
 }

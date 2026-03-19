@@ -20,6 +20,39 @@ static META: RuleMeta = RuleMeta {
 
 pub struct FuncOrderRule;
 
+fn is_comment_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+        || trimmed.ends_with("*/")
+}
+
+fn line_start(source: &str, pos: usize) -> usize {
+    source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0)
+}
+
+fn attached_comment_start(source: &str, item_start: usize, body_start: usize) -> usize {
+    let mut start = line_start(source, item_start).max(body_start);
+
+    while start > body_start {
+        let prev_line_end = start.saturating_sub(1);
+        let prev_line_start = source[..prev_line_end]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(body_start);
+        let line = &source[prev_line_start..prev_line_end];
+
+        if line.trim().is_empty() || !is_comment_line(line) {
+            break;
+        }
+
+        start = prev_line_start.max(body_start);
+    }
+
+    start
+}
+
 fn func_priority(kind: FunctionKind, visibility: Option<Visibility>) -> u8 {
     match kind {
         FunctionKind::Constructor => 0,
@@ -115,36 +148,55 @@ impl Rule for FuncOrderRule {
                         }
 
                         if func_items.len() >= 2 {
-                            let first_func_start = func_items.first().unwrap().2.start;
-                            let first_line_start = ctx.source[..first_func_start]
-                                .rfind('\n')
-                                .map(|idx| idx + 1)
-                                .unwrap_or(body_start);
-                            let prefix = &ctx.source[body_start..first_line_start];
-                            let indent = &ctx.source[first_line_start..first_func_start];
+                            let first_chunk_start = attached_comment_start(
+                                ctx.source,
+                                func_items.first().unwrap().2.start,
+                                body_start,
+                            );
+                            let prefix = &ctx.source[body_start..first_chunk_start];
                             let trailing = &ctx.source[func_items.last().unwrap().2.end..body_end];
 
-                            let mut functions: Vec<(u8, usize, String)> = func_items
+                            let mut functions: Vec<(u8, usize, String, String)> = func_items
                                 .iter()
-                                .map(|(priority, orig_idx, span_range)| {
+                                .enumerate()
+                                .map(|(idx, (priority, orig_idx, span_range))| {
+                                    let chunk_start = attached_comment_start(
+                                        ctx.source,
+                                        span_range.start,
+                                        body_start,
+                                    );
+                                    let leading = if idx == 0 {
+                                        String::new()
+                                    } else {
+                                        ctx.source[func_items[idx - 1].2.end..chunk_start]
+                                            .to_string()
+                                    };
+
                                     (
                                         *priority,
                                         *orig_idx,
-                                        ctx.source[span_range.start..span_range.end].to_string(),
+                                        leading,
+                                        ctx.source[chunk_start..span_range.end].to_string(),
                                     )
                                 })
                                 .collect();
 
                             // Sort by (priority, original_index) for stable ordering
-                            functions.sort_by_key(|&(p, i, _)| (p, i));
+                            functions.sort_by_key(|&(p, i, _, _)| (p, i));
 
-                            let joined = functions
-                                .iter()
-                                .map(|(_, _, text)| text.as_str())
-                                .collect::<Vec<_>>()
-                                .join(&format!("\n\n{indent}"));
-
-                            let replacement = format!("{prefix}{indent}{joined}{trailing}");
+                            let mut replacement = String::from(prefix);
+                            if let Some((_, _, _, first_body)) = functions.first() {
+                                replacement.push_str(first_body);
+                                for (_, _, leading, body) in functions.iter().skip(1) {
+                                    if leading.trim().is_empty() {
+                                        replacement.push_str("\n\n");
+                                    } else {
+                                        replacement.push_str(leading);
+                                    }
+                                    replacement.push_str(body);
+                                }
+                            }
+                            replacement.push_str(trailing);
 
                             let fix = Fix::suggestion(
                                 "Reorder functions",

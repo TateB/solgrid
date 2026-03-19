@@ -300,10 +300,13 @@ fn format_try_stmt(
                 parts.push(space());
                 parts.push(text(name.as_str()));
             }
-            parts.push(text("("));
-            let params = format_params(&clause.args, source, config);
-            parts.push(params);
-            parts.push(text(") "));
+            if !clause.args.is_empty() {
+                parts.push(text("("));
+                let params = format_params(&clause.args, source, config);
+                parts.push(params);
+                parts.push(text(")"));
+            }
+            parts.push(space());
             parts.push(format_block(&clause.block, source, config, comments));
         }
     }

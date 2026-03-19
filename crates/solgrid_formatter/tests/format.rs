@@ -1768,3 +1768,37 @@ fn test_style_guide_idempotency_emit_statement() {
         result.unwrap_err()
     );
 }
+
+#[test]
+fn test_preserve_bare_catch_without_parentheses() {
+    let source = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch Error(string memory reason) {
+            revert(reason);
+        } catch {
+            revert("failed");
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch Error(string memory reason) {
+            revert(reason);
+        } catch {
+            revert("failed");
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+
+    let reformatted = format_source(&formatted, &default_config()).unwrap();
+    assert_eq!(reformatted, expected);
+}

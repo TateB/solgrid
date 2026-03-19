@@ -19,6 +19,39 @@ static META: RuleMeta = RuleMeta {
 
 pub struct OrderingRule;
 
+fn is_doc_comment_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("///")
+        || trimmed.starts_with("/**")
+        || trimmed.starts_with('*')
+        || trimmed.ends_with("*/")
+}
+
+fn line_start(source: &str, pos: usize) -> usize {
+    source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0)
+}
+
+fn attached_doc_comment_start(source: &str, item_start: usize) -> usize {
+    let mut start = line_start(source, item_start);
+
+    while start > 0 {
+        let prev_line_end = start.saturating_sub(1);
+        let prev_line_start = source[..prev_line_end]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let line = &source[prev_line_start..prev_line_end];
+
+        if line.trim().is_empty() || !is_doc_comment_line(line) {
+            break;
+        }
+
+        start = prev_line_start;
+    }
+
+    start
+}
+
 fn normalize_item_chunk(chunk: &str) -> String {
     let lines: Vec<&str> = chunk.lines().collect();
     let first = lines
@@ -110,7 +143,7 @@ impl Rule for OrderingRule {
                 .collect();
 
             if prioritized.len() >= 2 {
-                let first_start = prioritized[0].1.start;
+                let first_start = attached_doc_comment_start(ctx.source, prioritized[0].1.start);
                 let last_end = prioritized.last().unwrap().1.end;
 
                 // Build chunks
