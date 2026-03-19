@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Make `sed -i` calls portable across macOS (BSD) and Linux (GNU) in `version.sh` and `changelog.sh`
+- Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
+- Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 
 ## [0.0.3] - 2026-03-19
 
