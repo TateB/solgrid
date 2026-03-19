@@ -2525,6 +2525,37 @@ fn test_fix_func_order() {
 }
 
 #[test]
+fn test_fix_func_order_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function a() private {}
+    function b() public {}
+    function c() external {}
+}
+"#;
+    let diags = lint_source_for_rule(source, "style/func-order");
+    assert_eq!(diags.len(), 2);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every func-order diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function c() external {}
+
+    function b() public {}
+
+    function a() private {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
 fn test_fix_ordering() {
     let source = "\n// SPDX-License-Identifier: MIT\ncontract Test {}\nimport \"./Foo.sol\";\npragma solidity ^0.8.0;\n";
     let diags = lint_source_for_rule(source, "style/ordering");
@@ -2533,6 +2564,31 @@ fn test_fix_ordering() {
         diags[0].fix.is_some(),
         "Expected ordering diagnostic to have a fix"
     );
+}
+
+#[test]
+fn test_fix_ordering_attached_to_every_diagnostic() {
+    let source = r#"// SPDX-License-Identifier: MIT
+contract Test {}
+library Math {}
+import "./Foo.sol";
+pragma solidity ^0.8.0;
+"#;
+    let diags = lint_source_for_rule(source, "style/ordering");
+    assert_eq!(diags.len(), 3);
+    assert!(
+        diags.iter().all(|diag| diag.fix.is_some()),
+        "Expected every ordering diagnostic to have a fix"
+    );
+
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Foo.sol";
+library Math {}
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
 }
 
 #[test]

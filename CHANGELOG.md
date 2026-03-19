@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation
 - Fix `style/contract-layout` code action not appearing in VSCode when cursor is on non-first violation
 - Fix `style/contract-layout` autofix producing awkward member spacing and detached trailing comments
+- Fix `style/ordering` and `style/func-order` code actions only appearing on the first violation in a reordered group
 - Avoid double formatting on save in VSCode when `editor.formatOnSave` already uses solgrid
 - Deduplicate identical fixes in the fix engine to prevent overlapping-edit aborts
 

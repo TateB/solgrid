@@ -19,6 +19,20 @@ static META: RuleMeta = RuleMeta {
 
 pub struct OrderingRule;
 
+fn normalize_item_chunk(chunk: &str) -> String {
+    let lines: Vec<&str> = chunk.lines().collect();
+    let first = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let last = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+
+    lines[first..=last].join("\n")
+}
+
 fn item_priority(kind: &ItemKind<'_>) -> Option<u8> {
     match kind {
         ItemKind::Pragma(_) => Some(0),
@@ -105,9 +119,16 @@ impl Rule for OrderingRule {
                     let prev_end = if idx == 0 {
                         first_start
                     } else {
-                        prioritized[idx - 1].1.end
+                        ctx.source[prioritized[idx - 1].1.end..]
+                            .find('\n')
+                            .map_or(prioritized[idx - 1].1.end, |offset| {
+                                prioritized[idx - 1].1.end + offset
+                            })
                     };
-                    let chunk = ctx.source[prev_end..span_range.end].to_string();
+                    let item_end = ctx.source[span_range.end..]
+                        .find('\n')
+                        .map_or(span_range.end, |offset| span_range.end + offset);
+                    let chunk = normalize_item_chunk(&ctx.source[prev_end..item_end]);
                     chunks.push((*priority, idx, chunk));
                 }
 
@@ -117,18 +138,18 @@ impl Rule for OrderingRule {
                 let replacement: String = chunks
                     .iter()
                     .map(|(_, _, text)| text.as_str())
-                    .collect::<String>();
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
                 // Replace from first item start to last item end
                 let fix = Fix::suggestion(
                     "Reorder top-level declarations",
-                    vec![TextEdit::replace(
-                        first_start..last_end,
-                        replacement.trim_end().to_string(),
-                    )],
+                    vec![TextEdit::replace(first_start..last_end, replacement)],
                 );
 
-                violation_diags[0] = violation_diags[0].clone().with_fix(fix);
+                for diag in &mut violation_diags {
+                    *diag = diag.clone().with_fix(fix.clone());
+                }
             }
 
             diagnostics.extend(violation_diags);

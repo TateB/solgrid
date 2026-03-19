@@ -151,7 +151,9 @@ impl Rule for FuncOrderRule {
                                 vec![TextEdit::replace(body_start..body_end, replacement)],
                             );
 
-                            violation_diags[0] = violation_diags[0].clone().with_fix(fix);
+                            for diag in &mut violation_diags {
+                                *diag = diag.clone().with_fix(fix.clone());
+                            }
                         }
                     }
 
