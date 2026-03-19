@@ -115,32 +115,36 @@ impl Rule for FuncOrderRule {
                         }
 
                         if func_items.len() >= 2 {
-                            // Build chunks: each chunk = text from end of prev function to end of this function
-                            let mut chunks: Vec<(u8, usize, String)> = Vec::new();
-                            for (idx, (priority, orig_idx, span_range)) in
-                                func_items.iter().enumerate()
-                            {
-                                let prev_end = if idx == 0 {
-                                    body_start
-                                } else {
-                                    func_items[idx - 1].2.end
-                                };
-                                let chunk = ctx.source[prev_end..span_range.end].to_string();
-                                chunks.push((*priority, *orig_idx, chunk));
-                            }
+                            let first_func_start = func_items.first().unwrap().2.start;
+                            let first_line_start = ctx.source[..first_func_start]
+                                .rfind('\n')
+                                .map(|idx| idx + 1)
+                                .unwrap_or(body_start);
+                            let prefix = &ctx.source[body_start..first_line_start];
+                            let indent = &ctx.source[first_line_start..first_func_start];
+                            let trailing = &ctx.source[func_items.last().unwrap().2.end..body_end];
 
-                            // Trailing text after last function
-                            let last_end = func_items.last().unwrap().2.end;
-                            let trailing = &ctx.source[last_end..body_end];
+                            let mut functions: Vec<(u8, usize, String)> = func_items
+                                .iter()
+                                .map(|(priority, orig_idx, span_range)| {
+                                    (
+                                        *priority,
+                                        *orig_idx,
+                                        ctx.source[span_range.start..span_range.end].to_string(),
+                                    )
+                                })
+                                .collect();
 
                             // Sort by (priority, original_index) for stable ordering
-                            chunks.sort_by_key(|&(p, i, _)| (p, i));
+                            functions.sort_by_key(|&(p, i, _)| (p, i));
 
-                            let replacement: String = chunks
+                            let joined = functions
                                 .iter()
                                 .map(|(_, _, text)| text.as_str())
-                                .collect::<String>()
-                                + trailing;
+                                .collect::<Vec<_>>()
+                                .join(&format!("\n\n{indent}"));
+
+                            let replacement = format!("{prefix}{indent}{joined}{trailing}");
 
                             let fix = Fix::suggestion(
                                 "Reorder functions",

@@ -180,21 +180,36 @@ fn remove_returns_clause(area: &str) -> &str {
     }
 }
 
-/// Parse modifier keywords from the modifier area text.
+/// Parse modifier entries from the modifier area text.
+/// Entries are split on whitespace outside of parenthesized argument lists so
+/// forms like `override(Base)` and `onlyOwner(msg.sender)` stay intact.
 fn parse_modifiers(area: &str) -> Vec<(String, ModCategory)> {
     let mut modifiers = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
 
-    // Handle override(...) specially by removing the parens content
-    let cleaned = remove_override_params(area);
-
-    for word in cleaned.split_whitespace() {
-        // Skip parenthetical parts (e.g., from override(ISomething))
-        if word.starts_with('(') || word.ends_with(')') || word.contains('(') {
+    for ch in area.chars() {
+        if ch.is_whitespace() && depth == 0 {
+            if !current.is_empty() {
+                let entry = std::mem::take(&mut current);
+                let category = classify_keyword(entry.split('(').next().unwrap_or(""));
+                modifiers.push((entry, category));
+            }
             continue;
         }
 
-        let category = classify_keyword(word);
-        modifiers.push((word.to_string(), category));
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        let category = classify_keyword(current.split('(').next().unwrap_or(""));
+        modifiers.push((current, category));
     }
 
     modifiers
@@ -246,20 +261,9 @@ fn build_modifier_fix(
     let leading_ws = &original_area[..original_area.len() - original_area.trim_start().len()];
     let trailing_ws = &original_area[original_area.trim_end().len()..];
 
-    // Rebuild sorted modifier text, preserving override(...) params
-    let original_func_text_after_params = &func_text[params_end..params_end + modifier_end];
-    let override_params = extract_override_params(original_func_text_after_params);
-
     let sorted_text: Vec<String> = sorted_modifiers
         .iter()
-        .map(|(word, cat)| {
-            if *cat == ModCategory::Override {
-                if let Some(ref params) = override_params {
-                    return format!("{word}({params})");
-                }
-            }
-            word.clone()
-        })
+        .map(|(word, _)| word.clone())
         .collect();
 
     let replacement = format!("{}{}{}", leading_ws, sorted_text.join(" "), trailing_ws);
@@ -268,63 +272,4 @@ fn build_modifier_fix(
         "Reorder function modifiers",
         vec![TextEdit::replace(area_start..area_end, replacement)],
     ))
-}
-
-/// Extract the parenthetical content after `override`, if any.
-fn extract_override_params(area: &str) -> Option<String> {
-    if let Some(pos) = area.find("override") {
-        let after = &area[pos + 8..];
-        let trimmed = after.trim_start();
-        if trimmed.starts_with('(') {
-            let mut depth = 0;
-            for (i, ch) in trimmed.char_indices() {
-                match ch {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(trimmed[1..i].to_string());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Remove parenthetical content after `override` keyword.
-fn remove_override_params(area: &str) -> String {
-    let mut result = String::new();
-    let chars = area.chars().peekable();
-    let mut in_override_parens = false;
-    let mut depth = 0;
-
-    for ch in chars {
-        if in_override_parens {
-            match ch {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        in_override_parens = false;
-                    }
-                }
-                _ => {}
-            }
-            continue;
-        }
-
-        // Check if this is the start of override(...)
-        if ch == '(' && result.trim_end().ends_with("override") {
-            in_override_parens = true;
-            depth = 1;
-            continue;
-        }
-
-        result.push(ch);
-    }
-
-    result
 }

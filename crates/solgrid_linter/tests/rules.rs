@@ -2427,13 +2427,185 @@ fn test_fix_ordering() {
 
 #[test]
 fn test_fix_import_path_format() {
-    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Local.sol\";\nimport \"./Other.sol\";\nimport \"lib/External.sol\";\ncontract Test {}\n";
-    let diags = lint_source_for_rule(source, "style/import-path-format");
-    assert!(!diags.is_empty());
-    assert!(
-        diags[0].fix.is_some(),
-        "Expected import-path-format diagnostic to have a fix"
-    );
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./External.sol";
+import "Local.sol";
+import "Other.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "External.sol";
+import "Local.sol";
+import "Other.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+// =============================================================================
+// Edge case tests for autofix bugs
+// =============================================================================
+
+#[test]
+fn test_fix_no_unused_imports_multiple_unused_aliases() {
+    // Bug: when multiple aliases are unused in the same import, each diagnostic
+    // generates a fix that replaces the entire {…} range. The fixer should not
+    // abort due to overlapping edits — all unused aliases should be removed.
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {A, B, C} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {B} from "some.sol";
+contract Test {
+    B public x;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_aliased() {
+    // When a single aliased import is unused, the entire import line should be
+    // deleted (same as the non-aliased single-alias case).
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Foo as Bar} from "some.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_no_unused_imports_partial_aliased() {
+    // Bug: build_unused_import_fix filters by first_word (original name "Orig")
+    // but unused_name is the alias name ("Unused"). The fix should remove the
+    // unused aliased entry and keep the used one.
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Used, Orig as Unused} from "some.sol";
+contract Test {
+    Used public x;
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Used} from "some.sol";
+contract Test {
+    Used public x;
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_visibility_modifier_order_preserves_parameterized_modifier() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    modifier onlyOwner(address who) {
+        _;
+    }
+
+    function bad() pure public onlyOwner(msg.sender) returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    modifier onlyOwner(address who) {
+        _;
+    }
+
+    function bad() public pure onlyOwner(msg.sender) returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_func_order_preserves_non_function_members() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+
+    function foo() private {}
+
+    function bar() external {}
+}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+
+    function bar() external {}
+
+    function foo() private {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_import_path_format_does_not_rewrite_package_imports() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "./Other.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
+}
+
+#[test]
+fn test_fix_import_path_format_does_not_rewrite_parent_relative_imports() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+import "A.sol";
+import "B.sol";
+contract Test {}
+"#;
+    let expected = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+import "A.sol";
+import "B.sol";
+contract Test {}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_eq!(fixed, expected);
 }
 
 #[test]

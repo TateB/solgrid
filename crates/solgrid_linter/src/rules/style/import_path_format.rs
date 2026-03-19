@@ -93,23 +93,36 @@ fn build_path_fix(
 
     let new_path = match target_style {
         "absolute" => {
-            // Remove leading ./ or ../
+            if path.starts_with("../") {
+                return None;
+            }
+
             let mut p = path;
-            while p.starts_with("./") {
-                p = &p[2..];
+            let mut changed = false;
+            while let Some(stripped) = p.strip_prefix("./") {
+                p = stripped;
+                changed = true;
             }
-            // Strip ../ prefixes too (best effort)
-            while p.starts_with("../") {
-                p = &p[3..];
+
+            if !changed || p.is_empty() {
+                return None;
             }
+
             p.to_string()
         }
         "relative" => {
-            // Prepend ./ to make it relative
+            if path.starts_with('@') || path.contains('/') {
+                return None;
+            }
+
             format!("./{path}")
         }
         _ => return None,
     };
+
+    if new_path == path {
+        return None;
+    }
 
     Some(Fix::suggestion(
         format!("Convert to {target_style} import path"),

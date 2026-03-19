@@ -37,55 +37,58 @@ impl Rule for NoUnusedImportsRule {
                             let import_range = solgrid_ast::span_to_range(item.span);
                             let import_end = import_range.end;
 
-                            // Count how many aliases are unused
-                            let mut unused_count = 0;
-                            if import_end < ctx.source.len() {
-                                let rest = &ctx.source[import_end..];
-                                for alias in aliases.iter() {
-                                    let name = if let Some(alias_name) = alias.1 {
+                            if import_end >= ctx.source.len() {
+                                continue;
+                            }
+
+                            let rest = &ctx.source[import_end..];
+                            let unused_aliases: Vec<_> = aliases
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(idx, alias)| {
+                                    let imported_name = if let Some(alias_name) = alias.1 {
                                         alias_name.as_str().to_string()
                                     } else {
                                         alias.0.as_str().to_string()
                                     };
-                                    if !is_identifier_used(rest, &name) {
-                                        unused_count += 1;
+
+                                    (!is_identifier_used(rest, &imported_name)).then_some((
+                                        idx,
+                                        imported_name,
+                                        solgrid_ast::span_to_range(
+                                            alias
+                                                .1
+                                                .map(|alias_name| alias_name.span)
+                                                .unwrap_or(alias.0.span),
+                                        ),
+                                    ))
+                                })
+                                .collect();
+
+                            let unused_indexes: Vec<usize> =
+                                unused_aliases.iter().map(|(idx, _, _)| *idx).collect();
+                            let fix = build_unused_import_fix(
+                                ctx.source,
+                                &import_range,
+                                aliases.len(),
+                                &unused_indexes,
+                            );
+
+                            for (diag_idx, (_, imported_name, name_range)) in
+                                unused_aliases.into_iter().enumerate()
+                            {
+                                let mut diag = Diagnostic::new(
+                                    META.id,
+                                    format!("imported symbol `{imported_name}` is unused"),
+                                    META.default_severity,
+                                    name_range,
+                                );
+                                if diag_idx == 0 {
+                                    if let Some(fix) = fix.clone() {
+                                        diag = diag.with_fix(fix);
                                     }
                                 }
-                            }
-
-                            for alias in aliases.iter() {
-                                let imported_name = if let Some(alias_name) = alias.1 {
-                                    alias_name.as_str().to_string()
-                                } else {
-                                    alias.0.as_str().to_string()
-                                };
-                                let imported_name = imported_name.as_str();
-
-                                if import_end < ctx.source.len() {
-                                    let rest = &ctx.source[import_end..];
-                                    if !is_identifier_used(rest, imported_name) {
-                                        let name_range = solgrid_ast::span_to_range(alias.0.span);
-
-                                        let fix = build_unused_import_fix(
-                                            ctx.source,
-                                            &import_range,
-                                            aliases.len(),
-                                            unused_count,
-                                            imported_name,
-                                        );
-
-                                        let mut diag = Diagnostic::new(
-                                            META.id,
-                                            format!("imported symbol `{imported_name}` is unused"),
-                                            META.default_severity,
-                                            name_range,
-                                        );
-                                        if let Some(fix) = fix {
-                                            diag = diag.with_fix(fix);
-                                        }
-                                        diagnostics.push(diag);
-                                    }
-                                }
+                                diagnostics.push(diag);
                             }
                         }
                         ImportItems::Glob(alias) => {
@@ -174,11 +177,10 @@ fn build_unused_import_fix(
     source: &str,
     import_range: &std::ops::Range<usize>,
     total_aliases: usize,
-    unused_count: usize,
-    unused_name: &str,
+    unused_indexes: &[usize],
 ) -> Option<Fix> {
     // If only one alias total, or all are unused, delete the entire line
-    if total_aliases == 1 || unused_count == total_aliases {
+    if total_aliases == 1 || unused_indexes.len() == total_aliases {
         return Some(delete_import_line_fix(source, import_range));
     }
 
@@ -192,12 +194,9 @@ fn build_unused_import_fix(
     let aliases: Vec<&str> = braces_content.split(',').map(|s| s.trim()).collect();
     let remaining: Vec<&str> = aliases
         .into_iter()
-        .filter(|a| {
-            // Check if this alias entry matches the unused name
-            // Handle "Foo as Bar" form — match against the original name (first word)
-            let first_word = a.split_whitespace().next().unwrap_or("");
-            first_word != unused_name
-        })
+        .enumerate()
+        .filter(|(idx, _)| !unused_indexes.contains(idx))
+        .map(|(_, alias)| alias)
         .collect();
 
     if remaining.is_empty() {
