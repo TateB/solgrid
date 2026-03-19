@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fix EACCES error when spawning native binary from npm CLI and VSCode extension (npm tarballs don't preserve execute bits)
 
+## [0.0.2] - 2026-03-18
+
+### Fixed
+- Prevent extra blank line when leading comments follow imports in formatter
+- Temporarily disable VS Code Marketplace publishing in release workflow
+
 ### Added
 - Robust versioning system with single source of truth (`Cargo.toml`)
 - Version sync script (`scripts/version.sh`) for monorepo consistency
@@ -23,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Conformance test suite for Prettier plugin
 - Performance benchmarks (cold lint corpus, startup time)
 
-## [0.1.0] - 2025-12-01
+## [0.0.1] - 2026-03-18
 
 Initial development release.
 
@@ -52,5 +58,6 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/TateB/solgrid/releases/tag/v0.1.0
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/TateB/solgrid/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/TateB/solgrid/releases/tag/v0.0.1
