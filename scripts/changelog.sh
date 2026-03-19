@@ -14,6 +14,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Portable sed -i (BSD vs GNU)
+if [[ "$OSTYPE" == darwin* ]]; then
+  sedi() { sed -i '' "$@"; }
+else
+  sedi() { sed -i "$@"; }
+fi
 CHANGELOG="$REPO_ROOT/CHANGELOG.md"
 GITHUB_REPO="TateB/solgrid"
 
@@ -56,14 +63,14 @@ case "$MODE" in
     PREV_VERSION=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$CHANGELOG" | head -1 | sed 's/## \[\(.*\)\]/\1/')
 
     # Replace [Unreleased] header with versioned header, add fresh [Unreleased]
-    sed -i '' "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$VERSION] - $DATE/" "$CHANGELOG"
+    sedi "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$VERSION] - $DATE/" "$CHANGELOG"
 
     # Update the [Unreleased] comparison link at the bottom
-    sed -i '' "s|^\[Unreleased\]:.*|[Unreleased]: https://github.com/$GITHUB_REPO/compare/v$VERSION...HEAD|" "$CHANGELOG"
+    sedi "s|^\[Unreleased\]:.*|[Unreleased]: https://github.com/$GITHUB_REPO/compare/v$VERSION...HEAD|" "$CHANGELOG"
 
     # Add the new version comparison link
     if [ -n "$PREV_VERSION" ]; then
-      sed -i '' "s|^\[$PREV_VERSION\]:.*|[$VERSION]: https://github.com/$GITHUB_REPO/compare/v$PREV_VERSION...v$VERSION\n[$PREV_VERSION]: https://github.com/$GITHUB_REPO/releases/tag/v$PREV_VERSION|" "$CHANGELOG"
+      sedi "s|^\[$PREV_VERSION\]:.*|[$VERSION]: https://github.com/$GITHUB_REPO/compare/v$PREV_VERSION...v$VERSION\n[$PREV_VERSION]: https://github.com/$GITHUB_REPO/releases/tag/v$PREV_VERSION|" "$CHANGELOG"
     else
       echo "[$VERSION]: https://github.com/$GITHUB_REPO/releases/tag/v$VERSION" >> "$CHANGELOG"
     fi
