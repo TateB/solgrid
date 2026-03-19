@@ -1,7 +1,8 @@
 //! Integration tests for lint rules.
 
 use solgrid_linter::testing::{
-    assert_diagnostic_count, assert_no_diagnostics, fix_source, lint_source_for_rule,
+    assert_diagnostic_count, assert_no_diagnostics, fix_source, fix_source_unsafe,
+    lint_source_for_rule,
 };
 
 // =============================================================================
@@ -2304,6 +2305,39 @@ import "./Zebra.sol";
 contract Test {}
 "#;
     assert_no_diagnostics(source, "style/imports-ordering");
+}
+
+#[test]
+fn test_imports_ordering_fix() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Zebra.sol\";\nimport \"./Alpha.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(fixed.contains("import \"./Alpha.sol\";\nimport \"./Zebra.sol\";"));
+}
+
+#[test]
+fn test_imports_ordering_fix_multiple() {
+    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Charlie.sol\";\nimport \"./Alpha.sol\";\nimport \"./Bravo.sol\";\ncontract Test {}\n";
+    let fixed = fix_source(source);
+    assert!(fixed
+        .contains("import \"./Alpha.sol\";\nimport \"./Bravo.sol\";\nimport \"./Charlie.sol\";"));
+}
+
+#[test]
+fn test_contract_layout_fix() {
+    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() external {}\n    uint256 x;\n}\n";
+    let diags = lint_source_for_rule(source, "style/contract-layout");
+    assert!(!diags.is_empty());
+    assert!(
+        diags[0].fix.is_some(),
+        "Expected contract-layout diagnostic to have a fix"
+    );
+    let fixed = fix_source_unsafe(source);
+    let x_pos = fixed.find("uint256 x").unwrap();
+    let foo_pos = fixed.find("function foo").unwrap();
+    assert!(
+        x_pos < foo_pos,
+        "Expected state variable before function after fix"
+    );
 }
 
 #[test]

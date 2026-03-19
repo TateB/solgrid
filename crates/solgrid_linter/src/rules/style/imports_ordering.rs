@@ -64,16 +64,36 @@ impl Rule for ImportsOrderingRule {
             // Check if this group is sorted
             for i in group_start + 1..group_end {
                 if imports[i].2.to_lowercase() < imports[i - 1].2.to_lowercase() {
-                    diagnostics.push(Diagnostic::new(
-                        META.id,
-                        format!(
-                            "import `{}` should appear before `{}`",
-                            imports[i].2,
-                            imports[i - 1].2
-                        ),
-                        META.default_severity,
-                        imports[i].0..imports[i].1,
-                    ));
+                    // Collect source lines for the group and sort by path
+                    let mut lines: Vec<(&str, String)> = (group_start..group_end)
+                        .map(|j| {
+                            let line_text = &ctx.source[imports[j].0..imports[j].1];
+                            let path_lower = imports[j].2.to_lowercase();
+                            (line_text, path_lower)
+                        })
+                        .collect();
+                    lines.sort_by(|a, b| a.1.cmp(&b.1));
+
+                    let group_range = imports[group_start].0..imports[group_end - 1].1;
+                    let sorted_text: String =
+                        lines.iter().map(|(t, _)| *t).collect::<Vec<_>>().join("\n");
+
+                    diagnostics.push(
+                        Diagnostic::new(
+                            META.id,
+                            format!(
+                                "import `{}` should appear before `{}`",
+                                imports[i].2,
+                                imports[i - 1].2
+                            ),
+                            META.default_severity,
+                            imports[i].0..imports[i].1,
+                        )
+                        .with_fix(Fix::safe(
+                            "Sort imports alphabetically",
+                            vec![TextEdit::replace(group_range, sorted_text)],
+                        )),
+                    );
                     break; // Report once per group
                 }
             }

@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Cross-file hover support: imported symbols (errors, functions, contracts, etc.) now show signature and NatSpec documentation
 - Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
+- Implement autofix for `style/imports-ordering` rule (sorts import groups alphabetically)
+- Implement autofix for `style/contract-layout` rule (reorders contract members by type)
 
 ### Fixed
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
