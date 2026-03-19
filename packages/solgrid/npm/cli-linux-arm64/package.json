@@ -1,6 +1,6 @@
 {
   "name": "@solgrid/cli-linux-arm64",
-  "version": "0.0.4",
+  "version": "0.0.3",
   "description": "solgrid CLI binary for Linux arm64",
   "license": "MIT",
   "repository": {
