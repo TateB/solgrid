@@ -131,7 +131,11 @@ fn find_remapped_path(resolved: &Path, remappings: &[(String, PathBuf)]) -> Opti
     let rest = resolved.strip_prefix(&norm_target).ok()?;
     // Convert rest to forward-slash path for Solidity imports
     let rest_str = rest.to_string_lossy().replace('\\', "/");
-    Some(format!("{prefix}{rest_str}"))
+    if prefix.ends_with('/') || rest_str.starts_with('/') {
+        Some(format!("{prefix}{rest_str}"))
+    } else {
+        Some(format!("{prefix}/{rest_str}"))
+    }
 }
 
 /// Find the byte offset of the import path string within an import statement.
