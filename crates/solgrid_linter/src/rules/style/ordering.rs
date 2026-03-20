@@ -1,11 +1,14 @@
 //! Rule: style/ordering
 //!
-//! Enforce top-level declaration order: pragma, imports, interfaces, libraries, contracts.
+//! Enforce canonical declaration ordering at the file level and inside
+//! contract-like bodies.
 
 use crate::context::LintContext;
 use crate::rule::Rule;
 use solgrid_diagnostics::*;
-use solgrid_parser::solar_ast::{ContractKind, ItemKind};
+use solgrid_parser::solar_ast::{
+    ContractKind, FunctionKind, Item, ItemFunction, ItemKind, StateMutability, Visibility,
+};
 use solgrid_parser::with_parsed_ast_sequential;
 
 static META: RuleMeta = RuleMeta {
@@ -13,72 +16,16 @@ static META: RuleMeta = RuleMeta {
     name: "ordering",
     category: RuleCategory::Style,
     default_severity: Severity::Info,
-    description: "top-level declarations should follow order: pragma, imports, interfaces, libraries, contracts",
-    fix_availability: FixAvailability::Available(FixSafety::Suggestion),
+    description: "declarations should follow the canonical file-level and contract-level ordering",
+    fix_availability: FixAvailability::None,
 };
 
 pub struct OrderingRule;
 
-fn is_doc_comment_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with("///")
-        || trimmed.starts_with("/**")
-        || trimmed.starts_with('*')
-        || trimmed.ends_with("*/")
-}
-
-fn line_start(source: &str, pos: usize) -> usize {
-    source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0)
-}
-
-fn attached_doc_comment_start(source: &str, item_start: usize) -> usize {
-    let mut start = line_start(source, item_start);
-
-    while start > 0 {
-        let prev_line_end = start.saturating_sub(1);
-        let prev_line_start = source[..prev_line_end]
-            .rfind('\n')
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        let line = &source[prev_line_start..prev_line_end];
-
-        if line.trim().is_empty() || !is_doc_comment_line(line) {
-            break;
-        }
-
-        start = prev_line_start;
-    }
-
-    start
-}
-
-fn normalize_item_chunk(chunk: &str) -> String {
-    let lines: Vec<&str> = chunk.lines().collect();
-    let first = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(0);
-    let last = lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .unwrap_or(first);
-
-    lines[first..=last].join("\n")
-}
-
-fn item_priority(kind: &ItemKind<'_>) -> Option<u8> {
-    match kind {
-        ItemKind::Pragma(_) => Some(0),
-        ItemKind::Import(_) => Some(1),
-        ItemKind::Contract(c) => match c.kind {
-            ContractKind::Interface => Some(2),
-            ContractKind::Library => Some(3),
-            ContractKind::Contract | ContractKind::AbstractContract => Some(4),
-        },
-        ItemKind::Using(_) => Some(1), // treat using-for at file level like imports
-        ItemKind::Function(_) => Some(5), // free functions after contracts
-        _ => None,
-    }
+struct WeightedItem {
+    weight: u16,
+    span: std::ops::Range<usize>,
+    label: &'static str,
 }
 
 impl Rule for OrderingRule {
@@ -88,107 +35,221 @@ impl Rule for OrderingRule {
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let filename = ctx.path.to_string_lossy().to_string();
-        let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
+        with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
 
-            let items: Vec<_> = source_unit.items.iter().collect();
-            if items.is_empty() {
-                return diagnostics;
-            }
-
-            // First pass: detect violations
-            let mut max_priority = 0u8;
-            let mut violation_diags = Vec::new();
-            for item in items.iter() {
-                if let Some(priority) = item_priority(&item.kind) {
-                    if priority < max_priority {
-                        let range = solgrid_ast::item_name_range(item);
-                        let kind_name = match &item.kind {
-                            ItemKind::Pragma(_) => "pragma",
-                            ItemKind::Import(_) => "import",
-                            ItemKind::Contract(c) => match c.kind {
-                                ContractKind::Interface => "interface",
-                                ContractKind::Library => "library",
-                                _ => "contract",
-                            },
-                            ItemKind::Using(_) => "using",
-                            ItemKind::Function(_) => "free function",
-                            _ => "declaration",
-                        };
-                        violation_diags.push(Diagnostic::new(
-                            META.id,
-                            format!(
-                                "{kind_name} should appear before higher-priority declarations (expected order: pragma, imports, interfaces, libraries, contracts)"
-                            ),
-                            META.default_severity,
-                            range,
-                        ));
-                    } else {
-                        max_priority = priority;
-                    }
-                }
-            }
-
-            if violation_diags.is_empty() {
-                return diagnostics;
-            }
-
-            // Build fix: chunk-based reordering
-            // Only include items with known priorities
-            let prioritized: Vec<_> = items
-                .iter()
-                .filter_map(|item| {
-                    item_priority(&item.kind).map(|p| (p, solgrid_ast::span_to_range(item.span)))
-                })
-                .collect();
-
-            if prioritized.len() >= 2 {
-                let first_start = attached_doc_comment_start(ctx.source, prioritized[0].1.start);
-                let last_end = prioritized.last().unwrap().1.end;
-
-                // Build chunks
-                let mut chunks: Vec<(u8, usize, String)> = Vec::new();
-                for (idx, (priority, span_range)) in prioritized.iter().enumerate() {
-                    let prev_end = if idx == 0 {
-                        first_start
-                    } else {
-                        ctx.source[prioritized[idx - 1].1.end..]
-                            .find('\n')
-                            .map_or(prioritized[idx - 1].1.end, |offset| {
-                                prioritized[idx - 1].1.end + offset
-                            })
-                    };
-                    let item_end = ctx.source[span_range.end..]
-                        .find('\n')
-                        .map_or(span_range.end, |offset| span_range.end + offset);
-                    let chunk = normalize_item_chunk(&ctx.source[prev_end..item_end]);
-                    chunks.push((*priority, idx, chunk));
-                }
-
-                // Sort by (priority, original_index)
-                chunks.sort_by_key(|&(p, i, _)| (p, i));
-
-                let replacement: String = chunks
+            if let Some(diag) = first_scope_violation(
+                ctx,
+                source_unit
+                    .items
                     .iter()
-                    .map(|(_, _, text)| text.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                    .filter_map(|item| file_item_weight(ctx.source, item)),
+            ) {
+                diagnostics.push(diag);
+            }
 
-                // Replace from first item start to last item end
-                let fix = Fix::suggestion(
-                    "Reorder top-level declarations",
-                    vec![TextEdit::replace(first_start..last_end, replacement)],
-                );
+            for item in source_unit.items.iter() {
+                let ItemKind::Contract(contract) = &item.kind else {
+                    continue;
+                };
 
-                for diag in &mut violation_diags {
-                    *diag = diag.clone().with_fix(fix.clone());
+                if let Some(diag) = first_scope_violation(
+                    ctx,
+                    contract.body.iter().filter_map(|body_item| {
+                        contract_item_weight(ctx.source, contract.kind, body_item)
+                    }),
+                ) {
+                    diagnostics.push(diag);
                 }
             }
 
-            diagnostics.extend(violation_diags);
             diagnostics
-        });
-
-        result.unwrap_or_default()
+        })
+        .unwrap_or_default()
     }
+}
+
+fn first_scope_violation<I>(ctx: &LintContext<'_>, items: I) -> Option<Diagnostic>
+where
+    I: IntoIterator<Item = WeightedItem>,
+{
+    let mut max_weight = None;
+    let mut previous = None;
+
+    for item in items {
+        match max_weight {
+            Some(weight) if item.weight < weight => {
+                let (prev_label, prev_line) = previous?;
+                return Some(Diagnostic::new(
+                    META.id,
+                    format!(
+                        "{} order is incorrect, {} can not go after {} (line {})",
+                        item.label, item.label, prev_label, prev_line
+                    ),
+                    META.default_severity,
+                    item.span,
+                ));
+            }
+            _ => {
+                max_weight = Some(item.weight);
+                previous = Some((item.label, ctx.line_number(item.span.start)));
+            }
+        }
+    }
+
+    None
+}
+
+fn file_item_weight(source: &str, item: &Item<'_>) -> Option<WeightedItem> {
+    let (weight, label) = match &item.kind {
+        ItemKind::Pragma(_) => (0, "Pragma directive"),
+        ItemKind::Import(_) => (10, "Import directive"),
+        ItemKind::Variable(_) if is_constant_like(source, item) => (20, "File-level constant"),
+        ItemKind::Enum(_) => (30, "Enum definition"),
+        ItemKind::Struct(_) => (35, "Struct definition"),
+        ItemKind::Error(_) => (40, "Custom error"),
+        ItemKind::Function(_) => (50, "Free function definition"),
+        ItemKind::Contract(contract) => match contract.kind {
+            ContractKind::Interface => (60, "Interface"),
+            ContractKind::Library => (70, "Library"),
+            ContractKind::Contract | ContractKind::AbstractContract => (80, "Contract"),
+        },
+        _ => return None,
+    };
+
+    Some(WeightedItem {
+        weight,
+        span: solgrid_ast::item_name_range(item),
+        label,
+    })
+}
+
+fn contract_item_weight(
+    source: &str,
+    contract_kind: ContractKind,
+    item: &Item<'_>,
+) -> Option<WeightedItem> {
+    let (weight, label) = match &item.kind {
+        ItemKind::Using(_) => (0, "Using declaration"),
+        ItemKind::Enum(_) => (10, "Enum definition"),
+        ItemKind::Struct(_) => (15, "Struct definition"),
+        ItemKind::Variable(_) if is_constant_like(source, item) => (20, "Constant state variable"),
+        ItemKind::Variable(_) if is_immutable_like(source, item) => {
+            (22, "Immutable state variable")
+        }
+        ItemKind::Variable(_) => (25, "State variable"),
+        ItemKind::Event(_) => (30, "Event definition"),
+        ItemKind::Error(_) => (35, "Custom error"),
+        ItemKind::Function(func) if func.kind == FunctionKind::Modifier => {
+            (40, "Modifier definition")
+        }
+        ItemKind::Function(func) if is_initialization_function(source, func) => {
+            (50, "Initialization function")
+        }
+        ItemKind::Function(func) => function_weight(contract_kind, func)?,
+        _ => return None,
+    };
+
+    Some(WeightedItem {
+        weight,
+        span: solgrid_ast::item_name_range(item),
+        label,
+    })
+}
+
+fn function_weight(
+    _contract_kind: ContractKind,
+    func: &ItemFunction<'_>,
+) -> Option<(u16, &'static str)> {
+    match func.kind {
+        FunctionKind::Constructor => Some((50, "Constructor")),
+        FunctionKind::Receive => Some((60, "Receive function")),
+        FunctionKind::Fallback => Some((70, "Fallback function")),
+        FunctionKind::Modifier => None,
+        FunctionKind::Function => {
+            let base = match func.header.visibility() {
+                Some(Visibility::External) => 80,
+                Some(Visibility::Public) => 90,
+                Some(Visibility::Internal) => 100,
+                Some(Visibility::Private) => 110,
+                None => 90,
+            };
+            let offset = match func.header.state_mutability() {
+                StateMutability::View => 2,
+                StateMutability::Pure => 4,
+                StateMutability::Payable | StateMutability::NonPayable => 0,
+            };
+
+            Some((base + offset, "Function"))
+        }
+    }
+}
+
+fn is_constant_like(source: &str, item: &Item<'_>) -> bool {
+    solgrid_ast::span_text(source, item.span).contains(" constant ")
+        || solgrid_ast::span_text(source, item.span).contains(" constant;")
+}
+
+fn is_immutable_like(source: &str, item: &Item<'_>) -> bool {
+    solgrid_ast::span_text(source, item.span).contains(" immutable ")
+        || solgrid_ast::span_text(source, item.span).contains(" immutable;")
+}
+
+fn is_initialization_function(source: &str, func: &ItemFunction<'_>) -> bool {
+    let name = match func.header.name {
+        Some(name) => name.as_str().to_string(),
+        None => String::new(),
+    };
+
+    if name == "initialize"
+        && matches!(func.header.visibility(), Some(Visibility::Public))
+        && func.header.modifiers.iter().any(|modifier| {
+            modifier
+                .name
+                .segments()
+                .iter()
+                .any(|segment| segment.as_str() == "initializer")
+        })
+    {
+        return true;
+    }
+
+    if !matches!(name.as_str(), "supportsInterface" | "supportsFeature") {
+        return false;
+    }
+
+    if !matches!(
+        func.header.visibility(),
+        Some(Visibility::Public) | Some(Visibility::External)
+    ) {
+        return false;
+    }
+
+    if !matches!(
+        func.header.state_mutability(),
+        StateMutability::View | StateMutability::Pure
+    ) {
+        return false;
+    }
+
+    if func.header.parameters.len() != 1 {
+        return false;
+    }
+
+    let returns = match &func.header.returns {
+        Some(returns) => returns,
+        None => return false,
+    };
+    if returns.len() != 1 {
+        return false;
+    }
+
+    let parameter_ty = &func.header.parameters[0].ty;
+    let return_ty = &returns[0].ty;
+
+    is_exact_type(source, parameter_ty, "bytes4") && is_exact_type(source, return_ty, "bool")
+}
+
+fn is_exact_type(source: &str, ty: &solgrid_parser::solar_ast::Type<'_>, expected: &str) -> bool {
+    solgrid_ast::span_text(source, ty.span).trim() == expected
 }

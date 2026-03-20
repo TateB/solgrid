@@ -3,7 +3,7 @@
 //! Handles `solgrid.toml` config files with support for hierarchical
 //! config resolution and foundry.toml fallback.
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solgrid_diagnostics::{RuleCategory, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -92,6 +92,29 @@ impl LintConfig {
         }
         // Enabled by default
         true
+    }
+
+    /// Decode typed settings for a specific rule, falling back to defaults on
+    /// missing or invalid configuration.
+    pub fn rule_settings<T>(&self, rule_id: &str) -> T
+    where
+        T: DeserializeOwned + Default,
+    {
+        self.settings
+            .get(rule_id)
+            .and_then(|value| value.clone().try_into::<T>().ok())
+            .unwrap_or_default()
+    }
+}
+
+impl Config {
+    /// Decode typed settings for a specific rule, falling back to defaults on
+    /// missing or invalid configuration.
+    pub fn rule_settings<T>(&self, rule_id: &str) -> T
+    where
+        T: DeserializeOwned + Default,
+    {
+        self.lint.rule_settings(rule_id)
     }
 }
 

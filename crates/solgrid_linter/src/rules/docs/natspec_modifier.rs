@@ -4,7 +4,7 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
-use crate::rules::best_practices::use_natspec::extract_natspec;
+use solgrid_ast::natspec::find_attached_natspec;
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{FunctionKind, ItemKind};
 use solgrid_parser::with_parsed_ast_sequential;
@@ -45,7 +45,7 @@ impl Rule for NatspecModifierRule {
                                 .unwrap_or_else(|| "unnamed".to_string());
 
                             let span_start = solgrid_ast::span_to_range(body_item.span).start;
-                            if extract_natspec(ctx.source, span_start).is_none() {
+                            if find_attached_natspec(ctx.source, span_start).is_none() {
                                 let range = solgrid_ast::item_name_range(body_item);
                                 diagnostics.push(Diagnostic::new(
                                     META.id,

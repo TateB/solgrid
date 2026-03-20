@@ -25,6 +25,8 @@ pub fn run(rule_id: &str) -> i32 {
             "  \"{}\" = \"warn\"  # or \"error\", \"info\", \"off\"",
             meta.id
         );
+        println!("  [lint.settings.\"{}\"]", meta.id);
+        println!("  # rule-specific options vary by rule");
         0
     } else {
         eprintln!("Unknown rule: {rule_id}");

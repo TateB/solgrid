@@ -9,10 +9,14 @@ use std::path::Path;
 
 /// Lint a source string using the default engine and return diagnostics.
 pub fn lint_source(source: &str) -> Vec<Diagnostic> {
+    lint_source_with_config(source, &Config::default())
+}
+
+/// Lint a source string using the provided config and return diagnostics.
+pub fn lint_source_with_config(source: &str, config: &Config) -> Vec<Diagnostic> {
     let engine = LintEngine::new();
-    let config = Config::default();
     let path = Path::new("test.sol");
-    let result = engine.lint_source(source, path, &config);
+    let result = engine.lint_source(source, path, config);
     result.diagnostics
 }
 
@@ -24,21 +28,44 @@ pub fn lint_source_for_rule(source: &str, rule_id: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// Lint a source string using the provided config and return only diagnostics
+/// for a specific rule.
+pub fn lint_source_for_rule_with_config(
+    source: &str,
+    rule_id: &str,
+    config: &Config,
+) -> Vec<Diagnostic> {
+    lint_source_with_config(source, config)
+        .into_iter()
+        .filter(|d| d.rule_id == rule_id)
+        .collect()
+}
+
 /// Lint a source string and apply fixes, returning the fixed source.
 pub fn fix_source(source: &str) -> String {
+    fix_source_with_config(source, &Config::default())
+}
+
+/// Lint a source string and apply fixes using the provided config, returning
+/// the fixed source.
+pub fn fix_source_with_config(source: &str, config: &Config) -> String {
     let engine = LintEngine::new();
-    let config = Config::default();
     let path = Path::new("test.sol");
-    let (fixed, _) = engine.fix_source(source, path, &config, false);
+    let (fixed, _) = engine.fix_source(source, path, config, false);
     fixed
 }
 
 /// Lint a source string and apply all fixes (including unsafe), returning the fixed source.
 pub fn fix_source_unsafe(source: &str) -> String {
+    fix_source_unsafe_with_config(source, &Config::default())
+}
+
+/// Lint a source string and apply all fixes (including unsafe) using the
+/// provided config, returning the fixed source.
+pub fn fix_source_unsafe_with_config(source: &str, config: &Config) -> String {
     let engine = LintEngine::new();
-    let config = Config::default();
     let path = Path::new("test.sol");
-    let (fixed, _) = engine.fix_source(source, path, &config, true);
+    let (fixed, _) = engine.fix_source(source, path, config, true);
     fixed
 }
 

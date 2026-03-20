@@ -2437,6 +2437,7 @@ dependencies = [
  "solar-ast",
  "solar-interface",
  "solgrid_parser",
+ "toml",
 ]
 
 [[package]]
@@ -2476,6 +2477,9 @@ dependencies = [
  "criterion",
  "insta",
  "rayon",
+ "regex",
+ "serde",
+ "sha3",
  "solar-ast",
  "solar-data-structures",
  "solar-interface",
@@ -2484,6 +2488,7 @@ dependencies = [
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_parser",
+ "tempfile",
 ]
 
 [[package]]

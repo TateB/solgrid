@@ -10,6 +10,7 @@ description = "AST utilities and helpers for solgrid lint rules"
 solgrid_parser = { workspace = true }
 solar-ast = { workspace = true }
 solar-interface = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

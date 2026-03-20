@@ -7,8 +7,6 @@ mod explicit_types;
 mod function_max_lines;
 mod imports_on_top;
 mod max_states_count;
-mod natspec_params;
-mod natspec_returns;
 mod no_console;
 mod no_empty_blocks;
 mod no_floating_pragma;
@@ -20,7 +18,6 @@ mod no_unused_state;
 mod no_unused_vars;
 mod one_contract_per_file;
 mod reason_string;
-pub(crate) mod use_natspec;
 mod visibility_modifier_order;
 
 use crate::registry::RuleRegistry;
@@ -41,9 +38,6 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(no_unused_error::NoUnusedErrorRule));
     registry.register(Box::new(no_unused_event::NoUnusedEventRule));
     registry.register(Box::new(constructor_syntax::ConstructorSyntaxRule));
-    registry.register(Box::new(use_natspec::UseNatspecRule));
-    registry.register(Box::new(natspec_params::NatspecParamsRule));
-    registry.register(Box::new(natspec_returns::NatspecReturnsRule));
     registry.register(Box::new(
         visibility_modifier_order::VisibilityModifierOrderRule,
     ));
