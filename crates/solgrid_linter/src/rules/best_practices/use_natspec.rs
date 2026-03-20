@@ -8,6 +8,7 @@ use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{FunctionKind, ItemKind, Visibility};
 use solgrid_parser::with_parsed_ast_sequential;
 
+#[allow(dead_code)]
 static META: RuleMeta = RuleMeta {
     id: "best-practices/use-natspec",
     name: "use-natspec",
@@ -17,6 +18,7 @@ static META: RuleMeta = RuleMeta {
     fix_availability: FixAvailability::None,
 };
 
+#[allow(dead_code)]
 pub struct UseNatspecRule;
 
 impl Rule for UseNatspecRule {

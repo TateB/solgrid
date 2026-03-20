@@ -98,6 +98,7 @@ export function getSettings(
     fixOnSave: config.fixOnSave,
     fixOnSaveUnsafe: config.fixOnSaveUnsafe,
     formatOnSave: getEffectiveServerFormatOnSave(config, editorConfig),
+    configPath: config.configPath,
   };
 }
 

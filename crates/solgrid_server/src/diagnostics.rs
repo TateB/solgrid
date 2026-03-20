@@ -108,10 +108,6 @@ contract Test {
         let mut config = Config::default();
         // Disable some rules that might fire on this simple example
         config.lint.rules.insert(
-            "best-practices/use-natspec".into(),
-            solgrid_config::RuleLevel::Off,
-        );
-        config.lint.rules.insert(
             "best-practices/natspec-params".into(),
             solgrid_config::RuleLevel::Off,
         );

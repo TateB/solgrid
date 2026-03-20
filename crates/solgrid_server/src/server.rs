@@ -35,8 +35,9 @@ pub struct SolgridServer {
     client: Client,
     engine: Arc<LintEngine>,
     documents: Arc<RwLock<DocumentStore>>,
-    config: Arc<RwLock<Config>>,
     settings: Arc<RwLock<ServerSettings>>,
+    workspace_root: Arc<RwLock<Option<PathBuf>>>,
+    config_path: Arc<RwLock<Option<PathBuf>>>,
     /// Cache of last-published LSP diagnostics per URI, for hover lookups.
     published_diagnostics: Arc<RwLock<std::collections::HashMap<Uri, Vec<Diagnostic>>>>,
     /// Import path resolver for cross-file go-to-definition.
@@ -50,11 +51,34 @@ impl SolgridServer {
             client,
             engine: Arc::new(LintEngine::new()),
             documents: Arc::new(RwLock::new(DocumentStore::new())),
-            config: Arc::new(RwLock::new(Config::default())),
             settings: Arc::new(RwLock::new(ServerSettings::default())),
+            workspace_root: Arc::new(RwLock::new(None)),
+            config_path: Arc::new(RwLock::new(None)),
             published_diagnostics: Arc::new(RwLock::new(std::collections::HashMap::new())),
             resolver: Arc::new(RwLock::new(ImportResolver::new(None))),
         }
+    }
+
+    async fn resolve_config_for_path(&self, path: &std::path::Path) -> Config {
+        if let Some(config_path) = self.config_path.read().await.clone() {
+            return match solgrid_config::load_config(&config_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!(
+                                "Failed to load configured solgrid config {}: {error}",
+                                config_path.display()
+                            ),
+                        )
+                        .await;
+                    Config::default()
+                }
+            };
+        }
+
+        solgrid_config::resolve_config(path)
     }
 
     /// Lint a document and publish diagnostics to the client.
@@ -70,7 +94,7 @@ impl SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.config.read().await.clone();
+        let config = self.resolve_config_for_path(&path).await;
 
         let mut lsp_diags =
             diagnostics::lint_to_lsp_diagnostics(&self.engine, &source, &path, &config);
@@ -108,7 +132,7 @@ impl SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.config.read().await.clone();
+        let config = self.resolve_config_for_path(&path).await;
         let mut current_source = source;
 
         // Apply safe fixes
@@ -141,7 +165,17 @@ impl SolgridServer {
 
 impl LanguageServer for SolgridServer {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        // Try to load config from the workspace root
+        let init_settings = params
+            .initialization_options
+            .clone()
+            .and_then(|options| serde_json::from_value::<ClientSettings>(options).ok());
+        if let Some(settings) = &init_settings {
+            let mut server_settings = self.settings.write().await;
+            server_settings.fix_on_save = settings.fix_on_save.unwrap_or(true);
+            server_settings.fix_on_save_unsafe = settings.fix_on_save_unsafe.unwrap_or(false);
+            server_settings.format_on_save = settings.format_on_save.unwrap_or(true);
+        }
+
         let root_uri = params
             .workspace_folders
             .as_ref()
@@ -151,13 +185,26 @@ impl LanguageServer for SolgridServer {
         let root_uri = root_uri.or(params.root_uri.as_ref());
         if let Some(root_uri) = root_uri {
             if let Some(root_path) = uri_to_path_option(root_uri) {
-                let resolved = solgrid_config::resolve_config(&root_path);
-                let mut config = self.config.write().await;
-                *config = resolved;
+                let mut workspace_root = self.workspace_root.write().await;
+                *workspace_root = Some(root_path.clone());
+                drop(workspace_root);
+
+                if let Some(settings) = &init_settings {
+                    if let Some(config_path) = settings.config_path.clone() {
+                        let mut config_path_slot = self.config_path.write().await;
+                        *config_path_slot =
+                            Some(resolve_config_path(config_path, Some(&root_path)));
+                    }
+                }
 
                 // Initialize import resolver with workspace root.
                 let mut resolver = self.resolver.write().await;
                 *resolver = ImportResolver::new(Some(root_path));
+            }
+        } else if let Some(settings) = &init_settings {
+            if let Some(config_path) = settings.config_path.clone() {
+                let mut config_path_slot = self.config_path.write().await;
+                *config_path_slot = Some(resolve_config_path(config_path, None));
             }
         }
 
@@ -299,7 +346,7 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.config.read().await.clone();
+        let config = self.resolve_config_for_path(&path).await;
         let mut current_source = source.clone();
         let mut edits = Vec::new();
 
@@ -377,7 +424,7 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.config.read().await.clone();
+        let config = self.resolve_config_for_path(&path).await;
 
         let result =
             actions::code_actions(&self.engine, &source, &path, &config, &params.range, uri);
@@ -404,7 +451,8 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let config = self.config.read().await.clone();
+        let path = uri_to_path(uri);
+        let config = self.resolve_config_for_path(&path).await;
         let edits = format::format_document(&source, &config.format);
 
         if edits.is_empty() {
@@ -432,7 +480,8 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let config = self.config.read().await.clone();
+        let path = uri_to_path(uri);
+        let config = self.resolve_config_for_path(&path).await;
         let edits = format::format_range(&source, &params.range, &config.format);
 
         if edits.is_empty() {
@@ -565,14 +614,14 @@ impl LanguageServer for SolgridServer {
             server_settings.fix_on_save = settings.fix_on_save.unwrap_or(true);
             server_settings.fix_on_save_unsafe = settings.fix_on_save_unsafe.unwrap_or(false);
             server_settings.format_on_save = settings.format_on_save.unwrap_or(true);
-        }
+            drop(server_settings);
 
-        // Reload config from disk
-        // Try workspace root first (from initialize), fallback to current dir
-        let config = solgrid_config::resolve_config(&std::env::current_dir().unwrap_or_default());
-        {
-            let mut cfg = self.config.write().await;
-            *cfg = config;
+            let workspace_root = self.workspace_root.read().await.clone();
+            let config_path = settings
+                .config_path
+                .map(|config_path| resolve_config_path(config_path, workspace_root.as_deref()));
+            let mut config_path_slot = self.config_path.write().await;
+            *config_path_slot = config_path;
         }
 
         // Re-lint all open documents with new config
@@ -594,6 +643,7 @@ struct ClientSettings {
     fix_on_save: Option<bool>,
     fix_on_save_unsafe: Option<bool>,
     format_on_save: Option<bool>,
+    config_path: Option<String>,
 }
 
 /// Check if a URI points to a Solidity file.
@@ -611,6 +661,17 @@ fn uri_to_path(uri: &Uri) -> PathBuf {
 /// Try to convert a URI to a filesystem path.
 fn uri_to_path_option(uri: &Uri) -> Option<PathBuf> {
     uri.to_file_path().map(|p| p.into_owned())
+}
+
+fn resolve_config_path(config_path: String, workspace_root: Option<&std::path::Path>) -> PathBuf {
+    let config_path = PathBuf::from(config_path);
+    if config_path.is_absolute() {
+        config_path
+    } else if let Some(root) = workspace_root {
+        root.join(config_path)
+    } else {
+        config_path
+    }
 }
 
 /// Compute the LSP range covering the entire document.

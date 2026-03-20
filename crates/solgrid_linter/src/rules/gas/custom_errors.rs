@@ -25,6 +25,14 @@ impl Rule for GasCustomErrorsRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        if ctx
+            .config
+            .lint
+            .is_rule_enabled("best-practices/custom-errors", RuleCategory::BestPractices)
+        {
+            return Vec::new();
+        }
+
         let mut diagnostics = Vec::new();
 
         let mut search_from = 0;

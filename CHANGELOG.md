@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
+- Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits
+- Make VSCode `solgrid.configPath` load an explicit config on initialize and config changes, and align the Prettier plugin with `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
+- Generate `docs/rules.md` from `solgrid list-rules` and verify it in CI to keep the rules reference aligned with the live registry
+
+### Deprecated
+- Treat `best-practices/use-natspec` as an alias for `docs/natspec-function` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
+
+### Fixed
+- Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
+- Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
+
 ## [0.0.4] - 2026-03-19
 
 ### Added

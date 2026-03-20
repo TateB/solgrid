@@ -93,13 +93,17 @@ export interface InitializeResult {
 
 const FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
 
+export function fixturePath(name: string): string {
+  return path.resolve(FIXTURES_DIR, name);
+}
+
 export function fixtureUri(name: string): string {
-  const absPath = path.resolve(FIXTURES_DIR, name);
+  const absPath = fixturePath(name);
   return `file://${absPath}`;
 }
 
 export function readFixture(name: string): string {
-  return fs.readFileSync(path.resolve(FIXTURES_DIR, name), "utf-8");
+  return fs.readFileSync(fixturePath(name), "utf-8");
 }
 
 // ---------------------------------------------------------------------------
@@ -111,11 +115,13 @@ export function readFixture(name: string): string {
  */
 export async function initializeServer(
   client: TestLspClient,
-  rootUri?: string
+  rootUri?: string,
+  initializationOptions?: Record<string, unknown>
 ): Promise<InitializeResult> {
   const result = await client.request<InitializeResult>("initialize", {
     processId: process.pid,
     rootUri: rootUri ?? `file://${FIXTURES_DIR}`,
+    initializationOptions,
     capabilities: {
       textDocument: {
         synchronization: {

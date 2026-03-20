@@ -17,27 +17,26 @@ static META: RuleMeta = RuleMeta {
 
 pub struct MaxLineLengthRule;
 
-const DEFAULT_MAX_LENGTH: usize = 120;
-
 impl Rule for MaxLineLengthRule {
     fn meta(&self) -> &RuleMeta {
         &META
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let max_length = ctx.config.lint.max_line_length();
         let mut diagnostics = Vec::new();
         let mut offset = 0;
 
         for (line_idx, line) in ctx.source.lines().enumerate() {
             let char_count = line.chars().count();
-            if char_count > DEFAULT_MAX_LENGTH {
+            if char_count > max_length {
                 diagnostics.push(Diagnostic::new(
                     META.id,
                     format!(
                         "line {} exceeds maximum length ({} > {})",
                         line_idx + 1,
                         char_count,
-                        DEFAULT_MAX_LENGTH
+                        max_length
                     ),
                     META.default_severity,
                     offset..offset + line.len(),

@@ -57,10 +57,27 @@ export const options = {
       { value: "all", description: "Break everything" },
     ],
   },
+  solidityContractBodySpacing: {
+    category: "Solidity",
+    type: "choice",
+    default: "preserve",
+    description: "Spacing between declarations inside contract bodies.",
+    choices: [
+      { value: "preserve", description: "Keep existing blank lines" },
+      { value: "single", description: "Insert a single blank line" },
+      { value: "compact", description: "Remove blank lines" },
+    ],
+  },
+  solidityInheritanceBraceNewLine: {
+    category: "Solidity",
+    type: "boolean",
+    default: true,
+    description: "Put the opening brace on a new line for wrapped inheritance lists.",
+  },
   solidityContractNewLines: {
     category: "Solidity",
     type: "boolean",
     default: false,
-    description: "Add newlines at start/end of contract body.",
+    description: "Deprecated alias for solidityContractBodySpacing = \"single\" when true.",
   },
 };

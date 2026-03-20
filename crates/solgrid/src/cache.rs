@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 pub struct CacheStore {
     /// solgrid version that created this cache.
     pub version: String,
-    /// SHA-256 hash of the serialized config.
+    /// Legacy top-level config hash retained for backward-compatible deserialization.
+    #[serde(default)]
     pub config_hash: String,
     /// Per-file cache entries, keyed by file path.
     pub entries: HashMap<String, CacheEntry>,
@@ -24,6 +25,9 @@ pub struct CacheStore {
 pub struct CacheEntry {
     /// SHA-256 hash of the file content.
     pub content_hash: String,
+    /// SHA-256 hash of the effective config for this file.
+    #[serde(default)]
+    pub config_hash: String,
     /// Number of diagnostics produced.
     pub diagnostic_count: usize,
     /// Whether the file was already formatted.
@@ -40,32 +44,30 @@ pub struct Cache {
 impl Cache {
     /// Load cache from disk, or create a new empty cache.
     /// Returns a fresh cache if the file doesn't exist or is invalid.
-    pub fn load(cache_dir: &Path, config_hash: &str) -> Self {
+    pub fn load(cache_dir: &Path) -> Self {
         let cache_path = cache_dir.join("solgrid.cache.json");
         let version = env!("CARGO_PKG_VERSION").to_string();
 
         let store = if cache_path.exists() {
             match std::fs::read_to_string(&cache_path) {
                 Ok(content) => match serde_json::from_str::<CacheStore>(&content) {
-                    Ok(store) if store.version == version && store.config_hash == config_hash => {
-                        store
-                    }
+                    Ok(store) if store.version == version => store,
                     _ => CacheStore {
                         version: version.clone(),
-                        config_hash: config_hash.to_string(),
+                        config_hash: String::new(),
                         entries: HashMap::new(),
                     },
                 },
                 Err(_) => CacheStore {
                     version: version.clone(),
-                    config_hash: config_hash.to_string(),
+                    config_hash: String::new(),
                     entries: HashMap::new(),
                 },
             }
         } else {
             CacheStore {
                 version,
-                config_hash: config_hash.to_string(),
+                config_hash: String::new(),
                 entries: HashMap::new(),
             }
         };
@@ -79,10 +81,10 @@ impl Cache {
 
     /// Check if a file is cached and unchanged.
     /// Returns Some(entry) if the file's content hash matches the cache.
-    pub fn check(&self, path: &str, content: &str) -> Option<&CacheEntry> {
+    pub fn check(&self, path: &str, content: &str, config_hash: &str) -> Option<&CacheEntry> {
         let entry = self.store.entries.get(path)?;
         let hash = sha256_hex(content);
-        if entry.content_hash == hash {
+        if entry.content_hash == hash && entry.config_hash == config_hash {
             Some(entry)
         } else {
             None
@@ -94,6 +96,7 @@ impl Cache {
         &mut self,
         path: &str,
         content: &str,
+        config_hash: &str,
         diagnostic_count: usize,
         is_formatted: bool,
     ) {
@@ -102,6 +105,7 @@ impl Cache {
             path.to_string(),
             CacheEntry {
                 content_hash: hash,
+                config_hash: config_hash.to_string(),
                 diagnostic_count,
                 is_formatted,
             },
@@ -166,17 +170,19 @@ mod tests {
     fn test_cache_check_miss() {
         let dir = std::env::temp_dir().join("solgrid_test_cache_miss");
         let _ = fs::remove_dir_all(&dir);
-        let cache = Cache::load(&dir, "config_hash_1");
-        assert!(cache.check("test.sol", "content").is_none());
+        let cache = Cache::load(&dir);
+        assert!(cache
+            .check("test.sol", "content", "config_hash_1")
+            .is_none());
     }
 
     #[test]
     fn test_cache_check_hit() {
         let dir = std::env::temp_dir().join("solgrid_test_cache_hit");
         let _ = fs::remove_dir_all(&dir);
-        let mut cache = Cache::load(&dir, "config_hash_2");
-        cache.update("test.sol", "content", 0, true);
-        let entry = cache.check("test.sol", "content");
+        let mut cache = Cache::load(&dir);
+        cache.update("test.sol", "content", "config_hash_2", 0, true);
+        let entry = cache.check("test.sol", "content", "config_hash_2");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().diagnostic_count, 0);
         assert!(entry.unwrap().is_formatted);
@@ -186,9 +192,11 @@ mod tests {
     fn test_cache_check_stale() {
         let dir = std::env::temp_dir().join("solgrid_test_cache_stale");
         let _ = fs::remove_dir_all(&dir);
-        let mut cache = Cache::load(&dir, "config_hash_3");
-        cache.update("test.sol", "old content", 0, true);
-        assert!(cache.check("test.sol", "new content").is_none());
+        let mut cache = Cache::load(&dir);
+        cache.update("test.sol", "old content", "config_hash_3", 0, true);
+        assert!(cache
+            .check("test.sol", "new content", "config_hash_3")
+            .is_none());
     }
 
     #[test]
@@ -196,12 +204,12 @@ mod tests {
         let dir = std::env::temp_dir().join("solgrid_test_cache_reload");
         let _ = fs::remove_dir_all(&dir);
 
-        let mut cache = Cache::load(&dir, "config_hash_4");
-        cache.update("test.sol", "content", 3, false);
+        let mut cache = Cache::load(&dir);
+        cache.update("test.sol", "content", "config_hash_4", 3, false);
         cache.save().unwrap();
 
-        let cache2 = Cache::load(&dir, "config_hash_4");
-        let entry = cache2.check("test.sol", "content");
+        let cache2 = Cache::load(&dir);
+        let entry = cache2.check("test.sol", "content", "config_hash_4");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().diagnostic_count, 3);
     }
@@ -211,12 +219,14 @@ mod tests {
         let dir = std::env::temp_dir().join("solgrid_test_cache_invalidate");
         let _ = fs::remove_dir_all(&dir);
 
-        let mut cache = Cache::load(&dir, "config_hash_5");
-        cache.update("test.sol", "content", 0, true);
+        let mut cache = Cache::load(&dir);
+        cache.update("test.sol", "content", "config_hash_5", 0, true);
         cache.save().unwrap();
 
         // Different config hash should invalidate
-        let cache2 = Cache::load(&dir, "different_config_hash");
-        assert!(cache2.check("test.sol", "content").is_none());
+        let cache2 = Cache::load(&dir);
+        assert!(cache2
+            .check("test.sol", "content", "different_config_hash")
+            .is_none());
     }
 }

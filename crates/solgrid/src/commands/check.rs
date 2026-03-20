@@ -2,70 +2,102 @@ use crate::cache::Cache;
 use crate::output;
 use crate::Cli;
 use rayon::prelude::*;
-use solgrid_config::{resolve_config, Config};
+use solgrid_config::{resolve_config, Config, ConfigResolver};
 use solgrid_diagnostics::{FileResult, Severity};
 use solgrid_linter::LintEngine;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
-    let config = load_config(cli);
+    let explicit_config = super::load_explicit_config(cli);
 
-    // Handle --stdin mode
     if cli.stdin {
+        let config = explicit_config
+            .unwrap_or_else(|| resolve_config(&std::env::current_dir().unwrap_or_default()));
         return run_stdin(&config, cli);
     }
 
-    let engine = LintEngine::new();
-    let files = super::discover_sol_files(paths);
+    let mut discovery_resolver = ConfigResolver::new(explicit_config.clone());
+    let files = super::discover_sol_files(paths, &mut discovery_resolver);
 
     if files.is_empty() {
         eprintln!("No .sol files found");
         return 0;
     }
 
-    // Load cache unless --no-cache
-    let config_hash = crate::cache::sha256_hex(&format!("{:?}", config));
-    let cache = if !cli.no_cache {
-        Some(Cache::load(
-            Path::new(&config.global.cache_dir),
-            &config_hash,
-        ))
-    } else {
+    let thread_probe = super::thread_probe_path(paths);
+    let thread_count = discovery_resolver
+        .resolve_for_path(&thread_probe)
+        .global
+        .threads;
+
+    let engine = LintEngine::new();
+    let resolver = Arc::new(Mutex::new(ConfigResolver::new(explicit_config)));
+    let caches = if cli.no_cache {
         None
+    } else {
+        Some(Arc::new(Mutex::new(HashMap::<String, Cache>::new())))
     };
 
-    let results: Vec<FileResult> = files
-        .par_iter()
-        .map(|path| {
-            let path_str = path.display().to_string();
+    let results: Vec<FileResult> = super::install_with_thread_count(thread_count, || {
+        files
+            .par_iter()
+            .map(|path| {
+                let config = resolver
+                    .lock()
+                    .expect("config resolver poisoned")
+                    .resolve_for_path(path);
+                let config_hash = crate::cache::sha256_hex(&format!("{:?}", config));
+                let path_str = path.display().to_string();
 
-            // Check cache — skip files with 0 diagnostics that haven't changed
-            if let Some(ref cache) = cache {
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    if let Some(entry) = cache.check(&path_str, &content) {
-                        if entry.diagnostic_count == 0 {
-                            return FileResult {
-                                path: path_str,
-                                diagnostics: vec![],
-                            };
+                    if let Some(ref caches) = caches {
+                        let mut caches = caches.lock().expect("cache map poisoned");
+                        let cache = caches
+                            .entry(config.global.cache_dir.clone())
+                            .or_insert_with(|| Cache::load(Path::new(&config.global.cache_dir)));
+
+                        if let Some(entry) = cache.check(&path_str, &content, &config_hash) {
+                            if entry.diagnostic_count == 0 {
+                                return FileResult {
+                                    path: path_str,
+                                    diagnostics: vec![],
+                                };
+                            }
                         }
                     }
+
+                    let result = engine.lint_source(&content, path, &config);
+
+                    if let Some(ref caches) = caches {
+                        let mut caches = caches.lock().expect("cache map poisoned");
+                        let cache = caches
+                            .entry(config.global.cache_dir.clone())
+                            .or_insert_with(|| Cache::load(Path::new(&config.global.cache_dir)));
+                        cache.update(
+                            &result.path,
+                            &content,
+                            &config_hash,
+                            result.diagnostics.len(),
+                            false,
+                        );
+                    }
+
+                    result
+                } else {
+                    engine.lint_file(path, &config)
                 }
-            }
+            })
+            .collect()
+    });
 
-            engine.lint_file(path, &config)
-        })
-        .collect();
-
-    // Update cache
-    if let Some(mut cache) = cache {
-        for result in &results {
-            if let Ok(content) = std::fs::read_to_string(&result.path) {
-                cache.update(&result.path, &content, result.diagnostics.len(), false);
+    if let Some(caches) = caches {
+        let caches = caches.lock().expect("cache map poisoned");
+        for cache in caches.values() {
+            if let Err(error) = cache.save() {
+                eprintln!("warning: failed to save cache: {error}");
             }
-        }
-        if let Err(e) = cache.save() {
-            eprintln!("warning: failed to save cache: {e}");
         }
     }
 
@@ -75,7 +107,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         .flat_map(|r| &r.diagnostics)
         .any(|d| d.severity == Severity::Error);
 
-    // Filter by quiet mode
     let results: Vec<FileResult> = if cli.quiet {
         results
             .into_iter()
@@ -125,7 +156,6 @@ fn run_stdin(config: &Config, cli: &Cli) -> i32 {
 
     let results = vec![result];
 
-    // Filter by quiet mode
     let results: Vec<FileResult> = if cli.quiet {
         results
             .into_iter()
@@ -148,19 +178,5 @@ fn run_stdin(config: &Config, cli: &Cli) -> i32 {
         1
     } else {
         0
-    }
-}
-
-fn load_config(cli: &Cli) -> Config {
-    if let Some(config_path) = &cli.config {
-        match solgrid_config::load_config(config_path) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("Error loading config: {e}");
-                std::process::exit(2);
-            }
-        }
-    } else {
-        resolve_config(&std::env::current_dir().unwrap_or_default())
     }
 }

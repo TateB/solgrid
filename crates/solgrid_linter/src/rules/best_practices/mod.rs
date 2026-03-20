@@ -41,7 +41,6 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(no_unused_error::NoUnusedErrorRule));
     registry.register(Box::new(no_unused_event::NoUnusedEventRule));
     registry.register(Box::new(constructor_syntax::ConstructorSyntaxRule));
-    registry.register(Box::new(use_natspec::UseNatspecRule));
     registry.register(Box::new(natspec_params::NatspecParamsRule));
     registry.register(Box::new(natspec_returns::NatspecReturnsRule));
     registry.register(Box::new(

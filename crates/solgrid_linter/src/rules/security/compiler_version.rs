@@ -7,6 +7,7 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
+use solgrid_config::SolidityVersion;
 use solgrid_diagnostics::*;
 
 static META: RuleMeta = RuleMeta {
@@ -29,6 +30,7 @@ impl Rule for CompilerVersionRule {
         let mut diagnostics = Vec::new();
         let pattern = "pragma solidity";
         let pattern_len = pattern.len();
+        let allowed = ctx.config.lint.compiler_version_allowed();
 
         match ctx.source.find(pattern) {
             None => {
@@ -46,23 +48,58 @@ impl Rule for CompilerVersionRule {
                 let line_end = after.find(';').unwrap_or(after.len());
                 let version_text = after[..line_end].trim();
 
-                let outdated_prefixes = ["0.4", "0.5", "0.6", "0.7"];
-                for prefix in &outdated_prefixes {
-                    if version_text.contains(prefix) {
-                        let span_end = pos + pattern_len + line_end;
-                        diagnostics.push(Diagnostic::new(
-                            META.id,
-                            format!(
-                                "compiler version is outdated; Solidity {prefix}.x has known bugs — use 0.8.x or later"
-                            ),
-                            META.default_severity,
-                            pos..span_end,
-                        ));
-                        break;
+                let span_end = pos + pattern_len + line_end;
+                match allowed {
+                    Ok(Some(ref requirements)) => {
+                        let versions = extract_versions(version_text);
+                        let is_allowed = versions.iter().any(|version| {
+                            requirements
+                                .iter()
+                                .all(|requirement| requirement.matches(*version))
+                        });
+                        if !is_allowed {
+                            diagnostics.push(Diagnostic::new(
+                                META.id,
+                                format!(
+                                    "compiler version `{version_text}` does not satisfy the configured allowed range"
+                                ),
+                                META.default_severity,
+                                pos..span_end,
+                            ));
+                        }
+                    }
+                    Ok(None) | Err(_) => {
+                        let outdated_prefixes = ["0.4", "0.5", "0.6", "0.7"];
+                        for prefix in &outdated_prefixes {
+                            if version_text.contains(prefix) {
+                                diagnostics.push(Diagnostic::new(
+                                    META.id,
+                                    format!(
+                                        "compiler version is outdated; Solidity {prefix}.x has known bugs — use 0.8.x or later"
+                                    ),
+                                    META.default_severity,
+                                    pos..span_end,
+                                ));
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
         diagnostics
     }
+}
+
+fn extract_versions(version_text: &str) -> Vec<SolidityVersion> {
+    version_text
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .filter_map(|token| {
+            if token.is_empty() {
+                None
+            } else {
+                SolidityVersion::parse(token)
+            }
+        })
+        .collect()
 }

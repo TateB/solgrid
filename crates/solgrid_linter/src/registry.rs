@@ -2,6 +2,7 @@
 
 use crate::rule::Rule;
 use crate::rules;
+use solgrid_config::canonical_rule_id;
 use solgrid_config::Config;
 use solgrid_diagnostics::RuleMeta;
 use std::collections::HashMap;
@@ -43,7 +44,9 @@ impl RuleRegistry {
 
     /// Get a rule by ID.
     pub fn get(&self, id: &str) -> Option<&dyn Rule> {
-        self.index.get(id).map(|&idx| self.rules[idx].as_ref())
+        self.index
+            .get(canonical_rule_id(id))
+            .map(|&idx| self.rules[idx].as_ref())
     }
 
     /// Get enabled rules based on config.

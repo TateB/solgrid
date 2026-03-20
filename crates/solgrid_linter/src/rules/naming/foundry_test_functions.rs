@@ -5,6 +5,7 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
+use regex::Regex;
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{FunctionKind, ItemKind};
 use solgrid_parser::with_parsed_ast_sequential;
@@ -65,6 +66,11 @@ impl Rule for FoundryTestFunctionsRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let configured_pattern = ctx
+            .config
+            .lint
+            .foundry_test_function_pattern()
+            .and_then(|pattern| Regex::new(&pattern).ok());
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
@@ -77,7 +83,12 @@ impl Rule for FoundryTestFunctionsRule {
                             }
                             if let Some(name_ident) = func.header.name {
                                 let name = name_ident.as_str();
-                                if name.starts_with("test") && !is_valid_test_name(name) {
+                                let is_valid = if let Some(pattern) = &configured_pattern {
+                                    pattern.is_match(name)
+                                } else {
+                                    is_valid_test_name(name)
+                                };
+                                if name.starts_with("test") && !is_valid {
                                     let range = solgrid_ast::span_to_range(name_ident.span);
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
