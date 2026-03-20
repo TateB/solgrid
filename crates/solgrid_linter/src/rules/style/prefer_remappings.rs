@@ -111,27 +111,23 @@ fn normalize_path(path: &Path) -> PathBuf {
 /// Find a remapped path for the given resolved absolute path.
 /// Returns the remapped import string if a matching remapping is found.
 fn find_remapped_path(resolved: &Path, remappings: &[(String, PathBuf)]) -> Option<String> {
-    let mut best: Option<(&str, &Path, usize)> = None;
+    let mut best: Option<(&str, PathBuf)> = None;
 
     for (prefix, target) in remappings {
-        // Normalize the target for comparison
         let norm_target = normalize_path(target);
 
-        if let Ok(rest) = resolved.strip_prefix(&norm_target) {
+        if resolved.strip_prefix(&norm_target).is_ok() {
             let target_len = norm_target.as_os_str().len();
-            let _ = rest;
-            match best {
-                None => best = Some((prefix, target, target_len)),
-                Some((_, _, prev_len)) if target_len > prev_len => {
-                    best = Some((prefix, target, target_len));
-                }
-                _ => {}
+            let dominated = best
+                .as_ref()
+                .is_some_and(|(_, prev)| target_len <= prev.as_os_str().len());
+            if !dominated {
+                best = Some((prefix, norm_target));
             }
         }
     }
 
-    let (prefix, target, _) = best?;
-    let norm_target = normalize_path(target);
+    let (prefix, norm_target) = best?;
     let rest = resolved.strip_prefix(&norm_target).ok()?;
     // Convert rest to forward-slash path for Solidity imports
     let rest_str = rest.to_string_lossy().replace('\\', "/");

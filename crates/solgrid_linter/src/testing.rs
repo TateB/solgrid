@@ -94,6 +94,19 @@ pub fn lint_source_with_remappings_for_rule(
         .collect()
 }
 
+/// Apply fixes with remappings and a specific file path, returning the fixed source.
+pub fn fix_source_with_remappings(
+    source: &str,
+    path: &Path,
+    remappings: &[(String, PathBuf)],
+    include_unsafe: bool,
+) -> String {
+    let engine = LintEngine::with_remappings(remappings.to_vec());
+    let config = Config::default();
+    let (fixed, _) = engine.fix_source(source, path, &config, include_unsafe);
+    fixed
+}
+
 /// Format diagnostics into a simple string for snapshot testing.
 pub fn format_diagnostics(diagnostics: &[Diagnostic]) -> String {
     let mut lines = Vec::new();

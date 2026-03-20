@@ -2452,6 +2452,7 @@ version = "0.0.4"
 dependencies = [
  "serde",
  "solgrid_diagnostics",
+ "tempfile",
  "toml",
 ]
 

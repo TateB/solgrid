@@ -1004,4 +1004,103 @@ threads = 4
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "@oz/");
     }
+
+    #[test]
+    fn test_parse_remappings_absolute_target() {
+        let content = "@oz/=/absolute/path/to/oz/\n";
+        let result = parse_remappings(content, Path::new("/project"));
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, PathBuf::from("/absolute/path/to/oz/"));
+    }
+
+    #[test]
+    fn test_find_workspace_root_with_remappings_txt() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("src").join("contracts");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.path().join("remappings.txt"), "@oz/=lib/oz/\n").unwrap();
+
+        let result = find_workspace_root(&sub);
+        assert_eq!(result, Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_workspace_root_with_foundry_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.path().join("foundry.toml"), "[profile.default]\n").unwrap();
+
+        let result = find_workspace_root(&sub);
+        assert_eq!(result, Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_workspace_root_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("empty");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let result = find_workspace_root(&sub);
+        // No foundry.toml or remappings.txt anywhere up the tree in the tempdir
+        // (may find one in a parent of the tempdir in CI, so just check it doesn't
+        // return the sub directory itself)
+        assert_ne!(result, Some(sub));
+    }
+
+    #[test]
+    fn test_load_remappings_from_remappings_txt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("remappings.txt"),
+            "@oz/=lib/oz/\nforge-std/=lib/forge-std/src/\n",
+        )
+        .unwrap();
+
+        let result = load_remappings(dir.path());
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, "@oz/");
+        assert_eq!(result[1].0, "forge-std/");
+    }
+
+    #[test]
+    fn test_load_remappings_from_foundry_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_content = r#"
+[profile.default]
+remappings = [
+    "@oz/=lib/oz/",
+    "forge-std/=lib/forge-std/src/",
+]
+"#;
+        std::fs::write(dir.path().join("foundry.toml"), toml_content).unwrap();
+
+        let result = load_remappings(dir.path());
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, "@oz/");
+        assert_eq!(result[1].0, "forge-std/");
+    }
+
+    #[test]
+    fn test_load_remappings_prefers_remappings_txt_over_foundry_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("remappings.txt"), "@txt/=lib/txt/\n").unwrap();
+        std::fs::write(
+            dir.path().join("foundry.toml"),
+            "[profile.default]\nremappings = [\"@toml/=lib/toml/\"]\n",
+        )
+        .unwrap();
+
+        let result = load_remappings(dir.path());
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "@txt/");
+    }
+
+    #[test]
+    fn test_load_remappings_empty_when_no_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_remappings(dir.path());
+        assert!(result.is_empty());
+    }
 }
