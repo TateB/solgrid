@@ -10,12 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
 
-### Fixed
-- `style/prefer-remappings` producing mangled import paths when remapping prefix lacks trailing slash
-
 ### Removed
 - `style/import-path-format` rule (replaced by `style/prefer-remappings`)
-- Unused `LintEngine::set_remappings` method
 
 ## [0.0.4] - 2026-03-19
 
