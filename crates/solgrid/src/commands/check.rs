@@ -15,12 +15,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         return run_stdin(&config, cli);
     }
 
-    let workspace_root =
-        solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default());
-    let remappings = workspace_root
-        .map(|root| solgrid_config::load_remappings(&root))
-        .unwrap_or_default();
-    let engine = LintEngine::with_remappings(remappings);
+    let engine = LintEngine::from_workspace();
     let files = super::discover_sol_files(paths);
 
     if files.is_empty() {
@@ -120,12 +115,7 @@ fn run_stdin(config: &Config, cli: &Cli) -> i32 {
         return 1;
     }
 
-    let workspace_root =
-        solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default());
-    let remappings = workspace_root
-        .map(|root| solgrid_config::load_remappings(&root))
-        .unwrap_or_default();
-    let engine = LintEngine::with_remappings(remappings);
+    let engine = LintEngine::from_workspace();
     let result = engine.lint_source(&source, Path::new("<stdin>"), config);
 
     let has_errors = result

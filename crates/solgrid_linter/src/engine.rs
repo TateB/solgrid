@@ -30,12 +30,29 @@ impl LintEngine {
         }
     }
 
+    /// Create a lint engine by auto-detecting the workspace root and loading remappings.
+    pub fn from_workspace() -> Self {
+        let workspace_root =
+            solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default());
+        let remappings = workspace_root
+            .map(|root| solgrid_config::load_remappings(&root))
+            .unwrap_or_default();
+        Self::with_remappings(remappings)
+    }
+
     /// Create a lint engine with a custom rule registry.
+    ///
+    /// Note: this does not load remappings. Use `set_remappings` if needed.
     pub fn with_registry(registry: RuleRegistry) -> Self {
         Self {
             registry,
             remappings: Vec::new(),
         }
+    }
+
+    /// Set remappings on an existing engine.
+    pub fn set_remappings(&mut self, remappings: Vec<(String, PathBuf)>) {
+        self.remappings = remappings;
     }
 
     /// Get a reference to the underlying rule registry.
