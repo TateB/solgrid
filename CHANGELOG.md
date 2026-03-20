@@ -29,9 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed namespace-import autocomplete (`import "./Foo.sol" as Foo; Foo.Bar`) and stale auto-import index entries when files close
 - Fixed `check` / `fix` remapping resolution to use each linted file's workspace instead of only the current working directory
 - Fixed `style/prefer-remappings` path matching by canonicalizing remapping targets before prefix comparison
+- Fixed `style/prefer-remappings` producing mangled import paths when remapping prefixes omit a trailing slash
 
 ### Removed
 - `style/import-path-format` rule (replaced by `style/prefer-remappings`)
+- Unused `LintEngine::set_remappings` method
 
 ## [0.0.4] - 2026-03-19
 

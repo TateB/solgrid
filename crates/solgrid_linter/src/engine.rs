@@ -41,18 +41,11 @@ impl LintEngine {
     }
 
     /// Create a lint engine with a custom rule registry.
-    ///
-    /// Note: this does not load remappings. Use `set_remappings` if needed.
     pub fn with_registry(registry: RuleRegistry) -> Self {
         Self {
             registry,
             remappings: Vec::new(),
         }
-    }
-
-    /// Set remappings on an existing engine.
-    pub fn set_remappings(&mut self, remappings: Vec<(String, PathBuf)>) {
-        self.remappings = remappings;
     }
 
     /// Get a reference to the underlying rule registry.
