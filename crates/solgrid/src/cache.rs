@@ -229,4 +229,62 @@ mod tests {
             .check("test.sol", "content", "different_config_hash")
             .is_none());
     }
+
+    /// Finding #10: config hash uses `format!("{:?}", config)` which relies on
+    /// HashMap's Debug output.  HashMap iteration order is non-deterministic
+    /// across runs (random hash seed), so the same config can produce different
+    /// hashes.  This test demonstrates the instability.
+    #[test]
+    fn test_config_debug_hash_is_stable_across_identical_configs() {
+        use solgrid_config::Config;
+
+        // Build two identical configs by inserting rules in different order.
+        let mut config_a = Config::default();
+        config_a
+            .lint
+            .rules
+            .insert("security/tx-origin".into(), solgrid_config::RuleLevel::Warn);
+        config_a.lint.rules.insert(
+            "best-practices/no-console".into(),
+            solgrid_config::RuleLevel::Off,
+        );
+        config_a.lint.rules.insert(
+            "naming/func-name-mixedcase".into(),
+            solgrid_config::RuleLevel::Error,
+        );
+
+        let mut config_b = Config::default();
+        config_b.lint.rules.insert(
+            "naming/func-name-mixedcase".into(),
+            solgrid_config::RuleLevel::Error,
+        );
+        config_b
+            .lint
+            .rules
+            .insert("security/tx-origin".into(), solgrid_config::RuleLevel::Warn);
+        config_b.lint.rules.insert(
+            "best-practices/no-console".into(),
+            solgrid_config::RuleLevel::Off,
+        );
+
+        let hash_a = sha256_hex(&format!("{:?}", config_a));
+        let hash_b = sha256_hex(&format!("{:?}", config_b));
+
+        // This assertion may fail non-deterministically because HashMap Debug
+        // output order depends on the random hash seed.  If it passes on a
+        // given run, it does NOT prove stability — the hash seed just happened
+        // to produce the same order.  Run this test many times (or under
+        // different seeds) to observe failures.
+        //
+        // A robust fix would use a deterministic serialization (e.g.
+        // serde_json with sorted keys, or BTreeMap).
+        //
+        // We assert equality here to document the *intended* contract.  If
+        // the test ever fails, it confirms the instability bug.
+        assert_eq!(
+            hash_a, hash_b,
+            "config hashes should be identical for configs with the same rules \
+             (if this fails, the Debug-based hash is order-dependent)"
+        );
+    }
 }

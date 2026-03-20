@@ -3781,3 +3781,85 @@ contract Test {
 "#;
     assert_no_diagnostics(source, "gas/use-bytes32");
 }
+
+// =============================================================================
+// Code-review finding tests
+// =============================================================================
+
+/// Finding #4: `extract_versions` strips pragma operators and only checks
+/// whether ANY literal version number satisfies ALL configured requirements.
+/// For a pragma like `>=0.8.0 <0.8.19` with allowed `>=0.8.19`, the extracted
+/// literal `0.8.19` passes all requirements, so the rule incorrectly approves
+/// a pragma that also permits 0.8.0–0.8.18 (which violate the policy).
+#[test]
+fn test_compiler_version_allowed_false_negative_on_wide_pragma_range() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.0 <0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    let compiler_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "security/compiler-version")
+        .collect();
+    // A correct implementation should flag this (count == 1) because the
+    // pragma allows versions below 0.8.19.  If count == 0 the known
+    // false-negative from the code review is confirmed.
+    assert_eq!(
+        compiler_diags.len(),
+        0,
+        "known false-negative: extract_versions ignores pragma operators, \
+         so >=0.8.0 <0.8.19 is not flagged even though it permits disallowed versions"
+    );
+}
+
+/// Finding #7: gas/custom-errors checks best-practices/custom-errors at
+/// runtime and self-suppresses to avoid duplicate diagnostics.  Verify
+/// the coupling works when both rules are explicitly enabled.
+#[test]
+fn test_gas_custom_errors_suppressed_when_best_practices_enabled_via_preset() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "x must be positive");
+    }
+}
+"#;
+    // Recommended preset enables best-practices/* but not gas/*.
+    // Force gas/custom-errors on — it should still self-suppress.
+    let mut config = Config::default();
+    config
+        .lint
+        .rules
+        .insert("gas/custom-errors".into(), RuleLevel::Warn);
+
+    let diagnostics = lint_source_with_config(source, &config);
+    let bp_count = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "best-practices/custom-errors")
+        .count();
+    let gas_count = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "gas/custom-errors")
+        .count();
+
+    assert_eq!(bp_count, 1, "best-practices/custom-errors should fire");
+    assert_eq!(
+        gas_count, 0,
+        "gas/custom-errors should self-suppress when best-practices/custom-errors is enabled"
+    );
+}
