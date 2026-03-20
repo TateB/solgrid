@@ -33,7 +33,7 @@ impl Default for ServerSettings {
 /// The solgrid LSP server.
 pub struct SolgridServer {
     client: Client,
-    engine: Arc<LintEngine>,
+    engine: Arc<RwLock<LintEngine>>,
     documents: Arc<RwLock<DocumentStore>>,
     config: Arc<RwLock<Config>>,
     settings: Arc<RwLock<ServerSettings>>,
@@ -48,7 +48,7 @@ impl SolgridServer {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            engine: Arc::new(LintEngine::new()),
+            engine: Arc::new(RwLock::new(LintEngine::new())),
             documents: Arc::new(RwLock::new(DocumentStore::new())),
             config: Arc::new(RwLock::new(Config::default())),
             settings: Arc::new(RwLock::new(ServerSettings::default())),
@@ -72,8 +72,9 @@ impl SolgridServer {
         let path = uri_to_path(uri);
         let config = self.config.read().await.clone();
 
-        let mut lsp_diags =
-            diagnostics::lint_to_lsp_diagnostics(&self.engine, &source, &path, &config);
+        let engine = self.engine.read().await;
+        let mut lsp_diags = diagnostics::lint_to_lsp_diagnostics(&engine, &source, &path, &config);
+        drop(engine);
 
         let resolver = self.resolver.read().await;
         lsp_diags.extend(diagnostics::unresolved_import_diagnostics(
@@ -113,12 +114,10 @@ impl SolgridServer {
 
         // Apply safe fixes
         if settings.fix_on_save {
-            let (fixed, _remaining) = self.engine.fix_source(
-                &current_source,
-                &path,
-                &config,
-                settings.fix_on_save_unsafe,
-            );
+            let engine = self.engine.read().await;
+            let (fixed, _remaining) =
+                engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
+            drop(engine);
             current_source = fixed;
         }
 
@@ -158,6 +157,11 @@ impl LanguageServer for SolgridServer {
                 // Initialize import resolver with workspace root.
                 let mut resolver = self.resolver.write().await;
                 *resolver = ImportResolver::new(Some(root_path));
+
+                // Rebuild engine with remappings from the resolver.
+                let remappings = resolver.remappings().to_vec();
+                drop(resolver);
+                *self.engine.write().await = LintEngine::with_remappings(remappings);
             }
         }
 
@@ -304,16 +308,13 @@ impl LanguageServer for SolgridServer {
         let mut edits = Vec::new();
 
         // Apply safe fixes
+        let engine = self.engine.read().await;
         if settings.fix_on_save {
-            let fix_edits = actions::safe_fix_edits(&self.engine, &current_source, &path, &config);
+            let fix_edits = actions::safe_fix_edits(&engine, &current_source, &path, &config);
             if !fix_edits.is_empty() {
                 // Apply the fixes to get the intermediate source
-                let (fixed, _) = self.engine.fix_source(
-                    &current_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                );
+                let (fixed, _) =
+                    engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
                 current_source = fixed;
                 edits.extend(fix_edits);
             }
@@ -333,12 +334,8 @@ impl LanguageServer for SolgridServer {
             let mut final_source = source.clone();
 
             if settings.fix_on_save {
-                let (fixed, _) = self.engine.fix_source(
-                    &final_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                );
+                let (fixed, _) =
+                    engine.fix_source(&final_source, &path, &config, settings.fix_on_save_unsafe);
                 final_source = fixed;
             }
 
@@ -379,8 +376,9 @@ impl LanguageServer for SolgridServer {
         let path = uri_to_path(uri);
         let config = self.config.read().await.clone();
 
-        let result =
-            actions::code_actions(&self.engine, &source, &path, &config, &params.range, uri);
+        let engine = self.engine.read().await;
+        let result = actions::code_actions(&engine, &source, &path, &config, &params.range, uri);
+        drop(engine);
 
         if result.is_empty() {
             Ok(None)
@@ -477,8 +475,9 @@ impl LanguageServer for SolgridServer {
             std::fs::read_to_string(path).ok()
         };
 
+        let engine = self.engine.read().await;
         Ok(hover::hover_at_position(
-            &self.engine,
+            &engine,
             &lsp_diags,
             position,
             &source,
@@ -504,7 +503,9 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let position = &params.text_document_position.position;
-        let items = completion::suppression_completions(&self.engine, &source, position);
+        let engine = self.engine.read().await;
+        let items = completion::suppression_completions(&engine, &source, position);
+        drop(engine);
 
         if items.is_empty() {
             Ok(None)

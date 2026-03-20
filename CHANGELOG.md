@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
+
+### Removed
+- `style/import-path-format` rule (replaced by `style/prefer-remappings`)
+
 ## [0.0.4] - 2026-03-19
 
 ### Added

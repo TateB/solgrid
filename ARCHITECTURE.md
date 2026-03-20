@@ -377,7 +377,7 @@ Rules enforcing code layout and consistency. These complement (but do not duplic
 | `style/eol-last` | Require newline at end of file | Safe | new |
 | `style/no-multiple-empty-lines` | Maximum consecutive empty lines (default: 2) | Safe | new |
 | `style/contract-layout` | Enforce ordering within contracts (types, state vars, events, errors, modifiers, functions) | Suggestion | new |
-| `style/import-path-format` | Enforce relative or absolute import paths | Suggestion | solhint |
+| `style/prefer-remappings` | Suggest remapped import paths over relative imports | Suggestion | — |
 | `style/file-name-format` | File names must match primary contract name (PascalCase.sol) | — | solhint |
 
 ### 4.6 Documentation Rules

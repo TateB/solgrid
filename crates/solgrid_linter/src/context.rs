@@ -3,7 +3,7 @@
 use crate::source_utils::{is_in_non_code_region, scan_source_regions, SourceRegion};
 use solgrid_config::Config;
 use std::cell::OnceCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Context provided to each rule during linting.
 ///
@@ -16,17 +16,25 @@ pub struct LintContext<'a> {
     pub path: &'a Path,
     /// The active configuration.
     pub config: &'a Config,
+    /// Project remappings (prefix → target directory).
+    pub remappings: &'a [(String, PathBuf)],
     /// Lazily-computed non-code regions (comments, strings).
     source_regions: OnceCell<Vec<SourceRegion>>,
 }
 
 impl<'a> LintContext<'a> {
-    /// Create a new lint context for the given source, path, and config.
-    pub fn new(source: &'a str, path: &'a Path, config: &'a Config) -> Self {
+    /// Create a new lint context for the given source, path, config, and remappings.
+    pub fn new(
+        source: &'a str,
+        path: &'a Path,
+        config: &'a Config,
+        remappings: &'a [(String, PathBuf)],
+    ) -> Self {
         Self {
             source,
             path,
             config,
+            remappings,
             source_regions: OnceCell::new(),
         }
     }

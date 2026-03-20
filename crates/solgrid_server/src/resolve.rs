@@ -15,12 +15,17 @@ impl ImportResolver {
     pub fn new(workspace_root: Option<PathBuf>) -> Self {
         let remappings = workspace_root
             .as_ref()
-            .map(|root| load_remappings(root))
+            .map(|root| solgrid_config::load_remappings(root))
             .unwrap_or_default();
         Self {
             workspace_root,
             remappings,
         }
+    }
+
+    /// Get the loaded remappings.
+    pub fn remappings(&self) -> &[(String, PathBuf)] {
+        &self.remappings
     }
 
     /// Resolve an import path to a filesystem path.
@@ -101,111 +106,10 @@ fn resolve_node_modules(import_path: &str, start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Load remappings from `remappings.txt` or `foundry.toml` at the workspace root.
-///
-/// Format: `prefix=target` per line. Optional `context:` prefix is ignored.
-fn load_remappings(workspace_root: &Path) -> Vec<(String, PathBuf)> {
-    // Try remappings.txt first.
-    let remappings_file = workspace_root.join("remappings.txt");
-    if let Ok(content) = std::fs::read_to_string(&remappings_file) {
-        return parse_remappings(&content, workspace_root);
-    }
-
-    // Try foundry.toml [profile.default.remappings].
-    let foundry_file = workspace_root.join("foundry.toml");
-    if let Ok(content) = std::fs::read_to_string(&foundry_file) {
-        if let Ok(table) = content.parse::<toml::Table>() {
-            if let Some(remappings) = table
-                .get("profile")
-                .and_then(|p| p.get("default"))
-                .and_then(|d| d.get("remappings"))
-                .and_then(|r| r.as_array())
-            {
-                let text: String = remappings
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return parse_remappings(&text, workspace_root);
-            }
-        }
-    }
-
-    Vec::new()
-}
-
-/// Parse remapping lines of the form `[context:]prefix=target`.
-fn parse_remappings(content: &str, workspace_root: &Path) -> Vec<(String, PathBuf)> {
-    let mut result = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        // Strip optional `context:` prefix.
-        let mapping = if let Some(colon_pos) = line.find(':') {
-            // Only treat as context prefix if `=` comes after the colon.
-            if line[colon_pos..].contains('=') {
-                &line[colon_pos + 1..]
-            } else {
-                line
-            }
-        } else {
-            line
-        };
-
-        if let Some(eq_pos) = mapping.find('=') {
-            let prefix = mapping[..eq_pos].to_string();
-            let target = &mapping[eq_pos + 1..];
-            let target_path = if Path::new(target).is_absolute() {
-                PathBuf::from(target)
-            } else {
-                workspace_root.join(target)
-            };
-            result.push((prefix, target_path));
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-
-    #[test]
-    fn test_parse_remappings_basic() {
-        let content = "@openzeppelin/=lib/openzeppelin-contracts/\nforge-std/=lib/forge-std/src/\n";
-        let result = parse_remappings(content, Path::new("/project"));
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].0, "@openzeppelin/");
-        assert_eq!(
-            result[0].1,
-            PathBuf::from("/project/lib/openzeppelin-contracts/")
-        );
-        assert_eq!(result[1].0, "forge-std/");
-        assert_eq!(result[1].1, PathBuf::from("/project/lib/forge-std/src/"));
-    }
-
-    #[test]
-    fn test_parse_remappings_with_context() {
-        let content = "ds-test:ds-test/=lib/ds-test/src/\n";
-        let result = parse_remappings(content, Path::new("/project"));
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "ds-test/");
-    }
-
-    #[test]
-    fn test_parse_remappings_empty_and_comments() {
-        let content = "# comment\n\n  \n@oz/=lib/oz/\n";
-        let result = parse_remappings(content, Path::new("/project"));
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "@oz/");
-    }
 
     #[test]
     fn test_resolve_relative_path() {

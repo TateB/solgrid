@@ -4,12 +4,12 @@ mod contract_layout;
 mod eol_last;
 mod file_name_format;
 mod func_order;
-mod import_path_format;
 mod imports_ordering;
 mod max_line_length;
 mod no_multiple_empty_lines;
 mod no_trailing_whitespace;
 mod ordering;
+mod prefer_remappings;
 
 use crate::registry::RuleRegistry;
 
@@ -22,6 +22,6 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(eol_last::EolLastRule));
     registry.register(Box::new(no_multiple_empty_lines::NoMultipleEmptyLinesRule));
     registry.register(Box::new(contract_layout::ContractLayoutRule));
-    registry.register(Box::new(import_path_format::ImportPathFormatRule));
+    registry.register(Box::new(prefer_remappings::PreferRemappingsRule));
     registry.register(Box::new(file_name_format::FileNameFormatRule));
 }

@@ -5,11 +5,12 @@ use crate::registry::RuleRegistry;
 use crate::suppression::parse_suppressions;
 use solgrid_config::Config;
 use solgrid_diagnostics::{apply_fixes, Diagnostic, FileResult, Fix, FixSafety, TextEdit};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The main lint engine.
 pub struct LintEngine {
     registry: RuleRegistry,
+    remappings: Vec<(String, PathBuf)>,
 }
 
 impl LintEngine {
@@ -17,12 +18,24 @@ impl LintEngine {
     pub fn new() -> Self {
         Self {
             registry: RuleRegistry::new(),
+            remappings: Vec::new(),
+        }
+    }
+
+    /// Create a lint engine with remappings for import path rules.
+    pub fn with_remappings(remappings: Vec<(String, PathBuf)>) -> Self {
+        Self {
+            registry: RuleRegistry::new(),
+            remappings,
         }
     }
 
     /// Create a lint engine with a custom rule registry.
     pub fn with_registry(registry: RuleRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            remappings: Vec::new(),
+        }
     }
 
     /// Get a reference to the underlying rule registry.
@@ -52,7 +65,7 @@ impl LintEngine {
 
     /// Lint source code directly.
     pub fn lint_source(&self, source: &str, path: &Path, config: &Config) -> FileResult {
-        let ctx = LintContext::new(source, path, config);
+        let ctx = LintContext::new(source, path, config, &self.remappings);
         let enabled_rules = self.registry.enabled_rules(config);
         let suppressions = parse_suppressions(source);
 
