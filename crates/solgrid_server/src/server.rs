@@ -35,7 +35,7 @@ impl Default for ServerSettings {
 /// The solgrid LSP server.
 pub struct SolgridServer {
     client: Client,
-    engine: Arc<LintEngine>,
+    engine: Arc<RwLock<LintEngine>>,
     documents: Arc<RwLock<DocumentStore>>,
     settings: Arc<RwLock<ServerSettings>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
@@ -54,7 +54,7 @@ impl SolgridServer {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            engine: Arc::new(LintEngine::new()),
+            engine: Arc::new(RwLock::new(LintEngine::new())),
             documents: Arc::new(RwLock::new(DocumentStore::new())),
             settings: Arc::new(RwLock::new(ServerSettings::default())),
             workspace_root: Arc::new(RwLock::new(None)),
@@ -111,6 +111,14 @@ impl SolgridServer {
         self.config_cache.write().await.clear();
     }
 
+    async fn reload_workspace_state(&self) {
+        let workspace_root = self.workspace_root.read().await.clone();
+        let resolver = ImportResolver::new(workspace_root);
+        let remappings = resolver.remappings().to_vec();
+        *self.resolver.write().await = resolver;
+        *self.engine.write().await = LintEngine::with_remappings(remappings);
+    }
+
     async fn relint_open_documents(&self) {
         let uris: Vec<Uri> = {
             let documents = self.documents.read().await;
@@ -139,8 +147,9 @@ impl SolgridServer {
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
 
-        let mut lsp_diags =
-            diagnostics::lint_to_lsp_diagnostics(&self.engine, &source, &path, &config);
+        let engine = self.engine.read().await;
+        let mut lsp_diags = diagnostics::lint_to_lsp_diagnostics(&engine, &source, &path, &config);
+        drop(engine);
 
         let resolver = self.resolver.read().await;
         lsp_diags.extend(diagnostics::unresolved_import_diagnostics(
@@ -183,12 +192,10 @@ impl SolgridServer {
 
         // Apply safe fixes
         if settings.fix_on_save {
-            let (fixed, _remaining) = self.engine.fix_source(
-                &current_source,
-                &path,
-                &config,
-                settings.fix_on_save_unsafe,
-            );
+            let engine = self.engine.read().await;
+            let (fixed, _remaining) =
+                engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
+            drop(engine);
             current_source = fixed;
         }
 
@@ -243,10 +250,7 @@ impl LanguageServer for SolgridServer {
                     }
                 }
 
-                // Initialize import resolver with workspace root.
-                let mut resolver = self.resolver.write().await;
-                *resolver = ImportResolver::new(Some(root_path.clone()));
-                drop(resolver);
+                self.reload_workspace_state().await;
 
                 // Build workspace symbol index in the background.
                 let index = self.workspace_index.clone();
@@ -357,8 +361,15 @@ impl LanguageServer for SolgridServer {
         let uri = params.text_document.uri;
         let path = uri_to_path(&uri);
         let config_path = self.config_path.read().await.clone();
-        if is_config_refresh_path(&path, config_path.as_deref()) {
-            self.clear_config_cache().await;
+        let refresh_config = is_config_refresh_path(&path, config_path.as_deref());
+        let refresh_workspace_state = is_workspace_state_refresh_path(&path);
+        if refresh_config || refresh_workspace_state {
+            if refresh_config {
+                self.clear_config_cache().await;
+            }
+            if refresh_workspace_state {
+                self.reload_workspace_state().await;
+            }
             self.relint_open_documents().await;
             return;
         }
@@ -420,16 +431,13 @@ impl LanguageServer for SolgridServer {
         let mut edits = Vec::new();
 
         // Apply safe fixes
+        let engine = self.engine.read().await;
         if settings.fix_on_save {
-            let fix_edits = actions::safe_fix_edits(&self.engine, &current_source, &path, &config);
+            let fix_edits = actions::safe_fix_edits(&engine, &current_source, &path, &config);
             if !fix_edits.is_empty() {
                 // Apply the fixes to get the intermediate source
-                let (fixed, _) = self.engine.fix_source(
-                    &current_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                );
+                let (fixed, _) =
+                    engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
                 current_source = fixed;
                 edits.extend(fix_edits);
             }
@@ -449,12 +457,8 @@ impl LanguageServer for SolgridServer {
             let mut final_source = source.clone();
 
             if settings.fix_on_save {
-                let (fixed, _) = self.engine.fix_source(
-                    &final_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                );
+                let (fixed, _) =
+                    engine.fix_source(&final_source, &path, &config, settings.fix_on_save_unsafe);
                 final_source = fixed;
             }
 
@@ -495,8 +499,9 @@ impl LanguageServer for SolgridServer {
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
 
-        let result =
-            actions::code_actions(&self.engine, &source, &path, &config, &params.range, uri);
+        let engine = self.engine.read().await;
+        let result = actions::code_actions(&engine, &source, &path, &config, &params.range, uri);
+        drop(engine);
 
         if result.is_empty() {
             Ok(None)
@@ -595,8 +600,9 @@ impl LanguageServer for SolgridServer {
             std::fs::read_to_string(path).ok()
         };
 
+        let engine = self.engine.read().await;
         Ok(hover::hover_at_position(
-            &self.engine,
+            &engine,
             &lsp_diags,
             position,
             &source,
@@ -640,8 +646,9 @@ impl LanguageServer for SolgridServer {
         };
 
         let position = &params.text_document_position.position;
+        let engine = self.engine.read().await;
         let items = completion::completions(
-            &self.engine,
+            &engine,
             &source,
             position,
             uri,
@@ -649,6 +656,7 @@ impl LanguageServer for SolgridServer {
             &resolver,
             &workspace_index,
         );
+        drop(engine);
 
         if items.is_empty() {
             Ok(None)
@@ -827,6 +835,13 @@ fn is_config_refresh_path(
     )
 }
 
+fn is_workspace_state_refresh_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("foundry.toml") | Some("remappings.txt")
+    )
+}
+
 fn sync_workspace_index_for_closed_file(index: &mut WorkspaceIndex, path: &std::path::Path) {
     match std::fs::read_to_string(path) {
         Ok(source) => index.update_file(path, &source),
@@ -949,6 +964,19 @@ mod tests {
     fn test_config_refresh_path_matches_explicit_config_path() {
         let path = PathBuf::from("/tmp/project/config/custom.toml");
         assert!(is_config_refresh_path(&path, Some(path.as_path())));
+    }
+
+    #[test]
+    fn test_workspace_state_refresh_path_matches_remapping_files() {
+        assert!(is_workspace_state_refresh_path(&PathBuf::from(
+            "/tmp/project/remappings.txt"
+        )));
+        assert!(is_workspace_state_refresh_path(&PathBuf::from(
+            "/tmp/project/foundry.toml"
+        )));
+        assert!(!is_workspace_state_refresh_path(&PathBuf::from(
+            "/tmp/project/solgrid.toml"
+        )));
     }
 
     #[test]

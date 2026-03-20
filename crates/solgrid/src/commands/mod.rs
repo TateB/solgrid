@@ -21,6 +21,7 @@ pub struct PreparedFile {
     pub path: PathBuf,
     pub path_display: String,
     pub config: Arc<Config>,
+    pub remappings: Arc<Vec<(String, PathBuf)>>,
     pub config_hash: String,
     pub cache_dir: String,
 }
@@ -140,6 +141,13 @@ pub fn load_explicit_config(cli: &crate::Cli) -> Option<Config> {
     })
 }
 
+pub fn load_workspace_remappings(start_path: &Path) -> Vec<(String, PathBuf)> {
+    workspace_root_for_path(start_path)
+        .as_ref()
+        .map(|root| solgrid_config::load_remappings(root))
+        .unwrap_or_default()
+}
+
 pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> PreparedFiles {
     let mut discovery_resolver = ConfigResolver::new(explicit_config.clone());
     let files = discover_sol_files(paths, &mut discovery_resolver);
@@ -150,10 +158,24 @@ pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> Prep
         .threads;
 
     let mut resolver = ConfigResolver::new(explicit_config);
+    let mut remappings_cache: HashMap<Option<PathBuf>, Arc<Vec<(String, PathBuf)>>> =
+        HashMap::new();
     let files = files
         .into_iter()
         .map(|path| {
             let config = resolver.resolve_for_path(&path);
+            let workspace_root = workspace_root_for_path(&path);
+            let remappings = remappings_cache
+                .entry(workspace_root.clone())
+                .or_insert_with(|| {
+                    Arc::new(
+                        workspace_root
+                            .as_ref()
+                            .map(|root| solgrid_config::load_remappings(root))
+                            .unwrap_or_default(),
+                    )
+                })
+                .clone();
             let config_hash = config_hash(&config);
             let cache_dir = config.global.cache_dir.clone();
             let path_display = path.display().to_string();
@@ -162,6 +184,7 @@ pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> Prep
                 path,
                 path_display,
                 config,
+                remappings,
                 config_hash,
                 cache_dir,
             }
@@ -172,6 +195,18 @@ pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> Prep
         files,
         thread_count,
     }
+}
+
+fn workspace_root_for_path(path: &Path) -> Option<PathBuf> {
+    let search_root = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+
+    solgrid_config::find_workspace_root(search_root).or_else(|| {
+        solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default())
+    })
 }
 
 pub fn preload_caches(prepared_files: &[PreparedFile]) -> HashMap<String, Cache> {
@@ -331,6 +366,29 @@ mod tests {
             prepared.files[0].config_hash,
             prepared_again.files[0].config_hash
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_prepare_files_loads_remappings_from_file_workspace() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_prepare_remappings_{}_{}",
+            std::process::id(),
+            1
+        ));
+        let contracts = root.join("src/contracts");
+        fs::create_dir_all(&contracts).unwrap();
+        fs::write(root.join("remappings.txt"), "@src/=src/\n").unwrap();
+        let file = contracts.join("Token.sol");
+        fs::write(&file, "contract Token {}").unwrap();
+
+        let prepared = prepare_files(std::slice::from_ref(&file), None);
+        assert_eq!(prepared.files.len(), 1);
+        let remappings = prepared.files[0].remappings.as_ref();
+        assert_eq!(remappings.len(), 1);
+        assert_eq!(remappings[0].0, "@src/");
+        assert_eq!(remappings[0].1, root.join("src/"));
 
         let _ = fs::remove_dir_all(root);
     }

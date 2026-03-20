@@ -22,7 +22,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         return 0;
     }
 
-    let engine = LintEngine::new();
     let outcomes = super::install_with_thread_count(prepared.thread_count, || {
         prepared
             .files
@@ -44,6 +43,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                     }
                 };
 
+                let engine = LintEngine::with_remappings((*file.remappings).clone());
                 let (fixed_source, remaining) =
                     engine.fix_source(&source, &file.path, &file.config, cli.unsafe_fixes);
 
@@ -127,7 +127,8 @@ fn run_stdin(config: &Config, cli: &Cli) -> i32 {
         return 1;
     }
 
-    let engine = LintEngine::new();
+    let current_dir = std::env::current_dir().unwrap_or_default();
+    let engine = LintEngine::with_remappings(super::load_workspace_remappings(&current_dir));
     let (fixed_source, remaining) =
         engine.fix_source(&source, Path::new("<stdin>"), config, cli.unsafe_fixes);
 
