@@ -3187,6 +3187,33 @@ contract Test {
 }
 
 #[test]
+fn test_prefer_remappings_prefix_without_trailing_slash() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    // Prefix intentionally lacks trailing slash
+    let remappings = vec![("@src".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    // Should produce "@src/utils/Helper.sol", not "@srcutils/Helper.sol"
+    assert!(
+        diags[0].message.contains("@src/utils/Helper.sol"),
+        "got: {}",
+        diags[0].message
+    );
+}
+
+#[test]
 fn test_file_name_format_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
