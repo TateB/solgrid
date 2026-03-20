@@ -212,27 +212,27 @@ describe("LSP Code Actions", () => {
     expect(actions).toBeDefined();
   });
 
-  it("returns contract-layout suggestion for later diagnostic ranges", async () => {
-    const uri = fixtureUri("contract-layout-multi.sol");
+  it("returns suggestion code actions for later diagnostic ranges", async () => {
+    const uri = fixtureUri("mixed-import-paths.sol");
     const content = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.0;
-contract Test {
-    function foo() external {}
-    error Oops();
-    uint256 x;
-}
+
+import "forge-std/Test.sol";
+import "./Local.sol";
+
+contract Test {}
 `;
 
     openDocument(client, uri, content);
     const result = await waitForDiagnostics(client, uri);
 
-    const contractLayoutDiags = result.diagnostics.filter(
+    const importPathDiags = result.diagnostics.filter(
       (diag): diag is Diagnostic =>
-        diag.code === "style/contract-layout"
+        diag.code === "style/import-path-format"
     );
-    expect(contractLayoutDiags.length).toBeGreaterThanOrEqual(2);
+    expect(importPathDiags.length).toBeGreaterThan(0);
 
-    const secondDiag = contractLayoutDiags[1];
+    const secondDiag = importPathDiags[0];
     const actions = await requestCodeActions(
       client,
       uri,
@@ -242,7 +242,7 @@ contract Test {
 
     expect(actions).toContainEqual(
       expect.objectContaining({
-        title: "Reorder contract members (suggestion)",
+        title: "Convert to absolute import path (suggestion)",
         kind: "refactor",
       })
     );

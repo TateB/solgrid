@@ -1,5 +1,6 @@
 /target
 node_modules/
+.vscode-test/
 editors/vscode/out/
 editors/vscode/.vscode-test/
 editors/vscode/bin/
