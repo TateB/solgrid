@@ -15,7 +15,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         return run_stdin(&config, cli);
     }
 
-    let engine = LintEngine::from_workspace();
     let files = super::discover_sol_files(paths);
 
     if files.is_empty() {
@@ -53,7 +52,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                 }
             }
 
-            engine.lint_file(path, &config)
+            super::engine_for_lint_path(path).lint_file(path, &config)
         })
         .collect();
 
