@@ -376,7 +376,7 @@ impl LanguageServer for SolgridServer {
         }
         {
             let mut index = self.workspace_index.write().await;
-            index.remove_file(&path);
+            sync_workspace_index_for_closed_file(&mut index, &path);
         }
         // Clear diagnostics for closed files
         {
@@ -781,6 +781,13 @@ fn is_config_refresh_path(
     )
 }
 
+fn sync_workspace_index_for_closed_file(index: &mut WorkspaceIndex, path: &std::path::Path) {
+    match std::fs::read_to_string(path) {
+        Ok(source) => index.update_file(path, &source),
+        Err(_) => index.remove_file(path),
+    }
+}
+
 #[derive(Debug, Default)]
 struct ServerConfigCache {
     explicit: Option<(PathBuf, Arc<Config>)>,
@@ -896,6 +903,58 @@ mod tests {
     fn test_config_refresh_path_matches_explicit_config_path() {
         let path = PathBuf::from("/tmp/project/config/custom.toml");
         assert!(is_config_refresh_path(&path, Some(path.as_path())));
+    }
+
+    #[test]
+    fn test_sync_workspace_index_for_closed_file_reloads_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Token.sol");
+        std::fs::write(
+            &path,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+"#,
+        )
+        .unwrap();
+
+        let mut index = WorkspaceIndex::new();
+        index.update_file(
+            &path,
+            r#"pragma solidity ^0.8.0;
+contract DraftToken {}
+"#,
+        );
+
+        sync_workspace_index_for_closed_file(&mut index, &path);
+
+        assert!(index.find_symbol("DraftToken").is_empty());
+        assert_eq!(index.find_symbol("Token").len(), 1);
+    }
+
+    #[test]
+    fn test_sync_workspace_index_for_closed_file_removes_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Token.sol");
+        std::fs::write(
+            &path,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+"#,
+        )
+        .unwrap();
+
+        let mut index = WorkspaceIndex::new();
+        index.update_file(
+            &path,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+"#,
+        );
+        std::fs::remove_file(&path).unwrap();
+
+        sync_workspace_index_for_closed_file(&mut index, &path);
+
+        assert!(index.find_symbol("Token").is_empty());
     }
 
     #[test]
