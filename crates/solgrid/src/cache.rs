@@ -4,6 +4,7 @@
 //! The cache is invalidated when the solgrid version or config hash changes.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -79,33 +80,35 @@ impl Cache {
         }
     }
 
-    /// Check if a file is cached and unchanged.
-    /// Returns Some(entry) if the file's content hash matches the cache.
-    pub fn check(&self, path: &str, content: &str, config_hash: &str) -> Option<&CacheEntry> {
+    /// Check if a file is cached and unchanged using precomputed hashes.
+    pub fn check_hashed(
+        &self,
+        path: &str,
+        content_hash: &str,
+        config_hash: &str,
+    ) -> Option<&CacheEntry> {
         let entry = self.store.entries.get(path)?;
-        let hash = sha256_hex(content);
-        if entry.content_hash == hash && entry.config_hash == config_hash {
+        if entry.content_hash == content_hash && entry.config_hash == config_hash {
             Some(entry)
         } else {
             None
         }
     }
 
-    /// Update the cache entry for a file.
-    pub fn update(
+    /// Update the cache entry for a file using precomputed hashes.
+    pub fn update_hashed(
         &mut self,
         path: &str,
-        content: &str,
-        config_hash: &str,
+        content_hash: String,
+        config_hash: String,
         diagnostic_count: usize,
         is_formatted: bool,
     ) {
-        let hash = sha256_hex(content);
         self.store.entries.insert(
             path.to_string(),
             CacheEntry {
-                content_hash: hash,
-                config_hash: config_hash.to_string(),
+                content_hash,
+                config_hash,
                 diagnostic_count,
                 is_formatted,
             },
@@ -142,6 +145,49 @@ pub fn sha256_hex(input: &str) -> String {
     hex_encode(&result)
 }
 
+/// Compute a deterministic hash for an effective config.
+pub fn config_hash(config: &solgrid_config::Config) -> String {
+    let value = serde_json::to_value(config).expect("config should serialize to JSON");
+    let canonical = canonical_json(&value);
+    sha256_hex(&canonical)
+}
+
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).expect("JSON string should serialize"),
+        Value::Array(values) => {
+            let mut out = String::from("[");
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&canonical_json(value));
+            }
+            out.push(']');
+            out
+        }
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+            let mut out = String::from("{");
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key).expect("JSON key should serialize"));
+                out.push(':');
+                out.push_str(&canonical_json(value));
+            }
+            out.push('}');
+            out
+        }
+    }
+}
+
 /// Encode bytes as lowercase hex string.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -171,8 +217,9 @@ mod tests {
         let dir = std::env::temp_dir().join("solgrid_test_cache_miss");
         let _ = fs::remove_dir_all(&dir);
         let cache = Cache::load(&dir);
+        let content_hash = sha256_hex("content");
         assert!(cache
-            .check("test.sol", "content", "config_hash_1")
+            .check_hashed("test.sol", &content_hash, "config_hash_1")
             .is_none());
     }
 
@@ -181,8 +228,14 @@ mod tests {
         let dir = std::env::temp_dir().join("solgrid_test_cache_hit");
         let _ = fs::remove_dir_all(&dir);
         let mut cache = Cache::load(&dir);
-        cache.update("test.sol", "content", "config_hash_2", 0, true);
-        let entry = cache.check("test.sol", "content", "config_hash_2");
+        cache.update_hashed(
+            "test.sol",
+            sha256_hex("content"),
+            "config_hash_2".to_string(),
+            0,
+            true,
+        );
+        let entry = cache.check_hashed("test.sol", &sha256_hex("content"), "config_hash_2");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().diagnostic_count, 0);
         assert!(entry.unwrap().is_formatted);
@@ -193,9 +246,15 @@ mod tests {
         let dir = std::env::temp_dir().join("solgrid_test_cache_stale");
         let _ = fs::remove_dir_all(&dir);
         let mut cache = Cache::load(&dir);
-        cache.update("test.sol", "old content", "config_hash_3", 0, true);
+        cache.update_hashed(
+            "test.sol",
+            sha256_hex("old content"),
+            "config_hash_3".to_string(),
+            0,
+            true,
+        );
         assert!(cache
-            .check("test.sol", "new content", "config_hash_3")
+            .check_hashed("test.sol", &sha256_hex("new content"), "config_hash_3")
             .is_none());
     }
 
@@ -205,11 +264,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         let mut cache = Cache::load(&dir);
-        cache.update("test.sol", "content", "config_hash_4", 3, false);
+        cache.update_hashed(
+            "test.sol",
+            sha256_hex("content"),
+            "config_hash_4".to_string(),
+            3,
+            false,
+        );
         cache.save().unwrap();
 
         let cache2 = Cache::load(&dir);
-        let entry = cache2.check("test.sol", "content", "config_hash_4");
+        let entry = cache2.check_hashed("test.sol", &sha256_hex("content"), "config_hash_4");
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().diagnostic_count, 3);
     }
@@ -220,13 +285,19 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         let mut cache = Cache::load(&dir);
-        cache.update("test.sol", "content", "config_hash_5", 0, true);
+        cache.update_hashed(
+            "test.sol",
+            sha256_hex("content"),
+            "config_hash_5".to_string(),
+            0,
+            true,
+        );
         cache.save().unwrap();
 
         // Different config hash should invalidate
         let cache2 = Cache::load(&dir);
         assert!(cache2
-            .check("test.sol", "content", "different_config_hash")
+            .check_hashed("test.sol", &sha256_hex("content"), "different_config_hash")
             .is_none());
     }
 
@@ -267,24 +338,12 @@ mod tests {
             solgrid_config::RuleLevel::Off,
         );
 
-        let hash_a = sha256_hex(&format!("{:?}", config_a));
-        let hash_b = sha256_hex(&format!("{:?}", config_b));
+        let hash_a = config_hash(&config_a);
+        let hash_b = config_hash(&config_b);
 
-        // This assertion may fail non-deterministically because HashMap Debug
-        // output order depends on the random hash seed.  If it passes on a
-        // given run, it does NOT prove stability — the hash seed just happened
-        // to produce the same order.  Run this test many times (or under
-        // different seeds) to observe failures.
-        //
-        // A robust fix would use a deterministic serialization (e.g.
-        // serde_json with sorted keys, or BTreeMap).
-        //
-        // We assert equality here to document the *intended* contract.  If
-        // the test ever fails, it confirms the instability bug.
         assert_eq!(
             hash_a, hash_b,
-            "config hashes should be identical for configs with the same rules \
-             (if this fails, the Debug-based hash is order-dependent)"
+            "config hashes should be identical for configs with the same rules"
         );
     }
 }

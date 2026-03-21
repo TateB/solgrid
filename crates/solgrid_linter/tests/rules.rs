@@ -3512,6 +3512,169 @@ contract Test {}
 }
 
 #[test]
+fn test_compiler_version_allowed_setting_rejects_wide_pragma_range() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.0 <0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_exact_match() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![toml::Value::String("=0.8.24".into())]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_exact_mismatch() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![toml::Value::String("=0.8.24".into())]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_supports_caret_pragma() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_supports_tilde_pragma() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ~0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_flags_unsupported_disjunction() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19 || ^0.8.24;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    let compiler_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diag| diag.rule_id == "security/compiler-version")
+        .collect();
+    assert_eq!(compiler_diagnostics.len(), 1);
+    assert!(compiler_diagnostics[0]
+        .message
+        .contains("could not be verified against the configured allowed range"));
+}
+
+#[test]
 fn test_foundry_test_function_pattern_setting() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -3786,13 +3949,8 @@ contract Test {
 // Code-review finding tests
 // =============================================================================
 
-/// Finding #4: `extract_versions` strips pragma operators and only checks
-/// whether ANY literal version number satisfies ALL configured requirements.
-/// For a pragma like `>=0.8.0 <0.8.19` with allowed `>=0.8.19`, the extracted
-/// literal `0.8.19` passes all requirements, so the rule incorrectly approves
-/// a pragma that also permits 0.8.0–0.8.18 (which violate the policy).
 #[test]
-fn test_compiler_version_allowed_false_negative_on_wide_pragma_range() {
+fn test_compiler_version_allowed_range_subset_check_regression() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.8.19;
@@ -3814,20 +3972,13 @@ contract Test {}
         .iter()
         .filter(|d| d.rule_id == "security/compiler-version")
         .collect();
-    // A correct implementation should flag this (count == 1) because the
-    // pragma allows versions below 0.8.19.  If count == 0 the known
-    // false-negative from the code review is confirmed.
     assert_eq!(
         compiler_diags.len(),
-        0,
-        "known false-negative: extract_versions ignores pragma operators, \
-         so >=0.8.0 <0.8.19 is not flagged even though it permits disallowed versions"
+        1,
+        "wide pragma ranges should fail when any permitted compiler version falls outside the configured allowed range"
     );
 }
 
-/// Finding #7: gas/custom-errors checks best-practices/custom-errors at
-/// runtime and self-suppresses to avoid duplicate diagnostics.  Verify
-/// the coupling works when both rules are explicitly enabled.
 #[test]
 fn test_gas_custom_errors_suppressed_when_best_practices_enabled_via_preset() {
     let source = r#"
@@ -3839,8 +3990,6 @@ contract Test {
     }
 }
 "#;
-    // Recommended preset enables best-practices/* but not gas/*.
-    // Force gas/custom-errors on — it should still self-suppress.
     let mut config = Config::default();
     config
         .lint
@@ -3860,6 +4009,6 @@ contract Test {
     assert_eq!(bp_count, 1, "best-practices/custom-errors should fire");
     assert_eq!(
         gas_count, 0,
-        "gas/custom-errors should self-suppress when best-practices/custom-errors is enabled"
+        "gas/custom-errors should be suppressed by registry metadata when best-practices/custom-errors is enabled"
     );
 }

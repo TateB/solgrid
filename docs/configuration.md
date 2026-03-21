@@ -39,7 +39,8 @@ sort_imports = false
 multiline_func_header = "attributes_first"
 
 [global]
-# File patterns to include
+# File patterns to include. Omit this key to use the default src/test/script set.
+# Set include = [] to disable implicit file discovery entirely.
 include = ["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]
 # File patterns to exclude
 exclude = ["lib/**", "node_modules/**", "out/**"]
@@ -118,6 +119,12 @@ All formatter options live under `[format]`:
 | `respect_gitignore` | bool | `true` | Honor `.gitignore` patterns |
 | `threads` | integer | `0` (auto) | Number of parallel threads |
 | `cache_dir` | string | `".solgrid_cache"` | Cache directory path |
+
+If `global.include` is omitted, solgrid uses the default include set:
+`["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]`.
+
+If `global.include = []` is set explicitly, solgrid discovers no files unless
+you pass file paths directly on the CLI.
 
 ## Config Resolution
 

@@ -7,6 +7,7 @@ mod explicit_types;
 mod function_max_lines;
 mod imports_on_top;
 mod max_states_count;
+pub(crate) mod natspec_helpers;
 mod natspec_params;
 mod natspec_returns;
 mod no_console;
@@ -20,7 +21,6 @@ mod no_unused_state;
 mod no_unused_vars;
 mod one_contract_per_file;
 mod reason_string;
-pub(crate) mod use_natspec;
 mod visibility_modifier_order;
 
 use crate::registry::RuleRegistry;

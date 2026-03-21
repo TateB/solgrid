@@ -5,6 +5,7 @@ use crate::resolve::ImportResolver;
 use crate::{actions, completion, convert, definition, diagnostics, format, hover};
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -38,8 +39,9 @@ pub struct SolgridServer {
     settings: Arc<RwLock<ServerSettings>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     config_path: Arc<RwLock<Option<PathBuf>>>,
+    config_cache: Arc<RwLock<ServerConfigCache>>,
     /// Cache of last-published LSP diagnostics per URI, for hover lookups.
-    published_diagnostics: Arc<RwLock<std::collections::HashMap<Uri, Vec<Diagnostic>>>>,
+    published_diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
     /// Import path resolver for cross-file go-to-definition.
     resolver: Arc<RwLock<ImportResolver>>,
 }
@@ -54,14 +56,19 @@ impl SolgridServer {
             settings: Arc::new(RwLock::new(ServerSettings::default())),
             workspace_root: Arc::new(RwLock::new(None)),
             config_path: Arc::new(RwLock::new(None)),
-            published_diagnostics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            config_cache: Arc::new(RwLock::new(ServerConfigCache::default())),
+            published_diagnostics: Arc::new(RwLock::new(HashMap::new())),
             resolver: Arc::new(RwLock::new(ImportResolver::new(None))),
         }
     }
 
     async fn resolve_config_for_path(&self, path: &std::path::Path) -> Config {
         if let Some(config_path) = self.config_path.read().await.clone() {
-            return match solgrid_config::load_config(&config_path) {
+            if let Some(config) = self.config_cache.read().await.explicit_config(&config_path) {
+                return (*config).clone();
+            }
+
+            let config = match solgrid_config::load_config(&config_path) {
                 Ok(config) => config,
                 Err(error) => {
                     self.client
@@ -76,9 +83,41 @@ impl SolgridServer {
                     Config::default()
                 }
             };
+            self.config_cache
+                .write()
+                .await
+                .store_explicit(config_path, Arc::new(config.clone()));
+            return config;
         }
 
-        solgrid_config::resolve_config(path)
+        let cache_key = config_cache_key(path);
+        if let Some(config) = self.config_cache.read().await.nearest_config(&cache_key) {
+            return (*config).clone();
+        }
+
+        let config = solgrid_config::resolve_config(path);
+        self.config_cache
+            .write()
+            .await
+            .store_nearest(cache_key, Arc::new(config.clone()));
+        config
+    }
+
+    async fn clear_config_cache(&self) {
+        self.config_cache.write().await.clear();
+    }
+
+    async fn relint_open_documents(&self) {
+        let uris: Vec<Uri> = {
+            let documents = self.documents.read().await;
+            documents.uris().cloned().collect()
+        };
+
+        for uri in uris {
+            if is_solidity_file(&uri) {
+                self.lint_and_publish(&uri).await;
+            }
+        }
     }
 
     /// Lint a document and publish diagnostics to the client.
@@ -107,10 +146,7 @@ impl SolgridServer {
 
         // Cache the diagnostics for hover lookups
         {
-            let mut cache: tokio::sync::RwLockWriteGuard<
-                '_,
-                std::collections::HashMap<Uri, Vec<Diagnostic>>,
-            > = self.published_diagnostics.write().await;
+            let mut cache = self.published_diagnostics.write().await;
             cache.insert(uri.clone(), lsp_diags.clone());
         }
 
@@ -296,6 +332,14 @@ impl LanguageServer for SolgridServer {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
+        let path = uri_to_path(&uri);
+        let config_path = self.config_path.read().await.clone();
+        if is_config_refresh_path(&path, config_path.as_deref()) {
+            self.clear_config_cache().await;
+            self.relint_open_documents().await;
+            return;
+        }
+
         if !is_solidity_file(&uri) {
             return;
         }
@@ -313,10 +357,7 @@ impl LanguageServer for SolgridServer {
         }
         // Clear diagnostics for closed files
         {
-            let mut cache: tokio::sync::RwLockWriteGuard<
-                '_,
-                std::collections::HashMap<Uri, Vec<Diagnostic>>,
-            > = self.published_diagnostics.write().await;
+            let mut cache = self.published_diagnostics.write().await;
             cache.remove(&uri);
         }
         self.client.publish_diagnostics(uri, vec![], None).await;
@@ -624,15 +665,8 @@ impl LanguageServer for SolgridServer {
             *config_path_slot = config_path;
         }
 
-        // Re-lint all open documents with new config
-        let uris: Vec<Uri> = {
-            let documents = self.documents.read().await;
-            documents.uris().cloned().collect()
-        };
-
-        for uri in uris {
-            self.lint_and_publish(&uri).await;
-        }
+        self.clear_config_cache().await;
+        self.relint_open_documents().await;
     }
 }
 
@@ -671,6 +705,62 @@ fn resolve_config_path(config_path: String, workspace_root: Option<&std::path::P
         root.join(config_path)
     } else {
         config_path
+    }
+}
+
+fn config_cache_key(path: &std::path::Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+fn is_config_refresh_path(
+    path: &std::path::Path,
+    explicit_config_path: Option<&std::path::Path>,
+) -> bool {
+    if explicit_config_path.is_some_and(|configured| configured == path) {
+        return true;
+    }
+
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("solgrid.toml") | Some("foundry.toml")
+    )
+}
+
+#[derive(Debug, Default)]
+struct ServerConfigCache {
+    explicit: Option<(PathBuf, Arc<Config>)>,
+    nearest: HashMap<PathBuf, Arc<Config>>,
+}
+
+impl ServerConfigCache {
+    fn explicit_config(&self, path: &std::path::Path) -> Option<Arc<Config>> {
+        self.explicit
+            .as_ref()
+            .filter(|(cached_path, _)| cached_path == path)
+            .map(|(_, config)| config.clone())
+    }
+
+    fn store_explicit(&mut self, path: PathBuf, config: Arc<Config>) {
+        self.explicit = Some((path, config));
+    }
+
+    fn nearest_config(&self, dir: &std::path::Path) -> Option<Arc<Config>> {
+        self.nearest.get(dir).cloned()
+    }
+
+    fn store_nearest(&mut self, dir: PathBuf, config: Arc<Config>) {
+        self.nearest.insert(dir, config);
+    }
+
+    fn clear(&mut self) {
+        self.explicit = None;
+        self.nearest.clear();
     }
 }
 
@@ -735,5 +825,46 @@ mod tests {
         assert!(settings.fix_on_save);
         assert!(!settings.fix_on_save_unsafe);
         assert!(settings.format_on_save);
+    }
+
+    #[test]
+    fn test_config_refresh_path_matches_workspace_configs() {
+        assert!(is_config_refresh_path(
+            &PathBuf::from("/tmp/project/solgrid.toml"),
+            None
+        ));
+        assert!(is_config_refresh_path(
+            &PathBuf::from("/tmp/project/foundry.toml"),
+            None
+        ));
+        assert!(!is_config_refresh_path(
+            &PathBuf::from("/tmp/project/src/Token.sol"),
+            None
+        ));
+    }
+
+    #[test]
+    fn test_config_refresh_path_matches_explicit_config_path() {
+        let path = PathBuf::from("/tmp/project/config/custom.toml");
+        assert!(is_config_refresh_path(&path, Some(path.as_path())));
+    }
+
+    #[test]
+    fn test_server_config_cache_can_store_and_clear() {
+        let mut cache = ServerConfigCache::default();
+        let explicit_path = PathBuf::from("/tmp/project/solgrid.toml");
+        let nearest_path = PathBuf::from("/tmp/project/src");
+        let config = Arc::new(Config::default());
+
+        cache.store_explicit(explicit_path.clone(), config.clone());
+        cache.store_nearest(nearest_path.clone(), config.clone());
+
+        assert!(cache.explicit_config(&explicit_path).is_some());
+        assert!(cache.nearest_config(&nearest_path).is_some());
+
+        cache.clear();
+
+        assert!(cache.explicit_config(&explicit_path).is_none());
+        assert!(cache.nearest_config(&nearest_path).is_none());
     }
 }

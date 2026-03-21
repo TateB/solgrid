@@ -5,11 +5,40 @@ pub mod fmt;
 pub mod list_rules;
 pub mod migrate;
 
+use crate::cache::{config_hash, Cache};
 use glob::Pattern;
 use ignore::WalkBuilder;
 use rayon::ThreadPoolBuilder;
 use solgrid_config::{Config, ConfigResolver};
+use solgrid_diagnostics::{Diagnostic, FileResult, Severity};
+use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct PreparedFile {
+    pub path: PathBuf,
+    pub path_display: String,
+    pub config: Arc<Config>,
+    pub config_hash: String,
+    pub cache_dir: String,
+}
+
+pub struct PreparedFiles {
+    pub files: Vec<PreparedFile>,
+    pub thread_count: usize,
+}
+
+#[derive(Clone)]
+pub struct CacheUpdate {
+    pub cache_dir: String,
+    pub path: String,
+    pub content_hash: String,
+    pub config_hash: String,
+    pub diagnostic_count: usize,
+    pub is_formatted: bool,
+}
 
 /// Discover .sol files from the given paths.
 pub fn discover_sol_files(paths: &[PathBuf], resolver: &mut ConfigResolver) -> Vec<PathBuf> {
@@ -111,6 +140,94 @@ pub fn load_explicit_config(cli: &crate::Cli) -> Option<Config> {
     })
 }
 
+pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> PreparedFiles {
+    let mut discovery_resolver = ConfigResolver::new(explicit_config.clone());
+    let files = discover_sol_files(paths, &mut discovery_resolver);
+    let thread_probe = thread_probe_path(paths);
+    let thread_count = discovery_resolver
+        .resolve_for_path(&thread_probe)
+        .global
+        .threads;
+
+    let mut resolver = ConfigResolver::new(explicit_config);
+    let files = files
+        .into_iter()
+        .map(|path| {
+            let config = resolver.resolve_for_path(&path);
+            let config_hash = config_hash(&config);
+            let cache_dir = config.global.cache_dir.clone();
+            let path_display = path.display().to_string();
+
+            PreparedFile {
+                path,
+                path_display,
+                config,
+                config_hash,
+                cache_dir,
+            }
+        })
+        .collect();
+
+    PreparedFiles {
+        files,
+        thread_count,
+    }
+}
+
+pub fn preload_caches(prepared_files: &[PreparedFile]) -> HashMap<String, Cache> {
+    let cache_dirs: HashSet<String> = prepared_files
+        .iter()
+        .map(|file| file.cache_dir.clone())
+        .collect();
+
+    cache_dirs
+        .into_iter()
+        .map(|cache_dir| {
+            let cache = Cache::load(Path::new(&cache_dir));
+            (cache_dir, cache)
+        })
+        .collect()
+}
+
+pub fn apply_cache_updates(
+    caches: &mut HashMap<String, Cache>,
+    updates: impl IntoIterator<Item = CacheUpdate>,
+) {
+    for update in updates {
+        let Some(cache) = caches.get_mut(&update.cache_dir) else {
+            continue;
+        };
+
+        cache.update_hashed(
+            &update.path,
+            update.content_hash,
+            update.config_hash,
+            update.diagnostic_count,
+            update.is_formatted,
+        );
+    }
+}
+
+pub fn save_caches(caches: &HashMap<String, Cache>) {
+    for cache in caches.values() {
+        if let Err(error) = cache.save() {
+            eprintln!("warning: failed to save cache: {error}");
+        }
+    }
+}
+
+pub fn file_read_error_result(path: &Path, error: &io::Error) -> FileResult {
+    FileResult {
+        path: path.display().to_string(),
+        diagnostics: vec![Diagnostic::new(
+            "internal",
+            format!("failed to read file: {error}"),
+            Severity::Error,
+            0..0,
+        )],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +303,45 @@ mod tests {
         assert_eq!(files, vec![file]);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_prepare_files_uses_nearest_config_and_stable_hash() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_prepare_files_{}_{}",
+            std::process::id(),
+            1
+        ));
+        let nested = root.join("src");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            root.join("solgrid.toml"),
+            "[lint.rules]\n\"gas/custom-errors\" = \"warn\"\n",
+        )
+        .unwrap();
+        fs::write(nested.join("Token.sol"), "contract Token {}").unwrap();
+
+        let prepared = prepare_files(std::slice::from_ref(&root), None);
+        assert_eq!(prepared.files.len(), 1);
+        assert_eq!(prepared.files[0].path, nested.join("Token.sol"));
+        assert!(!prepared.files[0].config_hash.is_empty());
+
+        let prepared_again = prepare_files(std::slice::from_ref(&root), None);
+        assert_eq!(
+            prepared.files[0].config_hash,
+            prepared_again.files[0].config_hash
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_file_read_error_result_is_internal_error() {
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let result = file_read_error_result(Path::new("Denied.sol"), &error);
+        assert_eq!(result.path, "Denied.sol");
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].rule_id, "internal");
+        assert_eq!(result.diagnostics[0].severity, Severity::Error);
     }
 }

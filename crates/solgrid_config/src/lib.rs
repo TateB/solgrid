@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use solgrid_diagnostics::{RuleCategory, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Top-level solgrid configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -403,19 +404,19 @@ impl Default for GlobalConfig {
 
 #[derive(Debug, Clone)]
 pub struct ConfigResolver {
-    explicit: Option<Config>,
-    cache: HashMap<PathBuf, Config>,
+    explicit: Option<Arc<Config>>,
+    cache: HashMap<PathBuf, Arc<Config>>,
 }
 
 impl ConfigResolver {
     pub fn new(explicit: Option<Config>) -> Self {
         Self {
-            explicit,
+            explicit: explicit.map(Arc::new),
             cache: HashMap::new(),
         }
     }
 
-    pub fn resolve_for_path(&mut self, path: &Path) -> Config {
+    pub fn resolve_for_path(&mut self, path: &Path) -> Arc<Config> {
         if let Some(config) = &self.explicit {
             return config.clone();
         }
@@ -432,7 +433,7 @@ impl ConfigResolver {
             return config.clone();
         }
 
-        let config = resolve_config(&dir);
+        let config = Arc::new(resolve_config(&dir));
         self.cache.insert(dir, config.clone());
         config
     }
