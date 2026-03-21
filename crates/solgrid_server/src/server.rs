@@ -369,9 +369,14 @@ impl LanguageServer for SolgridServer {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        let path = uri_to_path(&uri);
         {
             let mut documents = self.documents.write().await;
             documents.close(&uri);
+        }
+        {
+            let mut index = self.workspace_index.write().await;
+            index.remove_file(&path);
         }
         // Clear diagnostics for closed files
         {

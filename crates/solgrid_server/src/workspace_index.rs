@@ -224,6 +224,27 @@ contract NewName {}
     }
 
     #[test]
+    fn test_remove_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Test.sol");
+
+        fs::write(
+            &path,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Token {}
+"#,
+        )
+        .unwrap();
+
+        let mut index = WorkspaceIndex::build(dir.path());
+        assert_eq!(index.find_symbol("Token").len(), 1);
+
+        index.remove_file(&path);
+        assert!(index.find_symbol("Token").is_empty());
+    }
+
+    #[test]
     fn test_symbols_matching() {
         let dir = tempfile::tempdir().unwrap();
 
