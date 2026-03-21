@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
 
+### Fixed
+- Resolve remappings for `check`/`fix` from each linted file's workspace instead of only the current working directory
+- Canonicalize `style/prefer-remappings` paths before prefix matching so symlinked workspace paths still match
+
 ### Removed
 - `style/import-path-format` rule (replaced by `style/prefer-remappings`)
 

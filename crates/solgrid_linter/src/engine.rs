@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 pub struct LintEngine {
     registry: RuleRegistry,
     remappings: Vec<(String, PathBuf)>,
+    auto_resolve_remappings: bool,
 }
 
 impl LintEngine {
@@ -19,6 +20,7 @@ impl LintEngine {
         Self {
             registry: RuleRegistry::new(),
             remappings: Vec::new(),
+            auto_resolve_remappings: false,
         }
     }
 
@@ -27,6 +29,7 @@ impl LintEngine {
         Self {
             registry: RuleRegistry::new(),
             remappings,
+            auto_resolve_remappings: false,
         }
     }
 
@@ -37,7 +40,11 @@ impl LintEngine {
         let remappings = workspace_root
             .map(|root| solgrid_config::load_remappings(&root))
             .unwrap_or_default();
-        Self::with_remappings(remappings)
+        Self {
+            registry: RuleRegistry::new(),
+            remappings,
+            auto_resolve_remappings: true,
+        }
     }
 
     /// Create a lint engine with a custom rule registry.
@@ -47,6 +54,7 @@ impl LintEngine {
         Self {
             registry,
             remappings: Vec::new(),
+            auto_resolve_remappings: false,
         }
     }
 
@@ -82,7 +90,8 @@ impl LintEngine {
 
     /// Lint source code directly.
     pub fn lint_source(&self, source: &str, path: &Path, config: &Config) -> FileResult {
-        let ctx = LintContext::new(source, path, config, &self.remappings);
+        let remappings = self.remappings_for_path(path);
+        let ctx = LintContext::new(source, path, config, &remappings);
         let enabled_rules = self.registry.enabled_rules(config);
         let suppressions = parse_suppressions(source);
 
@@ -111,6 +120,23 @@ impl LintEngine {
             path: path.display().to_string(),
             diagnostics,
         }
+    }
+
+    fn remappings_for_path(&self, path: &Path) -> Vec<(String, PathBuf)> {
+        if !self.auto_resolve_remappings {
+            return self.remappings.clone();
+        }
+
+        let workspace_root = path
+            .parent()
+            .and_then(solgrid_config::find_workspace_root)
+            .or_else(|| {
+                solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default())
+            });
+
+        workspace_root
+            .map(|root| solgrid_config::load_remappings(&root))
+            .unwrap_or_else(|| self.remappings.clone())
     }
 
     /// Lint and apply fixes to source code.
@@ -241,5 +267,33 @@ fn same_edit(a: &TextEdit, b: &TextEdit) -> bool {
 impl Default for LintEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LintEngine;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn from_workspace_prefers_file_workspace_remappings() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!("solgrid-engine-test-{unique}"));
+        let src = workspace.join("src");
+        fs::create_dir_all(&src).expect("create src");
+        fs::write(workspace.join("remappings.txt"), "@src/=src/\n").expect("write remappings");
+
+        let engine = LintEngine::from_workspace();
+        let remappings = engine.remappings_for_path(&src.join("Token.sol"));
+
+        assert_eq!(remappings.len(), 1);
+        assert_eq!(remappings[0].0, "@src/");
+        assert_eq!(remappings[0].1, workspace.join("src/"));
+
+        fs::remove_dir_all(&workspace).expect("cleanup");
     }
 }

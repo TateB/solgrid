@@ -108,27 +108,32 @@ fn normalize_path(path: &Path) -> PathBuf {
     parts.iter().collect()
 }
 
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path))
+}
+
 /// Find a remapped path for the given resolved absolute path.
 /// Returns the remapped import string if a matching remapping is found.
 fn find_remapped_path(resolved: &Path, remappings: &[(String, PathBuf)]) -> Option<String> {
+    let normalized_resolved = canonicalize_best_effort(resolved);
     let mut best: Option<(&str, PathBuf)> = None;
 
     for (prefix, target) in remappings {
-        let norm_target = normalize_path(target);
+        let normalized_target = canonicalize_best_effort(target);
 
-        if resolved.strip_prefix(&norm_target).is_ok() {
-            let target_len = norm_target.as_os_str().len();
+        if normalized_resolved.strip_prefix(&normalized_target).is_ok() {
+            let target_len = normalized_target.as_os_str().len();
             let dominated = best
                 .as_ref()
                 .is_some_and(|(_, prev)| target_len <= prev.as_os_str().len());
             if !dominated {
-                best = Some((prefix, norm_target));
+                best = Some((prefix, normalized_target));
             }
         }
     }
 
-    let (prefix, norm_target) = best?;
-    let rest = resolved.strip_prefix(&norm_target).ok()?;
+    let (prefix, normalized_target) = best?;
+    let rest = normalized_resolved.strip_prefix(&normalized_target).ok()?;
     // Convert rest to forward-slash path for Solidity imports
     let rest_str = rest.to_string_lossy().replace('\\', "/");
     Some(format!("{prefix}{rest_str}"))
