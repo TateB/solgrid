@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
 - Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
 
+
 ## [0.0.4] - 2026-03-19
 
 ### Added

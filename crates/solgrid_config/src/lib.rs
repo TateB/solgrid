@@ -864,4 +864,27 @@ threads = 4
 
         let _ = fs::remove_dir_all(root);
     }
+
+    /// Finding #5: empty include list is a valid config value. Verify that
+    /// loading a config with `include = []` results in an empty include vec
+    /// (rather than falling back to defaults).
+    #[test]
+    fn test_empty_include_is_preserved_not_defaulted() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_empty_include_{}_{}",
+            std::process::id(),
+            1
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(&config_path, "[global]\ninclude = []\n").unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert!(
+            config.global.include.is_empty(),
+            "empty include should be preserved, not replaced with defaults"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

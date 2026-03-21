@@ -144,6 +144,29 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// Finding #5: empty `include = []` blocks all files because
+    /// `matches_patterns` returns false for empty patterns, and the negation
+    /// in `collect_sol_files` causes every file to be skipped.
+    #[test]
+    fn test_empty_include_discovers_no_files() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_discovery_{}_{}", std::process::id(), 3));
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(root.join("solgrid.toml"), "[global]\ninclude = []\n").unwrap();
+        fs::write(src.join("Token.sol"), "contract Token {}").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let files = discover_sol_files(std::slice::from_ref(&root), &mut resolver);
+        // With include = [], no files should be discovered.
+        assert!(
+            files.is_empty(),
+            "empty include list should discover zero files, got: {files:?}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn test_explicit_file_bypasses_exclude_rules() {
         let root =
