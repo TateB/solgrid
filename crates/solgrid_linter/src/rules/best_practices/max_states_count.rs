@@ -8,8 +8,6 @@ use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::ItemKind;
 use solgrid_parser::with_parsed_ast_sequential;
 
-const DEFAULT_MAX_STATES: usize = 15;
-
 static META: RuleMeta = RuleMeta {
     id: "best-practices/max-states-count",
     name: "max-states-count",
@@ -27,6 +25,7 @@ impl Rule for MaxStatesCountRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let max_states = ctx.config.lint.max_states_count();
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
@@ -37,13 +36,13 @@ impl Rule for MaxStatesCountRule {
                         .iter()
                         .filter(|i| matches!(i.kind, ItemKind::Variable(_)))
                         .count();
-                    if state_count > DEFAULT_MAX_STATES {
+                    if state_count > max_states {
                         let name = contract.name.as_str();
                         let range = solgrid_ast::span_to_range(contract.name.span);
                         diagnostics.push(Diagnostic::new(
                             META.id,
                             format!(
-                                "contract `{name}` has {state_count} state variables (maximum is {DEFAULT_MAX_STATES})"
+                                "contract `{name}` has {state_count} state variables (maximum is {max_states})"
                             ),
                             META.default_severity,
                             range,

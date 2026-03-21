@@ -141,12 +141,13 @@ describe("getSettings", () => {
       fixOnSave: true,
       fixOnSaveUnsafe: false,
       formatOnSave: true,
+      configPath: null,
     });
   });
 
-  it("does not include configPath (not a runtime setting)", () => {
+  it("includes configPath for runtime config updates", () => {
     const settings = getSettings(DEFAULT_CONFIG);
-    expect(settings).not.toHaveProperty("configPath");
+    expect(settings).toHaveProperty("configPath", null);
     expect(settings).not.toHaveProperty("path");
     expect(settings).not.toHaveProperty("enable");
   });
@@ -163,6 +164,7 @@ describe("getSettings", () => {
       fixOnSave: false,
       fixOnSaveUnsafe: true,
       formatOnSave: false,
+      configPath: null,
     });
   });
 
@@ -175,6 +177,7 @@ describe("getSettings", () => {
       fixOnSave: true,
       fixOnSaveUnsafe: false,
       formatOnSave: true,
+      configPath: null,
     });
   });
 });

@@ -52,11 +52,14 @@ exclude = ["lib/**", "node_modules/**"]
 
 See the [Configuration Guide](docs/configuration.md) for the full reference including rule-specific settings, presets, and config resolution order.
 
+The default `recommended` preset enables `security/*`, `best-practices/*`, and `naming/*`. The `docs/*`, `gas/*`, and `style/*` categories are opt-in unless you choose `preset = "all"` or enable individual rules explicitly.
+
 ## Documentation
 
 | Resource | Description |
 |----------|-------------|
 | [Configuration Guide](docs/configuration.md) | Full `solgrid.toml` reference, presets, resolution order |
+| [Rules Reference](docs/rules.md) | Current rule inventory with default severity and fix availability |
 | [Editor Integration](docs/editor-integration.md) | VSCode, Cursor, and LSP setup for other editors |
 | [Prettier Plugin](docs/prettier-plugin.md) | Using solgrid as a Prettier plugin |
 | [Output Formats](docs/output-formats.md) | Text, JSON, GitHub Actions, and SARIF output |

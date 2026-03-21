@@ -12,6 +12,11 @@ export const printers = {
   "solgrid-ast": {
     print(path, options) {
       const node = path.getValue();
+      const contractBodySpacing =
+        options.solidityContractNewLines &&
+        options.solidityContractBodySpacing === "preserve"
+          ? "single"
+          : options.solidityContractBodySpacing;
 
       const formatted = napi.format(node.source, {
         // Standard Prettier options -> solgrid equivalents
@@ -27,7 +32,8 @@ export const printers = {
         wrapComments: options.solidityWrapComments,
         sortImports: options.soliditySortImports,
         multilineFuncHeader: options.solidityMultilineFuncHeader,
-        contractNewLines: options.solidityContractNewLines,
+        contractBodySpacing,
+        inheritanceBraceNewLine: options.solidityInheritanceBraceNewLine,
       });
 
       return formatted;

@@ -38,4 +38,6 @@ Additional options for Solidity formatting:
 | `solidityMultilineFuncHeader` | `"attributes_first"` | Multiline function header style |
 | `solidityOverrideSpacing` | `true` | Space in override specifiers |
 | `solidityWrapComments` | `false` | Wrap comments to fit within printWidth |
-| `solidityContractNewLines` | `false` | Newlines at start/end of contract body |
+| `solidityContractBodySpacing` | `"preserve"` | Contract body spacing: `"preserve"`, `"single"`, or `"compact"` |
+| `solidityInheritanceBraceNewLine` | `true` | Put the opening brace on a new line for wrapped inheritance lists |
+| `solidityContractNewLines` | `false` | Deprecated alias. `true` maps to `solidityContractBodySpacing = "single"` |

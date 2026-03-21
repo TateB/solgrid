@@ -39,9 +39,8 @@ sort_imports = false
 multiline_func_header = "attributes_first"
 
 [global]
-# Solidity version (auto-detected from pragma if omitted)
-solidity_version = "0.8.24"
-# File patterns to include
+# File patterns to include. Omit this key to use the default src/test/script set.
+# Set include = [] to disable implicit file discovery entirely.
 include = ["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]
 # File patterns to exclude
 exclude = ["lib/**", "node_modules/**", "out/**"]
@@ -59,7 +58,7 @@ cache_dir = ".solgrid_cache"
 
 | Preset | Description |
 |--------|-------------|
-| `recommended` | Default. Enables rules the solgrid team considers essential |
+| `recommended` | Default. Enables `security/*`, `best-practices/*`, and `naming/*` |
 | `all` | Enable every rule |
 | `security-only` | Only security category rules |
 
@@ -115,23 +114,29 @@ All formatter options live under `[format]`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `solidity_version` | string | auto-detected | Solidity version hint |
 | `include` | string[] | `["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]` | File patterns to include |
 | `exclude` | string[] | `["lib/**", "node_modules/**", "out/**"]` | File patterns to exclude |
 | `respect_gitignore` | bool | `true` | Honor `.gitignore` patterns |
 | `threads` | integer | `0` (auto) | Number of parallel threads |
 | `cache_dir` | string | `".solgrid_cache"` | Cache directory path |
 
-## Config Resolution Order
+If `global.include` is omitted, solgrid uses the default include set:
+`["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]`.
 
-Configuration is resolved in this priority (highest first):
+If `global.include = []` is set explicitly, solgrid discovers no files unless
+you pass file paths directly on the CLI.
 
-1. CLI flags (`--rule`, `--fix`, etc.)
-2. Inline comments (`// solgrid-disable-next-line`)
-3. `solgrid.toml` in the closest parent directory
-4. `solgrid.toml` in the project root
-5. `~/.config/solgrid/solgrid.toml` (global user config)
-6. Built-in defaults
+## Config Resolution
+
+Configuration is resolved per file. For explicit file paths, solgrid walks up from the file's parent directory to find the nearest `solgrid.toml`. For discovered files under a directory, solgrid uses the config resolved at the traversal root for file discovery and then resolves the nearest config again for each file before linting or formatting it.
+
+Resolution order is:
+
+1. `--config <path>` when provided
+2. The nearest `solgrid.toml` discovered by walking upward from the file or traversal root
+3. Built-in defaults
+
+Lint suppressions such as `// solgrid-disable-next-line` are applied during analysis, not during config file loading.
 
 ## Foundry.toml Compatibility
 
