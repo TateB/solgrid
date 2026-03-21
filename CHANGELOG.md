@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
+- Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits
+- Make VSCode `solgrid.configPath` load an explicit config on initialize and config changes, and align the Prettier plugin with `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
+- Generate `docs/rules.md` from `solgrid list-rules` and verify it in CI to keep the rules reference aligned with the live registry
+
+### Deprecated
+- Treat legacy NatSpec rule IDs such as `best-practices/use-natspec` as deprecated config aliases for `docs/natspec` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
+
+### Fixed
+- Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
+- Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
+- Fix compiler-version allowed-range checks for wide pragma ranges, make config hashing deterministic for cache invalidation, and cache LSP/CLI config resolution instead of reloading configs on every file or request
+
+
+## [0.0.4] - 2026-03-19
+
 ### Added
 - Cross-file hover support: imported symbols (errors, functions, contracts, etc.) now show signature and NatSpec documentation
 - Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
@@ -105,7 +122,8 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.3...HEAD
-[0.0.3]: https://github.com/TateB/solgrid/compare/v0.0.2...v0.0.3
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/TateB/solgrid/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/TateB/solgrid/releases/tag/v0.0.3
 [0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2
 [0.0.1]: https://github.com/TateB/solgrid/releases/tag/v0.0.1

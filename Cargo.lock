@@ -1144,6 +1144,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+
+[[package]]
 name = "globset"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2411,11 +2417,12 @@ dependencies = [
 
 [[package]]
 name = "solgrid"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "ariadne",
  "clap",
  "criterion",
+ "glob",
  "ignore",
  "rayon",
  "serde",
@@ -2432,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_ast"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "solar-ast",
  "solar-interface",
@@ -2442,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_config"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "solgrid_diagnostics",
@@ -2451,14 +2458,14 @@ dependencies = [
 
 [[package]]
 name = "solgrid_diagnostics"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "solgrid_formatter"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "criterion",
  "insta",
@@ -2472,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_linter"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "criterion",
  "insta",
@@ -2489,11 +2496,12 @@ dependencies = [
  "solgrid_diagnostics",
  "solgrid_parser",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
 name = "solgrid_napi"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "napi",
  "napi-build",
@@ -2505,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_parser"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "solar-ast",
  "solar-data-structures",
@@ -2515,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_server"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -2533,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_wasm"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "serde",
  "serde_json",

@@ -8,8 +8,6 @@ use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{ItemKind, Stmt, StmtKind};
 use solgrid_parser::with_parsed_ast_sequential;
 
-const DEFAULT_MAX_COMPLEXITY: usize = 7;
-
 static META: RuleMeta = RuleMeta {
     id: "best-practices/code-complexity",
     name: "code-complexity",
@@ -27,6 +25,7 @@ impl Rule for CodeComplexityRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let max_complexity = ctx.config.lint.code_complexity_threshold();
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
@@ -36,7 +35,7 @@ impl Rule for CodeComplexityRule {
                         if let ItemKind::Function(func) = &body_item.kind {
                             if let Some(body) = &func.body {
                                 let complexity = count_complexity(body.stmts) + 1;
-                                if complexity > DEFAULT_MAX_COMPLEXITY {
+                                if complexity > max_complexity {
                                     let name = func
                                         .header
                                         .name
@@ -46,7 +45,7 @@ impl Rule for CodeComplexityRule {
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
                                         format!(
-                                            "function `{name}` has cyclomatic complexity of {complexity} (maximum is {DEFAULT_MAX_COMPLEXITY})"
+                                            "function `{name}` has cyclomatic complexity of {complexity} (maximum is {max_complexity})"
                                         ),
                                         META.default_severity,
                                         range,

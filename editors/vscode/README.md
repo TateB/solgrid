@@ -6,7 +6,7 @@ solgrid brings Rust-native Solidity linting and formatting to VS Code.
 
 - Real-time diagnostics from the `solgrid` language server
 - Format-on-save and fix-on-save support
-- Configurable `solgrid.toml` discovery
+- Configurable nearest-file `solgrid.toml` discovery, with optional explicit `solgrid.configPath`
 - Bundled `solgrid` binary in the platform-specific VSIX builds for:
   - `darwin-arm64`
   - `linux-arm64`
@@ -28,7 +28,7 @@ The extension contributes these settings:
 - `solgrid.fixOnSave`
 - `solgrid.fixOnSave.unsafeFixes`
 - `solgrid.formatOnSave`
-- `solgrid.configPath`
+- `solgrid.configPath` to pin the workspace to a specific config file instead of nearest-file discovery
 
 ## Project Links
 

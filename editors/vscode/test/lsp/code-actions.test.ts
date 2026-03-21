@@ -12,6 +12,7 @@ import {
   waitForDiagnostics,
   requestCodeActions,
   readFixture,
+  fixturePath,
   fixtureUri,
   fullFileRange,
   resetDocumentVersions,
@@ -26,7 +27,9 @@ describe("LSP Code Actions", () => {
     client = new TestLspClient();
     client.start();
     resetDocumentVersions();
-    await initializeServer(client);
+    await initializeServer(client, undefined, {
+      configPath: fixturePath("solgrid-all.toml"),
+    });
   });
 
   afterEach(async () => {

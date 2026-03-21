@@ -3,16 +3,18 @@
 //! Provides helpers for writing concise rule tests.
 
 use crate::LintEngine;
-use solgrid_config::Config;
+use solgrid_config::{Config, RulePreset};
 use solgrid_diagnostics::Diagnostic;
 use std::path::Path;
 
 /// Lint a source string using the default engine and return diagnostics.
 pub fn lint_source(source: &str) -> Vec<Diagnostic> {
-    lint_source_with_config(source, &Config::default())
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    lint_source_with_config(source, &config)
 }
 
-/// Lint a source string using the provided config and return diagnostics.
+/// Lint a source string with a specific config and return diagnostics.
 pub fn lint_source_with_config(source: &str, config: &Config) -> Vec<Diagnostic> {
     let engine = LintEngine::new();
     let path = Path::new("test.sol");
@@ -43,7 +45,9 @@ pub fn lint_source_for_rule_with_config(
 
 /// Lint a source string and apply fixes, returning the fixed source.
 pub fn fix_source(source: &str) -> String {
-    fix_source_with_config(source, &Config::default())
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    fix_source_with_config(source, &config)
 }
 
 /// Lint a source string and apply fixes using the provided config, returning
@@ -57,7 +61,9 @@ pub fn fix_source_with_config(source: &str, config: &Config) -> String {
 
 /// Lint a source string and apply all fixes (including unsafe), returning the fixed source.
 pub fn fix_source_unsafe(source: &str) -> String {
-    fix_source_unsafe_with_config(source, &Config::default())
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    fix_source_unsafe_with_config(source, &config)
 }
 
 /// Lint a source string and apply all fixes (including unsafe) using the

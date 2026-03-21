@@ -1,107 +1,163 @@
-use crate::cache::Cache;
+use crate::cache::sha256_hex;
 use crate::Cli;
+use rayon::prelude::*;
 use solgrid_config::{resolve_config, Config};
 use solgrid_formatter::{check_formatted, format_source};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
-    let config = load_config(cli);
+    let explicit_config = super::load_explicit_config(cli);
 
-    // Handle --stdin mode
     if cli.stdin {
+        let config = explicit_config
+            .unwrap_or_else(|| resolve_config(&std::env::current_dir().unwrap_or_default()));
         return run_stdin(&config);
     }
 
-    let files = super::discover_sol_files(paths);
+    let prepared = super::prepare_files(paths, explicit_config);
 
-    if files.is_empty() {
+    if prepared.files.is_empty() {
         eprintln!("No .sol files found");
         return 0;
     }
 
-    // Load cache unless --no-cache
-    let config_hash = crate::cache::sha256_hex(&format!("{:?}", config));
-    let mut cache = if !cli.no_cache {
-        Some(Cache::load(
-            Path::new(&config.global.cache_dir),
-            &config_hash,
-        ))
-    } else {
+    let mut caches = if cli.no_cache {
         None
+    } else {
+        Some(super::preload_caches(&prepared.files))
     };
+
+    let outcomes = super::install_with_thread_count(prepared.thread_count, || {
+        prepared
+            .files
+            .par_iter()
+            .map(|file| {
+                let source = match std::fs::read_to_string(&file.path) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        return FormatOutcome {
+                            path: file.path.clone(),
+                            path_display: file.path_display.clone(),
+                            cache_dir: file.cache_dir.clone(),
+                            config_hash: file.config_hash.clone(),
+                            status: FormatStatus::Error(format!(
+                                "Error reading {}: {error}",
+                                file.path.display()
+                            )),
+                        };
+                    }
+                };
+
+                let source_hash = sha256_hex(&source);
+                if let Some(caches) = &caches {
+                    if let Some(cache) = caches.get(&file.cache_dir) {
+                        if let Some(entry) =
+                            cache.check_hashed(&file.path_display, &source_hash, &file.config_hash)
+                        {
+                            if entry.is_formatted {
+                                return FormatOutcome {
+                                    path: file.path.clone(),
+                                    path_display: file.path_display.clone(),
+                                    cache_dir: file.cache_dir.clone(),
+                                    config_hash: file.config_hash.clone(),
+                                    status: FormatStatus::CachedFormatted,
+                                };
+                            }
+                        }
+                    }
+                }
+
+                let status = if cli.diff {
+                    match check_formatted(&source, &file.config.format) {
+                        Ok(true) => FormatStatus::AlreadyFormatted {
+                            content_hash: source_hash,
+                        },
+                        Ok(false) => FormatStatus::WouldReformat,
+                        Err(error) => FormatStatus::Error(format!(
+                            "Error formatting {}: {error}",
+                            file.path.display()
+                        )),
+                    }
+                } else {
+                    match format_source(&source, &file.config.format) {
+                        Ok(formatted) => {
+                            if formatted == source {
+                                FormatStatus::AlreadyFormatted {
+                                    content_hash: source_hash,
+                                }
+                            } else {
+                                FormatStatus::Formatted { formatted }
+                            }
+                        }
+                        Err(error) => FormatStatus::Error(format!(
+                            "Error formatting {}: {error}",
+                            file.path.display()
+                        )),
+                    }
+                };
+
+                FormatOutcome {
+                    path: file.path.clone(),
+                    path_display: file.path_display.clone(),
+                    cache_dir: file.cache_dir.clone(),
+                    config_hash: file.config_hash.clone(),
+                    status,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
 
     let mut changed = 0usize;
     let mut errors = 0usize;
+    let mut cache_updates = Vec::new();
 
-    for path in &files {
-        let source = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Error reading {}: {e}", path.display());
-                errors += 1;
-                continue;
+    for outcome in outcomes {
+        match outcome.status {
+            FormatStatus::CachedFormatted => {}
+            FormatStatus::AlreadyFormatted { content_hash } => {
+                cache_updates.push(super::CacheUpdate {
+                    cache_dir: outcome.cache_dir,
+                    path: outcome.path_display,
+                    content_hash,
+                    config_hash: outcome.config_hash,
+                    diagnostic_count: 0,
+                    is_formatted: true,
+                });
             }
-        };
-
-        let path_str = path.display().to_string();
-
-        // Check cache — skip files that are already formatted
-        if let Some(ref cache) = cache {
-            if let Some(entry) = cache.check(&path_str, &source) {
-                if entry.is_formatted {
-                    continue;
-                }
+            FormatStatus::WouldReformat => {
+                eprintln!("Would reformat: {}", outcome.path.display());
+                changed += 1;
             }
-        }
-
-        if cli.diff {
-            // Check mode: just report if files are not formatted
-            match check_formatted(&source, &config.format) {
-                Ok(true) => {
-                    if let Some(ref mut cache) = cache {
-                        cache.update(&path_str, &source, 0, true);
-                    }
+            FormatStatus::Formatted { formatted } => {
+                if cli.diff {
+                    unreachable!("formatted output is only produced in write mode");
                 }
-                Ok(false) => {
-                    eprintln!("Would reformat: {}", path.display());
+
+                if let Err(error) = std::fs::write(&outcome.path, &formatted) {
+                    eprintln!("Error writing {}: {error}", outcome.path.display());
+                    errors += 1;
+                } else {
                     changed += 1;
-                }
-                Err(e) => {
-                    eprintln!("Error formatting {}: {e}", path.display());
-                    errors += 1;
+                    cache_updates.push(super::CacheUpdate {
+                        cache_dir: outcome.cache_dir,
+                        path: outcome.path_display,
+                        content_hash: sha256_hex(&formatted),
+                        config_hash: outcome.config_hash,
+                        diagnostic_count: 0,
+                        is_formatted: true,
+                    });
                 }
             }
-        } else {
-            // Format mode: format and write
-            match format_source(&source, &config.format) {
-                Ok(formatted) => {
-                    if formatted != source {
-                        if let Err(e) = std::fs::write(path, &formatted) {
-                            eprintln!("Error writing {}: {e}", path.display());
-                            errors += 1;
-                        } else {
-                            changed += 1;
-                            if let Some(ref mut cache) = cache {
-                                cache.update(&path_str, &formatted, 0, true);
-                            }
-                        }
-                    } else if let Some(ref mut cache) = cache {
-                        cache.update(&path_str, &source, 0, true);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error formatting {}: {e}", path.display());
-                    errors += 1;
-                }
+            FormatStatus::Error(message) => {
+                eprintln!("{message}");
+                errors += 1;
             }
         }
     }
 
-    // Save cache
-    if let Some(ref cache) = cache {
-        if let Err(e) = cache.save() {
-            eprintln!("warning: failed to save cache: {e}");
-        }
+    if let Some(caches) = &mut caches {
+        super::apply_cache_updates(caches, cache_updates);
+        super::save_caches(caches);
     }
 
     if changed > 0 {
@@ -140,16 +196,18 @@ fn run_stdin(config: &Config) -> i32 {
     }
 }
 
-fn load_config(cli: &Cli) -> Config {
-    if let Some(config_path) = &cli.config {
-        match solgrid_config::load_config(config_path) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("Error loading config: {e}");
-                std::process::exit(2);
-            }
-        }
-    } else {
-        resolve_config(&std::env::current_dir().unwrap_or_default())
-    }
+struct FormatOutcome {
+    path: PathBuf,
+    path_display: String,
+    cache_dir: String,
+    config_hash: String,
+    status: FormatStatus,
+}
+
+enum FormatStatus {
+    CachedFormatted,
+    AlreadyFormatted { content_hash: String },
+    WouldReformat,
+    Formatted { formatted: String },
+    Error(String),
 }

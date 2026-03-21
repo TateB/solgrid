@@ -1,10 +1,10 @@
 //! Integration tests for lint rules.
 
-use solgrid_config::{Config, RuleLevel};
+use solgrid_config::{Config, RuleLevel, RulePreset};
 use solgrid_linter::testing::{
     assert_diagnostic_count, assert_no_diagnostics, fix_source, fix_source_unsafe,
     fix_source_unsafe_with_config, fix_source_with_config, lint_source_for_rule,
-    lint_source_for_rule_with_config,
+    lint_source_for_rule_with_config, lint_source_with_config,
 };
 use solgrid_linter::LintEngine;
 use std::fs;
@@ -14,6 +14,15 @@ fn load_test_config(toml_str: &str) -> Config {
     let path = dir.path().join("solgrid.toml");
     fs::write(&path, toml_str).unwrap();
     solgrid_config::load_config(&path).unwrap()
+}
+
+fn table(entries: &[(&str, toml::Value)]) -> toml::Value {
+    toml::Value::Table(
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect(),
+    )
 }
 
 // =============================================================================
@@ -763,6 +772,34 @@ contract Test {
 }
 
 #[test]
+fn test_custom_errors_reports_once_with_default_config() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "x must be positive");
+    }
+}
+"#;
+    let diagnostics = lint_source_with_config(source, &Config::default());
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "best-practices/custom-errors")
+            .count(),
+        1
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "gas/custom-errors")
+            .count(),
+        0
+    );
+}
+
+#[test]
 fn test_no_floating_pragma_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -818,12 +855,23 @@ contract Test {
                         for (uint256 i = 0; i < a; i++) {
                             if (i > b) {
                                 while (c > 0) {
-                                    c--;
+                                    if (c > d) {
+                                        c--;
+                                    } else if (c == d) {
+                                        c -= 2;
+                                    } else {
+                                        c -= 3;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+        if (a == b) {
+            if (c == d) {
+                return b;
             }
         }
         return a;
@@ -1396,6 +1444,25 @@ contract Test {
 }
 
 #[test]
+fn test_docs_natspec_disabled_by_default_config() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function doSomething() public pure returns (uint256) {
+        return 42;
+    }
+}
+"#;
+    let diagnostics = lint_source_with_config(source, &Config::default());
+    let natspec_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diag| diag.rule_id == "docs/natspec")
+        .collect();
+    assert!(natspec_diagnostics.is_empty());
+}
+
+#[test]
 fn test_docs_natspec_inheritdoc_skips_missing_tags() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -1772,7 +1839,20 @@ contract Test {
     }
 }
 "#;
-    assert_diagnostic_count(source, "gas/custom-errors", 1);
+    let mut config = Config::default();
+    config.lint.preset = solgrid_config::RulePreset::All;
+    config
+        .lint
+        .rules
+        .insert("best-practices/custom-errors".into(), RuleLevel::Off);
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == "gas/custom-errors")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -1788,6 +1868,37 @@ contract Test {
 }
 "#;
     assert_no_diagnostics(source, "gas/custom-errors");
+}
+
+#[test]
+fn test_gas_custom_errors_only_when_best_practices_rule_is_disabled() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "too low");
+    }
+}
+"#;
+    let mut config = Config::default();
+    config
+        .lint
+        .rules
+        .insert("best-practices/custom-errors".into(), RuleLevel::Off);
+    config
+        .lint
+        .rules
+        .insert("gas/custom-errors".into(), RuleLevel::Info);
+
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "gas/custom-errors")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -2371,6 +2482,9 @@ contract Test {
 "#;
     let config = load_test_config(
         r#"
+[lint]
+preset = "all"
+
 [lint.settings."style/category-headers"]
 initialization_functions = ["bootstrap"]
 "#,
@@ -2437,6 +2551,9 @@ contract Test {}
 "#;
     let config = load_test_config(
         r#"
+[lint]
+preset = "all"
+
 [lint.settings."style/imports-ordering"]
 import_order = ["^@openzeppelin/", "^forge-std/"]
 "#,
@@ -2918,10 +3035,12 @@ error InvalidPair(Pair pair);
     .unwrap();
 
     let engine = LintEngine::new();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
     let result = engine.fix_source(
         &fs::read_to_string(&main_path).unwrap(),
         &main_path,
-        &Config::default(),
+        &config,
         false,
     );
     let fixed = result.0;
@@ -2971,6 +3090,368 @@ contract Test {
 }
 
 // =============================================================================
+// Config setting tests
+// =============================================================================
+
+#[test]
+fn test_code_complexity_threshold_setting() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function complex(uint256 a, uint256 b, uint256 c) public pure returns (uint256) {
+        if (a > 0) {
+            if (b > 0) {
+                if (c > 0) {
+                    return a + b + c;
+                }
+            }
+        }
+        return 0;
+    }
+}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "best-practices/code-complexity".into(),
+        table(&[("threshold", toml::Value::Integer(3))]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "best-practices/code-complexity")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_function_max_lines_setting() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function longOne() public pure returns (uint256) {
+        uint256 x = 0;
+        x += 1;
+        x += 2;
+        x += 3;
+        return x;
+    }
+}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "best-practices/function-max-lines".into(),
+        table(&[("max_lines", toml::Value::Integer(3))]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "best-practices/function-max-lines")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_max_states_count_setting() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    uint256 a;
+    uint256 b;
+    uint256 c;
+}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "best-practices/max-states-count".into(),
+        table(&[("max_count", toml::Value::Integer(2))]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "best-practices/max-states-count")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_passes() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.19 <0.9.0;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_fails() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.18;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_rejects_wide_pragma_range() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.0 <0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_exact_match() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![toml::Value::String("=0.8.24".into())]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_exact_mismatch() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![toml::Value::String("=0.8.24".into())]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_supports_caret_pragma() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_supports_tilde_pragma() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ~0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "security/compiler-version")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_compiler_version_allowed_setting_flags_unsupported_disjunction() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19 || ^0.8.24;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    let compiler_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diag| diag.rule_id == "security/compiler-version")
+        .collect();
+    assert_eq!(compiler_diagnostics.len(), 1);
+    assert!(compiler_diagnostics[0]
+        .message
+        .contains("could not be verified against the configured allowed range"));
+}
+
+#[test]
+fn test_foundry_test_function_pattern_setting() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function test_custom() public {}
+}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "naming/foundry-test-functions".into(),
+        table(&[("pattern", toml::Value::String("^test_[a-z]+$".into()))]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "naming/foundry-test-functions")
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn test_max_line_length_setting() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test { string constant NAME = "123456789012345678901234567890"; }
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "style/max-line-length".into(),
+        table(&[("limit", toml::Value::Integer(40))]),
+    );
+    config
+        .lint
+        .rules
+        .insert("style/max-line-length".into(), RuleLevel::Info);
+    let diagnostics = lint_source_with_config(source, &config);
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "style/max-line-length")
+            .count(),
+        1
+    );
+}
+
+// =============================================================================
 // Registry tests
 // =============================================================================
 
@@ -3013,6 +3494,11 @@ fn test_registry_lookup() {
     assert!(registry.get("gas/small-strings").is_some());
     assert!(registry.get("gas/custom-errors").is_some());
     assert!(registry.get("gas/use-bytes32").is_some());
+    assert!(registry.get("docs/natspec").is_some());
+    assert!(registry.get("docs/selector-tags").is_some());
+    assert!(registry.get("style/category-headers").is_some());
+    assert!(registry.get("style/imports-ordering").is_some());
+    assert!(registry.get("style/ordering").is_some());
     assert!(registry.get("gas/calldata-parameters").is_some());
     assert!(registry.get("gas/indexed-events").is_some());
     assert!(registry.get("gas/named-return-values").is_some());
@@ -3174,4 +3660,72 @@ contract Test {
 }
 "#;
     assert_no_diagnostics(source, "gas/use-bytes32");
+}
+
+// =============================================================================
+// Code-review finding tests
+// =============================================================================
+
+#[test]
+fn test_compiler_version_allowed_range_subset_check_regression() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.0 <0.8.19;
+contract Test {}
+"#;
+    let mut config = Config::default();
+    config.lint.settings.insert(
+        "security/compiler-version".into(),
+        table(&[(
+            "allowed",
+            toml::Value::Array(vec![
+                toml::Value::String(">=0.8.19".into()),
+                toml::Value::String("<0.9.0".into()),
+            ]),
+        )]),
+    );
+    let diagnostics = lint_source_with_config(source, &config);
+    let compiler_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "security/compiler-version")
+        .collect();
+    assert_eq!(
+        compiler_diags.len(),
+        1,
+        "wide pragma ranges should fail when any permitted compiler version falls outside the configured allowed range"
+    );
+}
+
+#[test]
+fn test_gas_custom_errors_suppressed_when_best_practices_enabled_via_preset() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+contract Test {
+    function bad(uint256 x) public pure {
+        require(x > 0, "x must be positive");
+    }
+}
+"#;
+    let mut config = Config::default();
+    config
+        .lint
+        .rules
+        .insert("gas/custom-errors".into(), RuleLevel::Warn);
+
+    let diagnostics = lint_source_with_config(source, &config);
+    let bp_count = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "best-practices/custom-errors")
+        .count();
+    let gas_count = diagnostics
+        .iter()
+        .filter(|d| d.rule_id == "gas/custom-errors")
+        .count();
+
+    assert_eq!(bp_count, 1, "best-practices/custom-errors should fire");
+    assert_eq!(
+        gas_count, 0,
+        "gas/custom-errors should be suppressed by registry metadata when best-practices/custom-errors is enabled"
+    );
 }

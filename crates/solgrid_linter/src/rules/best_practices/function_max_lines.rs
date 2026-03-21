@@ -8,8 +8,6 @@ use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::ItemKind;
 use solgrid_parser::with_parsed_ast_sequential;
 
-const DEFAULT_MAX_LINES: usize = 50;
-
 static META: RuleMeta = RuleMeta {
     id: "best-practices/function-max-lines",
     name: "function-max-lines",
@@ -27,6 +25,7 @@ impl Rule for FunctionMaxLinesRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+        let max_lines = ctx.config.lint.function_max_lines();
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
@@ -37,7 +36,7 @@ impl Rule for FunctionMaxLinesRule {
                             if let Some(body) = &func.body {
                                 let body_text = solgrid_ast::span_text(ctx.source, body.span);
                                 let line_count = body_text.lines().count();
-                                if line_count > DEFAULT_MAX_LINES {
+                                if line_count > max_lines {
                                     let name = func
                                         .header
                                         .name
@@ -47,7 +46,7 @@ impl Rule for FunctionMaxLinesRule {
                                     diagnostics.push(Diagnostic::new(
                                         META.id,
                                         format!(
-                                            "function `{name}` has {line_count} lines (maximum is {DEFAULT_MAX_LINES})"
+                                            "function `{name}` has {line_count} lines (maximum is {max_lines})"
                                         ),
                                         META.default_severity,
                                         range,
