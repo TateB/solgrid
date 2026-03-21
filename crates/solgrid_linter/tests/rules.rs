@@ -3,10 +3,18 @@
 use solgrid_config::{Config, RuleLevel};
 use solgrid_linter::testing::{
     assert_diagnostic_count, assert_no_diagnostics, fix_source, fix_source_unsafe,
-    fix_source_unsafe_with_config, lint_source_for_rule,
+    fix_source_unsafe_with_config, fix_source_with_config, lint_source_for_rule,
+    lint_source_for_rule_with_config,
 };
 use solgrid_linter::LintEngine;
 use std::fs;
+
+fn load_test_config(toml_str: &str) -> Config {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("solgrid.toml");
+    fs::write(&path, toml_str).unwrap();
+    solgrid_config::load_config(&path).unwrap()
+}
 
 // =============================================================================
 // Security rules
@@ -2244,6 +2252,63 @@ contract Test {
 }
 
 #[test]
+fn test_ordering_detected_constructor_after_function() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function run() external {}
+    constructor() {}
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_ordering_detected_receive_after_fallback() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    fallback() external payable {}
+    receive() external payable {}
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_ordering_detected_visibility_ordering_within_functions() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _helper() internal {}
+    function run() external {}
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_ordering_detected_mutability_ordering_within_visibility() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function inspect() external view returns (uint256) {
+        return 1;
+    }
+
+    function mutate() external returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
 fn test_category_headers_fix_rebuilds_sections() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -2274,6 +2339,54 @@ contract Test {
     assert!(fixed.contains("// Implementation"));
     assert!(fixed.contains("// Internal Functions"));
     assert!(fixed.find("function run").unwrap() < fixed.find("function _helper").unwrap());
+}
+
+#[test]
+fn test_category_headers_respects_min_categories_setting() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint.settings."style/category-headers"]
+min_categories = 3
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/category-headers", &config);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn test_category_headers_uses_configured_initialization_functions() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function bootstrap() public {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint.settings."style/category-headers"]
+initialization_functions = ["bootstrap"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Initialization"));
+    assert!(!fixed.contains("// Implementation"));
+}
+
+#[test]
+fn test_category_headers_empty_contract_body_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/category-headers");
 }
 
 #[test]
@@ -2311,6 +2424,27 @@ contract Test {}
 "#;
     let fixed = fix_source(source);
     assert!(fixed.contains("import \"forge-std/Test.sol\";\n\nimport \"./Local.sol\";"));
+}
+
+#[test]
+fn test_imports_ordering_respects_regex_group_config() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Local.sol";
+import "forge-std/Test.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let config = load_test_config(
+        r#"
+[lint.settings."style/imports-ordering"]
+import_order = ["^@openzeppelin/", "^forge-std/"]
+"#,
+    );
+    let fixed = fix_source_with_config(source, &config);
+    assert!(fixed.contains(
+        "import \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n\nimport \"forge-std/Test.sol\";\n\nimport \"./Local.sol\";"
+    ));
 }
 
 #[test]
@@ -2792,6 +2926,48 @@ error InvalidPair(Pair pair);
     );
     let fixed = result.0;
     assert!(fixed.contains("/// @dev Error selector: `0x"));
+}
+
+#[test]
+fn test_selector_tags_rewrites_incorrect_error_tag() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    /// @dev Error selector: `0xdeadbeef`
+    error Unauthorized(address caller);
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Error selector: `0x8e4a23d6`"));
+    assert!(!fixed.contains("0xdeadbeef"));
+}
+
+#[test]
+fn test_selector_tags_parameterless_interface_rewrites_stale_tag() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Interface selector: `0xdeadbeef`
+interface ITest {
+    function foo() external;
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Interface selector: `0xc2985578`"));
+    assert!(!fixed.contains("0xdeadbeef"));
+}
+
+#[test]
+fn test_selector_tags_ignores_events() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done(address caller);
+}
+"#;
+    assert_no_diagnostics(source, "docs/selector-tags");
 }
 
 // =============================================================================

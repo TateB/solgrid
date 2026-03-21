@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
 - Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 - Fix autofix regressions in modifier ordering, unused import cleanup, function ordering, and import path normalization
+- Add regression coverage for consolidated NatSpec, selector, ordering, import grouping, and rule-settings behaviors
 - Fix reorder autofixes stripping NatSpec comments from reordered functions and top-level declarations
 - Fix formatter duplicating inline assembly comments on repeated save/format
 - Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation

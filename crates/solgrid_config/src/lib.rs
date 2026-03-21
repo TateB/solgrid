@@ -397,6 +397,12 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+    struct TestRuleSettings {
+        enabled: bool,
+        names: Vec<String>,
+    }
+
     #[test]
     fn test_default_config() {
         let config = Config::default();
@@ -499,6 +505,81 @@ threads = 4
         assert_eq!(
             config.rule_severity("security/tx-origin", RuleCategory::Security),
             None
+        );
+    }
+
+    #[test]
+    fn test_lint_rule_settings_decode_typed_value() {
+        let mut config = LintConfig::default();
+        config.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::Table(
+                [
+                    ("enabled".to_string(), toml::Value::Boolean(true)),
+                    (
+                        "names".to_string(),
+                        toml::Value::Array(vec![toml::Value::String("notice".into())]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(
+            settings,
+            TestRuleSettings {
+                enabled: true,
+                names: vec!["notice".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_lint_rule_settings_missing_value_uses_default() {
+        let config = LintConfig::default();
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(settings, TestRuleSettings::default());
+    }
+
+    #[test]
+    fn test_lint_rule_settings_invalid_value_uses_default() {
+        let mut config = LintConfig::default();
+        config.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::String("not-an-object".into()),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(settings, TestRuleSettings::default());
+    }
+
+    #[test]
+    fn test_config_rule_settings_delegates_to_lint_settings() {
+        let mut config = Config::default();
+        config.lint.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::Table(
+                [
+                    ("enabled".to_string(), toml::Value::Boolean(true)),
+                    (
+                        "names".to_string(),
+                        toml::Value::Array(vec![toml::Value::String("dev".into())]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(
+            settings,
+            TestRuleSettings {
+                enabled: true,
+                names: vec!["dev".into()],
+            }
         );
     }
 
