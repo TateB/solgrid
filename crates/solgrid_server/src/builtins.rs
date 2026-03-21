@@ -491,6 +491,24 @@ static YUL_BUILTINS: &[(&str, BuiltinDef)] = &[
 // Lookup functions
 // ---------------------------------------------------------------------------
 
+/// Return all Solidity global functions (e.g. `keccak256`, `require`).
+pub fn solidity_globals() -> &'static [(&'static str, BuiltinDef)] {
+    SOLIDITY_GLOBALS
+}
+
+/// Return all Solidity namespace names (e.g. `msg`, `block`, `tx`, `abi`).
+pub fn namespace_names() -> Vec<&'static str> {
+    NAMESPACES.iter().map(|ns| ns.name).collect()
+}
+
+/// Return all members of a Solidity namespace (e.g. members of `msg`).
+pub fn namespace_members(namespace: &str) -> Vec<(&'static str, &'static BuiltinDef)> {
+    match NAMESPACES.iter().find(|ns| ns.name == namespace) {
+        Some(ns) => ns.members.iter().map(|(n, def)| (*n, def)).collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Look up a global Solidity function by name (e.g. `"keccak256"`, `"require"`).
 pub fn lookup_solidity_global(name: &str) -> Option<&'static BuiltinDef> {
     SOLIDITY_GLOBALS

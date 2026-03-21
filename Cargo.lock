@@ -2521,6 +2521,7 @@ dependencies = [
 name = "solgrid_server"
 version = "0.0.4"
 dependencies = [
+ "ignore",
  "serde",
  "serde_json",
  "solgrid_ast",

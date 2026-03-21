@@ -164,6 +164,57 @@ impl SymbolTable {
         &self.scopes[scope_id].symbols
     }
 
+    /// Return all symbols defined in the file-level scope (scope 0).
+    ///
+    /// These are the symbols that can be exported/imported from the file:
+    /// contracts, interfaces, libraries, free functions, errors, events,
+    /// structs, enums, UDVTs.
+    pub fn file_level_symbols(&self) -> &[SymbolDef] {
+        if self.scopes.is_empty() {
+            return &[];
+        }
+        &self.scopes[0].symbols
+    }
+
+    /// Collect all symbols visible at the given byte offset.
+    ///
+    /// Finds the innermost scope containing `offset`, then walks up the scope
+    /// chain collecting all symbols. When multiple symbols share the same name,
+    /// the innermost (shadowing) definition wins.
+    pub fn visible_symbols_at(&self, offset: usize) -> Vec<&SymbolDef> {
+        // Find the innermost scope containing the offset.
+        let mut best: Option<ScopeId> = None;
+        for (id, scope) in self.scopes.iter().enumerate() {
+            if scope.span.contains(&offset) {
+                match best {
+                    None => best = Some(id),
+                    Some(prev) => {
+                        if self.scopes[prev].span.len() > scope.span.len() {
+                            best = Some(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+
+        // Walk up the scope chain, collecting symbols.
+        let mut current = best;
+        while let Some(id) = current {
+            let scope = &self.scopes[id];
+            for sym in &scope.symbols {
+                if seen.insert(&sym.name) {
+                    result.push(sym);
+                }
+            }
+            current = scope.parent;
+        }
+
+        result
+    }
+
     /// Resolve a member inside a container symbol's scope.
     ///
     /// E.g., resolve `someFunction` inside `MyContract`'s scope.

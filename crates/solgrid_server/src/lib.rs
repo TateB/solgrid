@@ -15,5 +15,6 @@ pub mod hover;
 pub mod resolve;
 pub mod server;
 pub mod symbols;
+pub mod workspace_index;
 
 pub use server::{run_server, SolgridServer};

@@ -2,6 +2,7 @@
 
 use crate::document::DocumentStore;
 use crate::resolve::ImportResolver;
+use crate::workspace_index::WorkspaceIndex;
 use crate::{actions, completion, convert, definition, diagnostics, format, hover};
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
@@ -44,6 +45,8 @@ pub struct SolgridServer {
     published_diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
     /// Import path resolver for cross-file go-to-definition.
     resolver: Arc<RwLock<ImportResolver>>,
+    /// Workspace-wide symbol index for auto-import completions.
+    workspace_index: Arc<RwLock<WorkspaceIndex>>,
 }
 
 impl SolgridServer {
@@ -59,6 +62,7 @@ impl SolgridServer {
             config_cache: Arc::new(RwLock::new(ServerConfigCache::default())),
             published_diagnostics: Arc::new(RwLock::new(HashMap::new())),
             resolver: Arc::new(RwLock::new(ImportResolver::new(None))),
+            workspace_index: Arc::new(RwLock::new(WorkspaceIndex::new())),
         }
     }
 
@@ -150,6 +154,12 @@ impl SolgridServer {
             cache.insert(uri.clone(), lsp_diags.clone());
         }
 
+        // Update the workspace symbol index for this file.
+        {
+            let mut index = self.workspace_index.write().await;
+            index.update_file(&path, &source);
+        }
+
         self.client
             .publish_diagnostics(uri.clone(), lsp_diags, Some(version))
             .await;
@@ -235,7 +245,15 @@ impl LanguageServer for SolgridServer {
 
                 // Initialize import resolver with workspace root.
                 let mut resolver = self.resolver.write().await;
-                *resolver = ImportResolver::new(Some(root_path));
+                *resolver = ImportResolver::new(Some(root_path.clone()));
+                drop(resolver);
+
+                // Build workspace symbol index in the background.
+                let index = self.workspace_index.clone();
+                tokio::spawn(async move {
+                    let built = WorkspaceIndex::build(&root_path);
+                    *index.write().await = built;
+                });
             }
         } else if let Some(settings) = &init_settings {
             if let Some(config_path) = settings.config_path.clone() {
@@ -274,7 +292,7 @@ impl LanguageServer for SolgridServer {
                 document_range_formatting_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["/".into(), " ".into()]),
+                    trigger_characters: Some(vec!["/".into(), " ".into(), ".".into()]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -591,10 +609,36 @@ impl LanguageServer for SolgridServer {
         };
 
         let source = doc.content.clone();
+        // Collect open document contents for cross-file lookups.
+        let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
+            .uris()
+            .filter_map(|u| {
+                let path = uri_to_path(u);
+                let content = documents.get(u).map(|d| d.content.clone())?;
+                Some((path, content))
+            })
+            .collect();
         drop(documents);
 
+        let resolver = self.resolver.read().await;
+        let workspace_index = self.workspace_index.read().await;
+        let get_source = |path: &std::path::Path| -> Option<String> {
+            if let Some(content) = open_docs.get(path) {
+                return Some(content.clone());
+            }
+            std::fs::read_to_string(path).ok()
+        };
+
         let position = &params.text_document_position.position;
-        let items = completion::suppression_completions(&self.engine, &source, position);
+        let items = completion::completions(
+            &self.engine,
+            &source,
+            position,
+            uri,
+            &get_source,
+            &resolver,
+            &workspace_index,
+        );
 
         if items.is_empty() {
             Ok(None)
