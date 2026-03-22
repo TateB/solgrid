@@ -3269,6 +3269,43 @@ contract Test {}
 }
 
 #[test]
+#[cfg(unix)]
+fn test_prefer_remappings_matches_canonical_paths() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("solgrid-remap-test-{unique}"));
+    let real_root = root.join("real");
+    fs::create_dir_all(real_root.join("src/contracts")).expect("create contracts");
+    fs::create_dir_all(real_root.join("src/utils")).expect("create utils");
+    symlink(&real_root, root.join("link")).expect("create symlink");
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), root.join("link/src"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        &real_root.join("src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/utils/Helper.sol"));
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
 fn test_prefer_remappings_fix_end_to_end_named_import() {
     use solgrid_linter::testing::fix_source_with_remappings;
     use std::path::{Path, PathBuf};
