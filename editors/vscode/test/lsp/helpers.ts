@@ -65,6 +65,8 @@ export interface CompletionItem {
   kind?: number;
   detail?: string;
   insertText?: string;
+  sortText?: string;
+  additionalTextEdits?: TextEdit[];
 }
 
 export interface InitializeResult {
