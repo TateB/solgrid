@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
 
 ### Fixed
+- Explicitly specify pull_request event types in CI workflow to ensure checks trigger reliably
 - Resolve remappings for `check`/`fix` from each linted file's workspace instead of only the current working directory
 - Canonicalize `style/prefer-remappings` paths before prefix matching so symlinked workspace paths still match
 
