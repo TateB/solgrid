@@ -203,6 +203,14 @@ impl RuleMeta {
     pub fn full_id(&self) -> String {
         format!("{}/{}", self.category, self.name)
     }
+
+    /// Return the IDs of higher-priority rules that suppress this rule.
+    pub fn suppressed_by(&self) -> &'static [&'static str] {
+        match self.id {
+            "gas/custom-errors" => &["best-practices/custom-errors"],
+            _ => &[],
+        }
+    }
 }
 
 /// A diagnostic produced by a lint rule.

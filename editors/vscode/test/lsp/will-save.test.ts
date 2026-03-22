@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TestLspClient } from "./client";
 import {
   applyEdits,
+  fixturePath,
   initializeServer,
   openDocument,
   waitForDiagnostics,
@@ -25,7 +26,9 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
     client = new TestLspClient();
     client.start();
     resetDocumentVersions();
-    await initializeServer(client);
+    await initializeServer(client, undefined, {
+      configPath: fixturePath("solgrid-all.toml"),
+    });
   });
 
   afterEach(async () => {

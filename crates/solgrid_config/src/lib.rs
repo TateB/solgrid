@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use solgrid_diagnostics::{RuleCategory, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Top-level solgrid configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -51,6 +52,21 @@ pub enum RulePreset {
     SecurityOnly,
 }
 
+/// Canonicalize deprecated or aliased rule IDs.
+pub fn canonical_rule_id(rule_id: &str) -> &str {
+    match rule_id {
+        "best-practices/use-natspec" => "docs/natspec-function",
+        _ => rule_id,
+    }
+}
+
+fn aliased_rule_id(rule_id: &str) -> Option<&'static str> {
+    match rule_id {
+        "docs/natspec-function" => Some("best-practices/use-natspec"),
+        _ => None,
+    }
+}
+
 /// Lint configuration section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -76,22 +92,182 @@ impl Default for LintConfig {
 }
 
 impl LintConfig {
-    /// Get the configured severity for a rule, or None if the rule is disabled.
-    pub fn rule_severity(&self, rule_id: &str, category: RuleCategory) -> Option<Severity> {
-        if let Some(level) = self.rules.get(rule_id) {
-            return (*level).into();
+    fn rule_level(&self, rule_id: &str) -> Option<RuleLevel> {
+        let canonical = canonical_rule_id(rule_id);
+        if let Some(level) = self.rules.get(canonical) {
+            return Some(*level);
         }
-        // Use default severity from category
-        Some(category.default_severity())
+        if canonical != rule_id {
+            if let Some(level) = self.rules.get(rule_id) {
+                return Some(*level);
+            }
+        }
+        aliased_rule_id(canonical).and_then(|alias| self.rules.get(alias).copied())
+    }
+
+    fn table_setting(&self, rule_id: &str, key: &str) -> Option<&toml::Value> {
+        let canonical = canonical_rule_id(rule_id);
+        self.settings
+            .get(canonical)
+            .or_else(|| aliased_rule_id(canonical).and_then(|alias| self.settings.get(alias)))
+            .and_then(|value| value.as_table())
+            .and_then(|table| table.get(key))
+    }
+
+    fn integer_setting(&self, rule_id: &str, key: &str) -> Option<usize> {
+        self.table_setting(rule_id, key)?
+            .as_integer()
+            .and_then(|value| usize::try_from(value).ok())
+    }
+
+    fn string_setting(&self, rule_id: &str, key: &str) -> Option<String> {
+        self.table_setting(rule_id, key)?
+            .as_str()
+            .map(ToOwned::to_owned)
+    }
+
+    /// Get the configured severity for a rule, or None if the rule is disabled.
+    pub fn rule_severity(&self, rule_id: &str, default_severity: Severity) -> Option<Severity> {
+        if let Some(level) = self.rule_level(rule_id) {
+            return level.into();
+        }
+        Some(default_severity)
     }
 
     /// Check if a specific rule is enabled.
-    pub fn is_rule_enabled(&self, rule_id: &str, _category: RuleCategory) -> bool {
-        if let Some(level) = self.rules.get(rule_id) {
-            return *level != RuleLevel::Off;
+    pub fn is_rule_enabled(&self, rule_id: &str, category: RuleCategory) -> bool {
+        if let Some(level) = self.rule_level(rule_id) {
+            return level != RuleLevel::Off;
         }
-        // Enabled by default
-        true
+
+        match self.preset {
+            RulePreset::All => true,
+            RulePreset::Recommended => matches!(
+                category,
+                RuleCategory::Security | RuleCategory::BestPractices | RuleCategory::Naming
+            ),
+            RulePreset::SecurityOnly => matches!(category, RuleCategory::Security),
+        }
+    }
+
+    pub fn code_complexity_threshold(&self) -> usize {
+        self.integer_setting("best-practices/code-complexity", "threshold")
+            .unwrap_or(10)
+    }
+
+    pub fn function_max_lines(&self) -> usize {
+        self.integer_setting("best-practices/function-max-lines", "max_lines")
+            .unwrap_or(50)
+    }
+
+    pub fn max_states_count(&self) -> usize {
+        self.integer_setting("best-practices/max-states-count", "max_count")
+            .unwrap_or(15)
+    }
+
+    pub fn foundry_test_function_pattern(&self) -> Option<String> {
+        self.string_setting("naming/foundry-test-functions", "pattern")
+    }
+
+    pub fn max_line_length(&self) -> usize {
+        self.integer_setting("style/max-line-length", "limit")
+            .unwrap_or(120)
+    }
+
+    pub fn compiler_version_allowed(&self) -> Result<Option<Vec<VersionRequirement>>, String> {
+        let Some(value) = self.table_setting("security/compiler-version", "allowed") else {
+            return Ok(None);
+        };
+
+        let allowed = value
+            .as_array()
+            .ok_or_else(|| "expected an array".to_string())?;
+
+        let mut requirements = Vec::with_capacity(allowed.len());
+        for raw in allowed {
+            let raw = raw
+                .as_str()
+                .ok_or_else(|| "all entries must be strings".to_string())?;
+            requirements.push(VersionRequirement::parse(raw)?);
+        }
+
+        Ok(Some(requirements))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SolidityVersion {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+}
+
+impl SolidityVersion {
+    pub fn parse(input: &str) -> Option<Self> {
+        let trimmed = input.trim();
+        let parts: Vec<_> = trimmed.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+
+        Some(Self {
+            major: parts[0].parse().ok()?,
+            minor: parts[1].parse().ok()?,
+            patch: parts[2].parse().ok()?,
+        })
+    }
+
+    pub fn cmp_key(self) -> (u64, u64, u64) {
+        (self.major, self.minor, self.patch)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionOperator {
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    Equal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VersionRequirement {
+    pub operator: VersionOperator,
+    pub version: SolidityVersion,
+}
+
+impl VersionRequirement {
+    pub fn parse(input: &str) -> Result<Self, String> {
+        let trimmed = input.trim();
+        let (operator, version_str) = if let Some(rest) = trimmed.strip_prefix(">=") {
+            (VersionOperator::GreaterThanOrEqual, rest)
+        } else if let Some(rest) = trimmed.strip_prefix("<=") {
+            (VersionOperator::LessThanOrEqual, rest)
+        } else if let Some(rest) = trimmed.strip_prefix('>') {
+            (VersionOperator::GreaterThan, rest)
+        } else if let Some(rest) = trimmed.strip_prefix('<') {
+            (VersionOperator::LessThan, rest)
+        } else if let Some(rest) = trimmed.strip_prefix('=') {
+            (VersionOperator::Equal, rest)
+        } else {
+            return Err(format!("invalid comparator `{trimmed}`"));
+        };
+
+        let version = SolidityVersion::parse(version_str)
+            .ok_or_else(|| format!("invalid Solidity version `{version_str}`"))?;
+
+        Ok(Self { operator, version })
+    }
+
+    pub fn matches(self, candidate: SolidityVersion) -> bool {
+        match self.operator {
+            VersionOperator::GreaterThan => candidate.cmp_key() > self.version.cmp_key(),
+            VersionOperator::GreaterThanOrEqual => candidate.cmp_key() >= self.version.cmp_key(),
+            VersionOperator::LessThan => candidate.cmp_key() < self.version.cmp_key(),
+            VersionOperator::LessThanOrEqual => candidate.cmp_key() <= self.version.cmp_key(),
+            VersionOperator::Equal => candidate.cmp_key() == self.version.cmp_key(),
+        }
     }
 }
 
@@ -226,18 +402,87 @@ impl Default for GlobalConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ConfigResolver {
+    explicit: Option<Arc<Config>>,
+    cache: HashMap<PathBuf, Arc<Config>>,
+}
+
+impl ConfigResolver {
+    pub fn new(explicit: Option<Config>) -> Self {
+        Self {
+            explicit: explicit.map(Arc::new),
+            cache: HashMap::new(),
+        }
+    }
+
+    pub fn resolve_for_path(&mut self, path: &Path) -> Arc<Config> {
+        if let Some(config) = &self.explicit {
+            return config.clone();
+        }
+
+        let dir = if path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."))
+        };
+
+        if let Some(config) = self.cache.get(&dir) {
+            return config.clone();
+        }
+
+        let config = Arc::new(resolve_config(&dir));
+        self.cache.insert(dir, config.clone());
+        config
+    }
+}
+
+fn normalize_rule_aliases(config: &mut Config) {
+    if let Some(level) = config.lint.rules.remove("best-practices/use-natspec") {
+        config
+            .lint
+            .rules
+            .entry("docs/natspec-function".to_string())
+            .or_insert(level);
+    }
+}
+
+fn warn_for_invalid_settings(config: &Config, path: &Path) {
+    if let Err(error) = config.lint.compiler_version_allowed() {
+        eprintln!(
+            "warning: invalid setting for `security/compiler-version.allowed` in {}: {error}; falling back to default compiler-version rule behavior",
+            path.display()
+        );
+    }
+}
+
 /// Load configuration from a TOML file.
 pub fn load_config(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    let mut config: Config =
+        toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+    normalize_rule_aliases(&mut config);
+    warn_for_invalid_settings(&config, path);
+    Ok(config)
 }
 
 /// Discover and load config by walking up the filesystem from `start_dir`.
 /// Falls back to foundry.toml `[fmt]` section if no solgrid.toml is found.
 /// Returns default config if no config file is found.
 pub fn resolve_config(start_dir: &Path) -> Config {
-    if let Some(path) = find_config_file(start_dir) {
+    let search_root = if start_dir.is_dir() {
+        start_dir.to_path_buf()
+    } else {
+        start_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    if let Some(path) = find_config_file(&search_root) {
         match load_config(&path) {
             Ok(config) => return config,
             Err(e) => {
@@ -247,7 +492,7 @@ pub fn resolve_config(start_dir: &Path) -> Config {
     }
 
     // Fallback: try foundry.toml
-    if let Some(path) = find_foundry_toml(start_dir) {
+    if let Some(path) = find_foundry_toml(&search_root) {
         match load_foundry_fmt_config(&path) {
             Ok(config) => return config,
             Err(e) => {
@@ -456,6 +701,7 @@ pub fn load_remappings(workspace_root: &Path) -> Vec<(String, PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_default_config() {
@@ -525,14 +771,12 @@ threads = 4
     #[test]
     fn test_rule_severity_default() {
         let config = LintConfig::default();
-        // Security rules default to Error
         assert_eq!(
-            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            config.rule_severity("security/tx-origin", Severity::Error),
             Some(Severity::Error)
         );
-        // Best practices default to Warning
         assert_eq!(
-            config.rule_severity("best-practices/no-console", RuleCategory::BestPractices),
+            config.rule_severity("best-practices/no-console", Severity::Warning),
             Some(Severity::Warning)
         );
     }
@@ -544,7 +788,7 @@ threads = 4
             .rules
             .insert("security/tx-origin".to_string(), RuleLevel::Warn);
         assert_eq!(
-            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            config.rule_severity("security/tx-origin", Severity::Error),
             Some(Severity::Warning)
         );
     }
@@ -557,7 +801,7 @@ threads = 4
             .insert("security/tx-origin".to_string(), RuleLevel::Off);
         assert!(!config.is_rule_enabled("security/tx-origin", RuleCategory::Security));
         assert_eq!(
-            config.rule_severity("security/tx-origin", RuleCategory::Security),
+            config.rule_severity("security/tx-origin", Severity::Error),
             None
         );
     }
@@ -590,6 +834,142 @@ threads = 4
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.format.line_length, config.format.line_length);
         assert_eq!(parsed.format.tab_width, config.format.tab_width);
+    }
+
+    #[test]
+    fn test_recommended_preset_membership() {
+        let config = LintConfig::default();
+        assert!(config.is_rule_enabled("security/tx-origin", RuleCategory::Security));
+        assert!(config.is_rule_enabled("best-practices/no-console", RuleCategory::BestPractices));
+        assert!(config.is_rule_enabled("naming/func-name-mixedcase", RuleCategory::Naming));
+        assert!(!config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
+        assert!(!config.is_rule_enabled("gas/custom-errors", RuleCategory::Gas));
+        assert!(!config.is_rule_enabled("style/max-line-length", RuleCategory::Style));
+    }
+
+    #[test]
+    fn test_rule_override_can_enable_outside_preset() {
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("docs/natspec-function".into(), RuleLevel::Warn);
+        assert!(config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
+        assert_eq!(
+            config.rule_severity("docs/natspec-function", Severity::Info),
+            Some(Severity::Warning)
+        );
+    }
+
+    #[test]
+    fn test_rule_alias_lookup_uses_canonical_rule() {
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("best-practices/use-natspec".into(), RuleLevel::Off);
+        assert!(!config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
+        assert_eq!(
+            config.rule_severity("docs/natspec-function", Severity::Info),
+            None
+        );
+    }
+
+    #[test]
+    fn test_compiler_version_allowed_parsing() {
+        let mut config = LintConfig::default();
+        config.settings.insert(
+            "security/compiler-version".into(),
+            toml::Value::Table(
+                [(
+                    "allowed".into(),
+                    toml::Value::Array(vec![
+                        toml::Value::String(">=0.8.19".into()),
+                        toml::Value::String("<0.9.0".into()),
+                    ]),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let allowed = config.compiler_version_allowed().unwrap().unwrap();
+        assert_eq!(allowed.len(), 2);
+        assert!(allowed[0].matches(SolidityVersion::parse("0.8.24").unwrap()));
+        assert!(!allowed[0].matches(SolidityVersion::parse("0.8.18").unwrap()));
+    }
+
+    #[test]
+    fn test_config_resolver_uses_nearest_config() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_resolver_{}_{}",
+            std::process::id(),
+            1
+        ));
+        let nested = root.join("packages/project/src");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            root.join("solgrid.toml"),
+            "[lint]\npreset = \"security-only\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("packages/project/solgrid.toml"),
+            "[lint]\npreset = \"all\"\n",
+        )
+        .unwrap();
+
+        let file = nested.join("Token.sol");
+        fs::write(&file, "contract Token {}").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let config = resolver.resolve_for_path(&file);
+        assert_eq!(config.lint.preset, RulePreset::All);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_normalizes_deprecated_rule_alias() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_config_alias_{}_{}", std::process::id(), 2));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            "[lint.rules]\n\"best-practices/use-natspec\" = \"off\"\n",
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.lint.rules.get("docs/natspec-function"),
+            Some(&RuleLevel::Off)
+        );
+        assert!(!config.lint.rules.contains_key("best-practices/use-natspec"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Finding #5: empty include list is a valid config value. Verify that
+    /// loading a config with `include = []` results in an empty include vec
+    /// (rather than falling back to defaults).
+    #[test]
+    fn test_empty_include_is_preserved_not_defaulted() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_empty_include_{}_{}",
+            std::process::id(),
+            1
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(&config_path, "[global]\ninclude = []\n").unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert!(
+            config.global.include.is_empty(),
+            "empty include should be preserved, not replaced with defaults"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -638,8 +1018,8 @@ threads = 4
     fn test_find_workspace_root_with_remappings_txt() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("src").join("contracts");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(dir.path().join("remappings.txt"), "@oz/=lib/oz/\n").unwrap();
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.path().join("remappings.txt"), "@oz/=lib/oz/\n").unwrap();
 
         let result = find_workspace_root(&sub);
         assert_eq!(result, Some(dir.path().to_path_buf()));
@@ -649,8 +1029,8 @@ threads = 4
     fn test_find_workspace_root_with_foundry_toml() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("src");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(dir.path().join("foundry.toml"), "[profile.default]\n").unwrap();
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(dir.path().join("foundry.toml"), "[profile.default]\n").unwrap();
 
         let result = find_workspace_root(&sub);
         assert_eq!(result, Some(dir.path().to_path_buf()));
@@ -660,19 +1040,16 @@ threads = 4
     fn test_find_workspace_root_none() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("empty");
-        std::fs::create_dir_all(&sub).unwrap();
+        fs::create_dir_all(&sub).unwrap();
 
         let result = find_workspace_root(&sub);
-        // No foundry.toml or remappings.txt anywhere up the tree in the tempdir
-        // (may find one in a parent of the tempdir in CI, so just check it doesn't
-        // return the sub directory itself)
         assert_ne!(result, Some(sub));
     }
 
     #[test]
     fn test_load_remappings_from_remappings_txt() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
+        fs::write(
             dir.path().join("remappings.txt"),
             "@oz/=lib/oz/\nforge-std/=lib/forge-std/src/\n",
         )
@@ -694,7 +1071,7 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 "#;
-        std::fs::write(dir.path().join("foundry.toml"), toml_content).unwrap();
+        fs::write(dir.path().join("foundry.toml"), toml_content).unwrap();
 
         let result = load_remappings(dir.path());
         assert_eq!(result.len(), 2);
@@ -705,8 +1082,8 @@ remappings = [
     #[test]
     fn test_load_remappings_prefers_remappings_txt_over_foundry_toml() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("remappings.txt"), "@txt/=lib/txt/\n").unwrap();
-        std::fs::write(
+        fs::write(dir.path().join("remappings.txt"), "@txt/=lib/txt/\n").unwrap();
+        fs::write(
             dir.path().join("foundry.toml"),
             "[profile.default]\nremappings = [\"@toml/=lib/toml/\"]\n",
         )

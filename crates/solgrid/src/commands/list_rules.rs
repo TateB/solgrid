@@ -32,3 +32,24 @@ pub fn run() -> i32 {
     println!("\n{} rules available", registry.len());
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compiler_version_listed_severity_matches_runtime_default() {
+        let engine = LintEngine::new();
+        let rule = engine
+            .registry()
+            .get("security/compiler-version")
+            .expect("compiler-version rule should exist");
+        let meta = rule.meta();
+
+        let severity = solgrid_config::Config::default()
+            .lint
+            .rule_severity(meta.id, meta.default_severity);
+
+        assert_eq!(severity, Some(meta.default_severity));
+    }
+}

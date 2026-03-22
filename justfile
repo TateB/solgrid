@@ -63,6 +63,14 @@ wasm target="web":
 install:
     pnpm install
 
+# Regenerate docs/rules.md from the live rule registry
+rules-doc-write:
+    bash scripts/rules-doc.sh --write
+
+# Verify docs/rules.md matches the live rule registry
+rules-doc:
+    bash scripts/rules-doc.sh --check
+
 # --- VSCode extension ---
 
 # Compile the VSCode extension
@@ -137,7 +145,7 @@ npm-shim-test:
 # --- CI ---
 
 # Run all Rust CI checks
-ci-rust: check test test-doc fmt clippy deny
+ci-rust: check test test-doc fmt clippy deny rules-doc
 
 # Run all CI checks locally
 ci: ci-rust vscode-test-all prettier-test

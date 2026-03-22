@@ -2,9 +2,10 @@
 
 use crate::rule::Rule;
 use crate::rules;
+use solgrid_config::canonical_rule_id;
 use solgrid_config::Config;
 use solgrid_diagnostics::RuleMeta;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Registry of all available lint rules.
 pub struct RuleRegistry {
@@ -43,16 +44,32 @@ impl RuleRegistry {
 
     /// Get a rule by ID.
     pub fn get(&self, id: &str) -> Option<&dyn Rule> {
-        self.index.get(id).map(|&idx| self.rules[idx].as_ref())
+        self.index
+            .get(canonical_rule_id(id))
+            .map(|&idx| self.rules[idx].as_ref())
     }
 
     /// Get enabled rules based on config.
     pub fn enabled_rules(&self, config: &Config) -> Vec<&dyn Rule> {
+        let enabled_ids: HashSet<&'static str> = self
+            .rules
+            .iter()
+            .filter(|rule| {
+                let meta = rule.meta();
+                config.lint.is_rule_enabled(meta.id, meta.category)
+            })
+            .map(|rule| rule.meta().id)
+            .collect();
+
         self.rules
             .iter()
             .filter(|rule| {
                 let meta = rule.meta();
                 config.lint.is_rule_enabled(meta.id, meta.category)
+                    && meta
+                        .suppressed_by()
+                        .iter()
+                        .all(|id| !enabled_ids.contains(canonical_rule_id(id)))
             })
             .map(|r| r.as_ref())
             .collect()

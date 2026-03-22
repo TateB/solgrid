@@ -10,7 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
 
+### Changed
+- Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
+- Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits
+- Make VSCode `solgrid.configPath` load an explicit config on initialize and config changes, and align the Prettier plugin with `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
+- Generate `docs/rules.md` from `solgrid list-rules` and verify it in CI to keep the rules reference aligned with the live registry
+
+### Deprecated
+- Treat `best-practices/use-natspec` as an alias for `docs/natspec-function` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
+
 ### Fixed
+- Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
+- Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
+- Fix compiler-version allowed-range checks for wide pragma ranges, make config hashing deterministic for cache invalidation, and cache LSP/CLI config resolution instead of reloading configs on every file or request
 - Resolve remappings for `check`/`fix` from each linted file's workspace instead of only the current working directory
 - Canonicalize `style/prefer-remappings` paths before prefix matching so symlinked workspace paths still match
 

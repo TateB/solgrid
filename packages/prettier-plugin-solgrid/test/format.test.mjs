@@ -62,6 +62,32 @@ function f() public {}
       const result = await formatSol(source, { useTabs: true });
       expect(result).toContain("\t");
     });
+
+    it("maps contract body spacing and deprecated alias consistently", async () => {
+      const source = `contract T {
+uint256 public x;
+uint256 public y;
+}
+`;
+      const canonical = await formatSol(source, {
+        solidityContractBodySpacing: "single",
+      });
+      const deprecatedAlias = await formatSol(source, {
+        solidityContractNewLines: true,
+      });
+
+      expect(canonical).toBe(deprecatedAlias);
+      expect(canonical).toContain("uint256 public x;\n\n  uint256 public y;");
+    });
+
+    it("respects inheritance brace placement option", async () => {
+      const source =
+        "contract OwnedResolver is Ownable, ABIResolver, AddrResolver, ContentHashResolver, DNSResolver, InterfaceResolver, NameResolver, PubkeyResolver, TextResolver, ExtendedResolver {}\n";
+      const result = await formatSol(source, {
+        solidityInheritanceBraceNewLine: false,
+      });
+      expect(result).not.toContain("\n{");
+    });
   });
 
   describe("error handling", () => {
@@ -116,6 +142,8 @@ describe("plugin exports", () => {
     expect(plugin.options.solidityMultilineFuncHeader).toBeDefined();
     expect(plugin.options.solidityOverrideSpacing).toBeDefined();
     expect(plugin.options.solidityWrapComments).toBeDefined();
+    expect(plugin.options.solidityContractBodySpacing).toBeDefined();
+    expect(plugin.options.solidityInheritanceBraceNewLine).toBeDefined();
     expect(plugin.options.solidityContractNewLines).toBeDefined();
   });
 

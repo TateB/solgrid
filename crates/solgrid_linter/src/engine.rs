@@ -90,7 +90,7 @@ impl LintEngine {
                     // Apply severity override from config
                     let severity = config
                         .lint
-                        .rule_severity(&diag.rule_id, rule.meta().category)
+                        .rule_severity(&diag.rule_id, rule.meta().default_severity)
                         .unwrap_or(diag.severity);
                     diagnostics.push(Diagnostic { severity, ..diag });
                 }

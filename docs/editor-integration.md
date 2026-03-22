@@ -20,7 +20,7 @@ The `editors/vscode/` directory contains a VSCode extension that provides:
 | `solgrid.fixOnSave` | `true` | Auto-fix safe issues on save |
 | `solgrid.fixOnSave.unsafeFixes` | `false` | Also apply suggestion-level fixes |
 | `solgrid.formatOnSave` | `true` | Format on save |
-| `solgrid.configPath` | `null` | Path to solgrid.toml (auto-discovered) |
+| `solgrid.configPath` | `null` | Optional path to a specific `solgrid.toml`; otherwise the server auto-discovers the nearest config per document |
 
 ## Cursor
 
@@ -47,4 +47,4 @@ The server communicates via stdio and supports the standard LSP protocol.
 | `textDocument/onSave` | Auto-fix safe fixes + format on save (configurable) |
 | `textDocument/hover` | Rule documentation on hover over a diagnostic |
 | `textDocument/completion` | Inline suppression comment completion (`// solgrid-disable...`) |
-| `workspace/configuration` | Read `solgrid.toml` from workspace root |
+| `initialize` / `workspace/didChangeConfiguration` | Read fix-on-save, format-on-save, and optional `configPath` settings from the client |

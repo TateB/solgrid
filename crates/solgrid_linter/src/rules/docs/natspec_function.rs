@@ -4,7 +4,7 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
-use crate::rules::best_practices::use_natspec::extract_natspec;
+use crate::rules::best_practices::natspec_helpers::extract_natspec;
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{FunctionKind, ItemKind, Visibility};
 use solgrid_parser::with_parsed_ast_sequential;
