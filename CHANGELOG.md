@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Intelligent autocomplete with in-scope symbols, dot completions (`msg.`, `MyEnum.`, `MyLib.`), builtin globals/keywords/types, imported symbol completions, and auto-import suggestions with automatic `import` statement insertion
 - Workspace-wide symbol index that scans `.sol` files on startup and updates incrementally as files change
+- Integration tests for intelligent autocomplete: builtins/keywords, dot completions, in-scope symbols, and auto-import
 
 ### Fixed
 - Fix VSCode integration test that expected zero completions in non-comment context after adding intelligent autocomplete
