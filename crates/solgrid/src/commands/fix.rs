@@ -13,7 +13,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         return run_stdin(&config, cli);
     }
 
-    let engine = LintEngine::from_workspace();
     let files = super::discover_sol_files(paths);
 
     if files.is_empty() {
@@ -35,6 +34,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
             }
         };
 
+        let engine = super::engine_for_lint_path(path);
         let (fixed_source, remaining) = engine.fix_source(&source, path, &config, cli.unsafe_fixes);
 
         if fixed_source != source {
