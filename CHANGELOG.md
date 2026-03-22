@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Intelligent autocomplete with in-scope symbols, dot completions (`msg.`, `MyEnum.`, `MyLib.`), builtin globals/keywords/types, imported symbol completions, and auto-import suggestions with automatic `import` statement insertion
 - Workspace-wide symbol index that scans `.sol` files on startup and updates incrementally as files change
+- Integration tests for intelligent autocomplete: builtins/keywords, dot completions, in-scope symbols, and auto-import
+
+### Fixed
+- Fix VSCode integration test that expected zero completions in non-comment context after adding intelligent autocomplete
 
 ### Changed
 - Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
@@ -24,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
 - Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
 - Fix compiler-version allowed-range checks for wide pragma ranges, make config hashing deterministic for cache invalidation, and cache LSP/CLI config resolution instead of reloading configs on every file or request
+- Fix LSP autocomplete for namespace imports (`import "./Foo.sol" as Foo; Foo.Bar`) and refresh the auto-import index from disk when files close, only dropping entries for deleted files
 
 ## [0.0.4] - 2026-03-19
 

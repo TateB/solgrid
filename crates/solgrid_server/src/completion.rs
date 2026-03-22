@@ -261,6 +261,42 @@ fn dot_completions(
         }
     }
 
+    // Namespace imports (`import "./Foo.sol" as Foo;` / `import * as Foo from "./Foo.sol";`)
+    // expose the imported file's file-level exports as `Foo.Bar`.
+    if let Some(importing_file) = uri_to_path(uri) {
+        for import in &table.imports {
+            let matches_namespace = match &import.symbols {
+                ImportedSymbols::Plain(Some(alias)) | ImportedSymbols::Glob(alias) => {
+                    alias == container_name
+                }
+                _ => false,
+            };
+            if !matches_namespace {
+                continue;
+            }
+
+            let resolved_path = match resolver.resolve(&import.path, &importing_file) {
+                Some(path) => path,
+                None => continue,
+            };
+            let imported_source = match get_source(&resolved_path) {
+                Some(source) => source,
+                None => continue,
+            };
+            let filename = resolved_path.to_string_lossy().to_string();
+            let imported_table = match symbols::build_symbol_table(&imported_source, &filename) {
+                Some(table) => table,
+                None => continue,
+            };
+
+            return imported_table
+                .file_level_symbols()
+                .iter()
+                .map(|sym| symbol_to_completion_item(sym, "b_"))
+                .collect();
+        }
+    }
+
     // Try cross-file container resolution.
     if let Some(importing_file) = uri_to_path(uri) {
         if let Some(cross) = definition::resolve_cross_file_symbol(
@@ -906,6 +942,60 @@ contract Test {
         );
 
         assert!(items.iter().any(|i| i.label == "add"));
+    }
+
+    #[test]
+    fn test_dot_completions_namespace_import_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib_path = dir.path().join("Lib.sol");
+        fs::write(
+            &lib_path,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Token {}
+library MathLib {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let main_path = dir.path().join("Main.sol");
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "./Lib.sol" as Lib;
+
+contract Main {
+    function foo() public pure {
+        Lib.
+    }
+}
+"#;
+        fs::write(&main_path, main_source).unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let engine = LintEngine::new();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { std::fs::read_to_string(path).ok() };
+        let offset = main_source.rfind("Lib.").unwrap() + 4;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let items = completions(
+            &engine,
+            main_source,
+            &pos,
+            &uri,
+            &get_source,
+            &resolver,
+            &empty_index(),
+        );
+
+        assert!(items.iter().any(|i| i.label == "Token"));
+        assert!(items.iter().any(|i| i.label == "MathLib"));
     }
 
     // ── In-scope completions ───────────────────────────────────────────────
