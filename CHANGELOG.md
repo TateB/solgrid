@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Intelligent autocomplete with in-scope symbols, dot completions (`msg.`, `MyEnum.`, `MyLib.`), builtin globals/keywords/types, imported symbol completions, and auto-import suggestions with automatic `import` statement insertion
 - Workspace-wide symbol index that scans `.sol` files on startup and updates incrementally as files change
 
+### Fixed
+- Fix VSCode integration test that expected zero completions in non-comment context after adding intelligent autocomplete
+
 ### Changed
 - Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
 - Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits

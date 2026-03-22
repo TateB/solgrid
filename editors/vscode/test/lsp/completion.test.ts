@@ -98,7 +98,7 @@ describe("LSP Completion", () => {
     }
   });
 
-  it("returns empty completions in non-comment context", async () => {
+  it("returns no suppression directives in non-comment context", async () => {
     const uri = "file:///tmp/completion-code-test.sol";
     const content = "contract Test { uint256 x; }\n";
 
@@ -111,7 +111,12 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-    expect(items).toHaveLength(0);
+    // Non-comment context may return autocomplete items (keywords, builtins, etc.)
+    // but should NOT include suppression comment directives
+    const directives = items.filter((i) =>
+      i.label.startsWith("solgrid-")
+    );
+    expect(directives).toHaveLength(0);
   });
 
   it("directive completions have SNIPPET kind", async () => {
