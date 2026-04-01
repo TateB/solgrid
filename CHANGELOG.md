@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/rules.md` is now generated from `solgrid list-rules` and verified in CI so the published rule reference stays in sync
 
 ### Deprecated
-- `best-practices/use-natspec` is now an alias for `docs/natspec-function`, and `solidityContractNewLines` remains a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
+- Treat legacy NatSpec rule IDs such as `best-practices/use-natspec` as deprecated config aliases for `docs/natspec` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
 
 ### Fixed
 - Fixed duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed file-based remapping discovery to avoid inheriting unrelated current-working-directory remappings
 - Fixed `style/prefer-remappings` path matching by canonicalizing remapping targets before prefix comparison
 - Fixed `style/prefer-remappings` producing mangled import paths when remapping prefixes omit a trailing slash
+- Fixed `style/imports-ordering` safe autofixes to avoid rewriting across separated import blocks or comment-bearing import gaps
+- Fixed selector-tag autofixes to skip unresolved custom types, and aligned initialization classification between `style/category-headers` and `style/ordering`
 ### Removed
 - `style/import-path-format` rule (replaced by `style/prefer-remappings`)
 
@@ -40,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Cross-file hover support: imported symbols (errors, functions, contracts, etc.) now show signature and NatSpec documentation
 - Transitive import resolution: hover and go-to-definition now follow re-exported symbols through intermediate files
+- Add typed `[lint.settings]` decoding helpers so rules can safely read structured configuration with default fallback
+- Add shared AST-side import resolution, symbol table, and NatSpec attachment helpers reused by the linter and language server
+- Add `docs/natspec` rule to consolidate NatSpec presence, tag validation, formatting, and triple-slash enforcement
+- Add `docs/selector-tags` rule to compute and enforce canonical interface IDs and custom error selectors
+- Add `style/category-headers` rule to rebuild contract bodies into canonical declaration sections with standardized headers
 - Implement autofix for `style/imports-ordering` rule (sorts import groups alphabetically)
 - Implement autofix for `style/contract-layout` rule (reorders contract members by type)
 - Implement autofix for `best-practices/visibility-modifier-order` rule (reorders function modifiers)
@@ -50,10 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement autofix for `style/ordering` rule (reorders top-level declarations)
 - Implement autofix for `style/import-path-format` rule (converts import paths to consistent format)
 
+### Changed
+- Expand `style/imports-ordering` to support grouped ordering, regex-configured import groups, spacing-only fixes, and quote normalization on full rewrites
+- Rewrite `style/ordering` as the single declaration-order rule for file-level and contract-level scopes, including initialization and mutability ordering
+- Replace the fragmented NatSpec and layout/order rule registrations with consolidated `docs/natspec`, `docs/selector-tags`, `style/category-headers`, `style/ordering`, and `style/imports-ordering`
+- Remove overlapping NatSpec rules (`best-practices/use-natspec`, `best-practices/natspec-params`, `best-practices/natspec-returns`, `docs/natspec-contract`, `docs/natspec-interface`, `docs/natspec-function`, `docs/natspec-event`, `docs/natspec-error`, `docs/natspec-param-mismatch`) from the active registry
+- Remove overlapping style rules (`style/func-order`, `style/contract-layout`) from the active registry
+
 ### Fixed
 - Fix `security/state-visibility` diagnostic span covering initializer values instead of just the declaration
 - Fix `gas/bool-storage` diagnostic span highlighting leading whitespace instead of the `bool` keyword
 - Fix autofix regressions in modifier ordering, unused import cleanup, function ordering, and import path normalization
+- Add regression coverage for consolidated NatSpec, selector, ordering, import grouping, and rule-settings behaviors
 - Fix reorder autofixes stripping NatSpec comments from reordered functions and top-level declarations
 - Fix formatter duplicating inline assembly comments on repeated save/format
 - Fix formatter moving struct-field comments, empty-block comments, wrapped initializers, and ternary indentation

@@ -215,27 +215,27 @@ describe("LSP Code Actions", () => {
     expect(actions).toBeDefined();
   });
 
-  it("returns contract-layout suggestion for later diagnostic ranges", async () => {
-    const uri = fixtureUri("contract-layout-multi.sol");
+  it("returns suggestion code actions for later diagnostic ranges", async () => {
+    const uri = fixtureUri("constant-vars.sol");
     const content = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.0;
+
 contract Test {
-    function foo() external {}
-    error Oops();
-    uint256 x;
+    uint256 public x = 1;
+    uint256 public y = 2;
 }
 `;
 
     openDocument(client, uri, content);
     const result = await waitForDiagnostics(client, uri);
 
-    const contractLayoutDiags = result.diagnostics.filter(
+    const constantDiags = result.diagnostics.filter(
       (diag): diag is Diagnostic =>
-        diag.code === "style/contract-layout"
+        diag.code === "gas/use-constant"
     );
-    expect(contractLayoutDiags.length).toBeGreaterThanOrEqual(2);
+    expect(constantDiags.length).toBeGreaterThanOrEqual(2);
 
-    const secondDiag = contractLayoutDiags[1];
+    const secondDiag = constantDiags[1];
     const actions = await requestCodeActions(
       client,
       uri,
@@ -245,7 +245,7 @@ contract Test {
 
     expect(actions).toContainEqual(
       expect.objectContaining({
-        title: "Reorder contract members (suggestion)",
+        title: "Add `constant` modifier (suggestion)",
         kind: "refactor",
       })
     );

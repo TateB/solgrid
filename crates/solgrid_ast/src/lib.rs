@@ -2,6 +2,10 @@
 //!
 //! Provides convenience functions over Solar's AST types.
 
+pub mod natspec;
+pub mod resolve;
+pub mod symbols;
+
 pub use solgrid_parser::solar_ast;
 pub use solgrid_parser::solar_interface;
 

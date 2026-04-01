@@ -18,8 +18,8 @@ solgrid explain <rule-id>
 
 Notes:
 
-- The current registry contains 89 active rules.
-- `best-practices/use-natspec` is a deprecated config alias for `docs/natspec-function`, not a separately registered rule.
+- The current registry contains 82 active rules.
+- Legacy NatSpec rule IDs such as `best-practices/use-natspec` are deprecated config aliases for `docs/natspec`, not separately registered rules.
 
 ## Security
 
@@ -56,8 +56,6 @@ Notes:
 | `best-practices/function-max-lines` | `warning` | `-` |
 | `best-practices/imports-on-top` | `warning` | `-` |
 | `best-practices/max-states-count` | `warning` | `-` |
-| `best-practices/natspec-params` | `warning` | `-` |
-| `best-practices/natspec-returns` | `warning` | `-` |
 | `best-practices/no-console` | `warning` | `-` |
 | `best-practices/no-empty-blocks` | `warning` | `-` |
 | `best-practices/no-floating-pragma` | `warning` | `-` |
@@ -116,15 +114,14 @@ Notes:
 
 | Rule | Default Severity | Fix |
 |---|---|---|
-| `style/contract-layout` | `info` | `suggestion` |
+| `style/category-headers` | `info` | `suggestion` |
 | `style/eol-last` | `info` | `safe` |
 | `style/file-name-format` | `info` | `-` |
-| `style/func-order` | `info` | `suggestion` |
 | `style/imports-ordering` | `info` | `safe` |
 | `style/max-line-length` | `info` | `-` |
 | `style/no-multiple-empty-lines` | `info` | `safe` |
 | `style/no-trailing-whitespace` | `info` | `safe` |
-| `style/ordering` | `info` | `suggestion` |
+| `style/ordering` | `info` | `-` |
 | `style/prefer-remappings` | `info` | `suggestion` |
 
 ## Docs
@@ -132,11 +129,7 @@ Notes:
 | Rule | Default Severity | Fix |
 |---|---|---|
 | `docs/license-identifier` | `info` | `-` |
-| `docs/natspec-contract` | `info` | `-` |
-| `docs/natspec-error` | `info` | `-` |
-| `docs/natspec-event` | `info` | `-` |
-| `docs/natspec-function` | `info` | `-` |
-| `docs/natspec-interface` | `info` | `-` |
+| `docs/natspec` | `info` | `safe` |
 | `docs/natspec-modifier` | `info` | `-` |
-| `docs/natspec-param-mismatch` | `info` | `safe` |
+| `docs/selector-tags` | `info` | `safe` |
 

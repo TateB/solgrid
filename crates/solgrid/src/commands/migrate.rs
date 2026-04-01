@@ -176,6 +176,10 @@ fn map_solhint_rule(solhint_rule: &str) -> Option<&'static str> {
         "max-line-length" => Some("style/max-line-length"),
         "no-trailing-whitespace" | "no-mix-tabs-and-spaces" => Some("style/no-trailing-whitespace"),
         "ordering" => Some("style/ordering"),
+        "category-headers" => Some("style/category-headers"),
+        "import-order-separation" => Some("style/imports-ordering"),
+        "natspec" | "natspec-triple-slash" => Some("docs/natspec"),
+        "selector-tags" => Some("docs/selector-tags"),
 
         _ => None,
     }

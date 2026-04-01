@@ -1,5 +1,6 @@
 /target
 node_modules/
+.vscode-test/
 editors/vscode/out/
 editors/vscode/.vscode-test/
 editors/vscode/bin/
@@ -17,3 +18,5 @@ packages/solgrid/npm/cli-*/solgrid.exe
 
 # npm NAPI platform binaries (injected by CI before publish)
 packages/prettier-plugin-solgrid/npm/napi-*/solgrid_napi.node
+
+.solgrid_cache/

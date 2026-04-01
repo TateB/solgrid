@@ -1,28 +1,41 @@
 //! Rule: style/imports-ordering
 //!
-//! Sort import statements alphabetically by path.
+//! Enforce grouped import ordering with blank-line separation.
 
 use crate::context::LintContext;
 use crate::rule::Rule;
+use regex::Regex;
+use serde::Deserialize;
 use solgrid_diagnostics::*;
+use solgrid_parser::solar_ast::{ImportItems, ItemKind};
+use solgrid_parser::with_parsed_ast_sequential;
+use std::cmp::Ordering;
 
 static META: RuleMeta = RuleMeta {
     id: "style/imports-ordering",
     name: "imports-ordering",
     category: RuleCategory::Style,
     default_severity: Severity::Info,
-    description: "import statements should be sorted alphabetically",
+    description: "imports should be ordered by group and path, with blank lines between groups",
     fix_availability: FixAvailability::Available(FixSafety::Safe),
 };
 
 pub struct ImportsOrderingRule;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct ImportsOrderingSettings {
+    import_order: Vec<String>,
+}
 
 #[derive(Clone)]
 struct ImportStatement {
     start: usize,
     end: usize,
     path: String,
-    blank_before: bool,
+    group: usize,
+    sort_path: String,
+    text: String,
 }
 
 impl Rule for ImportsOrderingRule {
@@ -31,152 +44,239 @@ impl Rule for ImportsOrderingRule {
     }
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+        let settings: ImportsOrderingSettings = ctx.config.rule_settings(META.id);
+        let compiled_patterns: Vec<Regex> = settings
+            .import_order
+            .iter()
+            .filter_map(|pattern| Regex::new(pattern).ok())
+            .collect();
 
-        let imports = collect_import_statements(ctx.source);
+        let filename = ctx.path.to_string_lossy().to_string();
+        with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
+            let mut diagnostics = Vec::new();
+            let mut import_block = Vec::new();
 
-        // Check consecutive import groups are sorted
-        if imports.len() < 2 {
-            return diagnostics;
-        }
-
-        // Find groups of consecutive imports (separated by non-import lines)
-        let mut group_start = 0;
-        while group_start < imports.len() {
-            let mut group_end = group_start + 1;
-            while group_end < imports.len() {
-                // Check if imports are on consecutive or near-consecutive lines
-                let prev_end = imports[group_end - 1].end;
-                let curr_start = imports[group_end].start;
-                // Allow a small gap (blank lines between imports are okay)
-                let gap = &ctx.source[prev_end..curr_start];
-                if gap.trim().is_empty() || gap.split('\n').count() <= 2 {
-                    group_end += 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Check if this group is sorted
-            let mut max_path = imports[group_start].path.to_lowercase();
-            let mut violation_indexes = Vec::new();
-            for (i, import) in imports
-                .iter()
-                .enumerate()
-                .take(group_end)
-                .skip(group_start + 1)
-            {
-                let path_lower = import.path.to_lowercase();
-                if path_lower < max_path {
-                    violation_indexes.push(i);
-                } else {
-                    max_path = path_lower;
-                }
-            }
-
-            if !violation_indexes.is_empty() {
-                let mut sorted = imports[group_start..group_end].to_vec();
-                sorted.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
-
-                let group_range = imports[group_start].start..imports[group_end - 1].end;
-                let mut sorted_text = String::new();
-                for (idx, import) in sorted.iter().enumerate() {
-                    if idx > 0 {
-                        if import.blank_before {
-                            sorted_text.push_str("\n\n");
-                        } else {
-                            sorted_text.push('\n');
-                        }
+            for item in source_unit.items.iter() {
+                match &item.kind {
+                    ItemKind::Import(import) => {
+                        import_block.push(import_statement(
+                            ctx.source,
+                            import,
+                            item.span,
+                            &compiled_patterns,
+                        ));
                     }
-                    sorted_text.push_str(&ctx.source[import.start..import.end]);
+                    _ => {
+                        diagnostics.extend(check_import_block(ctx.source, &import_block));
+                        import_block.clear();
+                    }
                 }
+            }
 
-                let fix = Fix::safe(
-                    "Sort imports alphabetically",
-                    vec![TextEdit::replace(group_range, sorted_text)],
+            diagnostics.extend(check_import_block(ctx.source, &import_block));
+            diagnostics
+        })
+        .unwrap_or_default()
+    }
+}
+
+fn import_statement(
+    source: &str,
+    import: &solgrid_parser::solar_ast::ImportDirective<'_>,
+    span: solgrid_parser::solar_interface::Span,
+    compiled_patterns: &[Regex],
+) -> ImportStatement {
+    let span = solgrid_ast::span_to_range(span);
+    let end = line_end(source, span.end);
+    let path = import.path.value.to_string();
+    let group = group_index(&path, compiled_patterns);
+    ImportStatement {
+        start: span.start,
+        end,
+        sort_path: path.to_ascii_lowercase(),
+        text: reconstruct_import(import),
+        path,
+        group,
+    }
+}
+
+fn check_import_block(source: &str, imports: &[ImportStatement]) -> Vec<Diagnostic> {
+    if imports.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut sorted = imports.to_vec();
+    sorted.sort_by(compare_imports);
+
+    if imports_out_of_order(imports, &sorted) {
+        let fix = import_rewrite_fix(source, imports, &sorted);
+
+        return imports
+            .iter()
+            .zip(sorted.iter())
+            .filter(|(actual, expected)| {
+                actual.group != expected.group || actual.sort_path != expected.sort_path
+            })
+            .map(|(actual, expected)| {
+                let diagnostic = Diagnostic::new(
+                    META.id,
+                    format!(
+                        "import `{}` should appear before `{}`",
+                        actual.path, expected.path
+                    ),
+                    META.default_severity,
+                    actual.start..actual.end,
                 );
 
-                for violation_idx in violation_indexes {
-                    diagnostics.push(
-                        Diagnostic::new(
-                            META.id,
-                            format!(
-                                "import `{}` should appear before `{}`",
-                                imports[violation_idx].path,
-                                imports[violation_idx - 1].path
-                            ),
-                            META.default_severity,
-                            imports[violation_idx].start..imports[violation_idx].end,
-                        )
-                        .with_fix(fix.clone()),
-                    );
+                match &fix {
+                    Some(fix) => diagnostic.with_fix(fix.clone()),
+                    None => diagnostic,
                 }
-            }
+            })
+            .collect();
+    }
 
-            group_start = group_end;
+    spacing_diagnostics(source, imports)
+}
+
+fn import_rewrite_fix(
+    source: &str,
+    imports: &[ImportStatement],
+    sorted: &[ImportStatement],
+) -> Option<Fix> {
+    // Avoid offering a destructive safe fix when comments or declarations are
+    // interleaved between imports.
+    if imports
+        .windows(2)
+        .any(|pair| !source[pair[0].end..pair[1].start].trim().is_empty())
+    {
+        return None;
+    }
+
+    let replacement = render_import_block(sorted);
+    let full_range = imports[0].start
+        ..imports
+            .last()
+            .map(|import| import.end)
+            .unwrap_or(imports[0].end);
+
+    Some(Fix::safe(
+        "Rewrite import block with canonical ordering",
+        vec![TextEdit::replace(full_range, replacement)],
+    ))
+}
+
+fn group_index(path: &str, patterns: &[Regex]) -> usize {
+    if patterns.is_empty() {
+        return if path.starts_with('.') { 1 } else { 0 };
+    }
+
+    patterns
+        .iter()
+        .position(|pattern| pattern.is_match(path))
+        .unwrap_or(patterns.len())
+}
+
+fn compare_imports(left: &ImportStatement, right: &ImportStatement) -> Ordering {
+    left.group
+        .cmp(&right.group)
+        .then_with(|| left.sort_path.cmp(&right.sort_path))
+}
+
+fn imports_out_of_order(actual: &[ImportStatement], sorted: &[ImportStatement]) -> bool {
+    actual
+        .iter()
+        .zip(sorted.iter())
+        .any(|(left, right)| left.group != right.group || left.sort_path != right.sort_path)
+}
+
+fn render_import_block(imports: &[ImportStatement]) -> String {
+    let mut rendered = String::new();
+
+    for (index, import) in imports.iter().enumerate() {
+        if index > 0 {
+            if imports[index - 1].group != import.group {
+                rendered.push_str("\n\n");
+            } else {
+                rendered.push('\n');
+            }
+        }
+        rendered.push_str(&import.text);
+    }
+
+    rendered
+}
+
+fn spacing_diagnostics(source: &str, imports: &[ImportStatement]) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    for pair in imports.windows(2) {
+        let [previous, current] = pair else {
+            continue;
+        };
+        if previous.group == current.group {
+            continue;
         }
 
-        diagnostics
+        let gap = &source[previous.end..current.start];
+        if !gap.trim().is_empty() {
+            continue;
+        }
+        let blank_lines = gap.matches('\n').count().saturating_sub(1);
+        if blank_lines > 0 {
+            continue;
+        }
+
+        diagnostics.push(
+            Diagnostic::new(
+                META.id,
+                format!(
+                    "import group for `{}` should be separated from the previous group by a blank line",
+                    current.path
+                ),
+                META.default_severity,
+                current.start..current.end,
+            )
+            .with_fix(Fix::safe(
+                "Insert blank line between import groups",
+                vec![TextEdit::insert(current.start, "\n")],
+            )),
+        );
+    }
+
+    diagnostics
+}
+
+fn reconstruct_import(import: &solgrid_parser::solar_ast::ImportDirective<'_>) -> String {
+    match &import.items {
+        ImportItems::Plain(alias) => match alias {
+            Some(alias) => format!("import \"{}\" as {};", import.path.value, alias.as_str()),
+            None => format!("import \"{}\";", import.path.value),
+        },
+        ImportItems::Aliases(aliases) => {
+            let items = aliases
+                .iter()
+                .map(|(name, alias)| match alias {
+                    Some(alias) => format!("{} as {}", name.as_str(), alias.as_str()),
+                    None => name.as_str().to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("import {{{items}}} from \"{}\";", import.path.value)
+        }
+        ImportItems::Glob(alias) => {
+            format!(
+                "import * as {} from \"{}\";",
+                alias.as_str(),
+                import.path.value
+            )
+        }
     }
 }
 
-fn collect_import_statements(source: &str) -> Vec<ImportStatement> {
-    let mut imports = Vec::new();
-    let mut offset = 0;
-    let mut previous_import_end: Option<usize> = None;
-    let mut current_start: Option<usize> = None;
-
-    for line in source.split('\n') {
-        let line_end = offset + line.len();
-        let trimmed = line.trim();
-
-        if current_start.is_none() && trimmed.starts_with("import ") {
-            current_start = Some(offset);
-        }
-
-        if let Some(start) = current_start {
-            if trimmed.ends_with(';') {
-                let statement = &source[start..line_end];
-                if let Some(path) = extract_import_path(statement) {
-                    let blank_before = previous_import_end
-                        .map(|prev_end| has_blank_line_between(&source[prev_end..start]))
-                        .unwrap_or(false);
-                    imports.push(ImportStatement {
-                        start,
-                        end: line_end,
-                        path,
-                        blank_before,
-                    });
-                    previous_import_end = Some(line_end);
-                }
-                current_start = None;
-            }
-        }
-
-        offset = line_end + 1;
-    }
-
-    imports
-}
-
-fn has_blank_line_between(gap: &str) -> bool {
-    gap.lines().filter(|line| line.trim().is_empty()).count() > 1
-}
-
-/// Extract the import path from an import statement.
-fn extract_import_path(line: &str) -> Option<String> {
-    // Match patterns:
-    //   import "path";
-    //   import {Foo} from "path";
-    //   import * as Foo from "path";
-    for quote in ['"', '\''] {
-        if let Some(start) = line.rfind(quote) {
-            let before = &line[..start];
-            if let Some(path_start) = before.rfind(quote) {
-                let path = &line[path_start + 1..start];
-                return Some(path.to_string());
-            }
-        }
-    }
-    None
+fn line_end(source: &str, pos: usize) -> usize {
+    source[pos..]
+        .find('\n')
+        .map(|offset| pos + offset)
+        .unwrap_or(source.len())
 }

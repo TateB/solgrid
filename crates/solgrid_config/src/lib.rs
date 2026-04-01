@@ -3,7 +3,7 @@
 //! Handles `solgrid.toml` config files with support for hierarchical
 //! config resolution and foundry.toml fallback.
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solgrid_diagnostics::{RuleCategory, Severity};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -55,15 +55,33 @@ pub enum RulePreset {
 /// Canonicalize deprecated or aliased rule IDs.
 pub fn canonical_rule_id(rule_id: &str) -> &str {
     match rule_id {
-        "best-practices/use-natspec" => "docs/natspec-function",
+        "best-practices/use-natspec"
+        | "best-practices/natspec-params"
+        | "best-practices/natspec-returns"
+        | "docs/natspec-contract"
+        | "docs/natspec-error"
+        | "docs/natspec-event"
+        | "docs/natspec-function"
+        | "docs/natspec-interface"
+        | "docs/natspec-param-mismatch" => "docs/natspec",
         _ => rule_id,
     }
 }
 
-fn aliased_rule_id(rule_id: &str) -> Option<&'static str> {
+fn aliased_rule_ids(rule_id: &str) -> &'static [&'static str] {
     match rule_id {
-        "docs/natspec-function" => Some("best-practices/use-natspec"),
-        _ => None,
+        "docs/natspec" => &[
+            "best-practices/use-natspec",
+            "best-practices/natspec-params",
+            "best-practices/natspec-returns",
+            "docs/natspec-contract",
+            "docs/natspec-error",
+            "docs/natspec-event",
+            "docs/natspec-function",
+            "docs/natspec-interface",
+            "docs/natspec-param-mismatch",
+        ],
+        _ => &[],
     }
 }
 
@@ -102,14 +120,31 @@ impl LintConfig {
                 return Some(*level);
             }
         }
-        aliased_rule_id(canonical).and_then(|alias| self.rules.get(alias).copied())
+        aliased_rule_ids(canonical)
+            .iter()
+            .find_map(|alias| self.rules.get(*alias).copied())
     }
 
-    fn table_setting(&self, rule_id: &str, key: &str) -> Option<&toml::Value> {
+    fn setting_value(&self, rule_id: &str) -> Option<&toml::Value> {
         let canonical = canonical_rule_id(rule_id);
         self.settings
             .get(canonical)
-            .or_else(|| aliased_rule_id(canonical).and_then(|alias| self.settings.get(alias)))
+            .or_else(|| {
+                if canonical != rule_id {
+                    self.settings.get(rule_id)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                aliased_rule_ids(canonical)
+                    .iter()
+                    .find_map(|alias| self.settings.get(*alias))
+            })
+    }
+
+    fn table_setting(&self, rule_id: &str, key: &str) -> Option<&toml::Value> {
+        self.setting_value(rule_id)
             .and_then(|value| value.as_table())
             .and_then(|table| table.get(key))
     }
@@ -124,6 +159,17 @@ impl LintConfig {
         self.table_setting(rule_id, key)?
             .as_str()
             .map(ToOwned::to_owned)
+    }
+
+    /// Decode typed settings for a specific rule, falling back to defaults on
+    /// missing or invalid configuration.
+    pub fn rule_settings<T>(&self, rule_id: &str) -> T
+    where
+        T: DeserializeOwned + Default,
+    {
+        self.setting_value(rule_id)
+            .and_then(|value| value.clone().try_into::<T>().ok())
+            .unwrap_or_default()
     }
 
     /// Get the configured severity for a rule, or None if the rule is disabled.
@@ -268,6 +314,17 @@ impl VersionRequirement {
             VersionOperator::LessThanOrEqual => candidate.cmp_key() <= self.version.cmp_key(),
             VersionOperator::Equal => candidate.cmp_key() == self.version.cmp_key(),
         }
+    }
+}
+
+impl Config {
+    /// Decode typed settings for a specific rule, falling back to defaults on
+    /// missing or invalid configuration.
+    pub fn rule_settings<T>(&self, rule_id: &str) -> T
+    where
+        T: DeserializeOwned + Default,
+    {
+        self.lint.rule_settings(rule_id)
     }
 }
 
@@ -440,12 +497,38 @@ impl ConfigResolver {
 }
 
 fn normalize_rule_aliases(config: &mut Config) {
-    if let Some(level) = config.lint.rules.remove("best-practices/use-natspec") {
-        config
-            .lint
-            .rules
-            .entry("docs/natspec-function".to_string())
-            .or_insert(level);
+    let legacy_rule_keys: Vec<_> = config
+        .lint
+        .rules
+        .keys()
+        .filter(|key| canonical_rule_id(key.as_str()) != key.as_str())
+        .cloned()
+        .collect();
+    for key in legacy_rule_keys {
+        if let Some(level) = config.lint.rules.remove(&key) {
+            config
+                .lint
+                .rules
+                .entry(canonical_rule_id(&key).to_string())
+                .or_insert(level);
+        }
+    }
+
+    let legacy_setting_keys: Vec<_> = config
+        .lint
+        .settings
+        .keys()
+        .filter(|key| canonical_rule_id(key.as_str()) != key.as_str())
+        .cloned()
+        .collect();
+    for key in legacy_setting_keys {
+        if let Some(value) = config.lint.settings.remove(&key) {
+            config
+                .lint
+                .settings
+                .entry(canonical_rule_id(&key).to_string())
+                .or_insert(value);
+        }
     }
 }
 
@@ -703,6 +786,12 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+    struct TestRuleSettings {
+        enabled: bool,
+        names: Vec<String>,
+    }
+
     #[test]
     fn test_default_config() {
         let config = Config::default();
@@ -807,6 +896,81 @@ threads = 4
     }
 
     #[test]
+    fn test_lint_rule_settings_decode_typed_value() {
+        let mut config = LintConfig::default();
+        config.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::Table(
+                [
+                    ("enabled".to_string(), toml::Value::Boolean(true)),
+                    (
+                        "names".to_string(),
+                        toml::Value::Array(vec![toml::Value::String("notice".into())]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(
+            settings,
+            TestRuleSettings {
+                enabled: true,
+                names: vec!["notice".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_lint_rule_settings_missing_value_uses_default() {
+        let config = LintConfig::default();
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(settings, TestRuleSettings::default());
+    }
+
+    #[test]
+    fn test_lint_rule_settings_invalid_value_uses_default() {
+        let mut config = LintConfig::default();
+        config.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::String("not-an-object".into()),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(settings, TestRuleSettings::default());
+    }
+
+    #[test]
+    fn test_config_rule_settings_delegates_to_lint_settings() {
+        let mut config = Config::default();
+        config.lint.settings.insert(
+            "docs/natspec".to_string(),
+            toml::Value::Table(
+                [
+                    ("enabled".to_string(), toml::Value::Boolean(true)),
+                    (
+                        "names".to_string(),
+                        toml::Value::Array(vec![toml::Value::String("dev".into())]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let settings: TestRuleSettings = config.rule_settings("docs/natspec");
+        assert_eq!(
+            settings,
+            TestRuleSettings {
+                enabled: true,
+                names: vec!["dev".into()],
+            }
+        );
+    }
+
+    #[test]
     fn test_format_config_defaults() {
         let config = FormatConfig::default();
         assert_eq!(config.line_length, 120);
@@ -842,7 +1006,7 @@ threads = 4
         assert!(config.is_rule_enabled("security/tx-origin", RuleCategory::Security));
         assert!(config.is_rule_enabled("best-practices/no-console", RuleCategory::BestPractices));
         assert!(config.is_rule_enabled("naming/func-name-mixedcase", RuleCategory::Naming));
-        assert!(!config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
+        assert!(!config.is_rule_enabled("docs/natspec", RuleCategory::Docs));
         assert!(!config.is_rule_enabled("gas/custom-errors", RuleCategory::Gas));
         assert!(!config.is_rule_enabled("style/max-line-length", RuleCategory::Style));
     }
@@ -850,12 +1014,10 @@ threads = 4
     #[test]
     fn test_rule_override_can_enable_outside_preset() {
         let mut config = LintConfig::default();
-        config
-            .rules
-            .insert("docs/natspec-function".into(), RuleLevel::Warn);
-        assert!(config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
+        config.rules.insert("docs/natspec".into(), RuleLevel::Warn);
+        assert!(config.is_rule_enabled("docs/natspec", RuleCategory::Docs));
         assert_eq!(
-            config.rule_severity("docs/natspec-function", Severity::Info),
+            config.rule_severity("docs/natspec", Severity::Info),
             Some(Severity::Warning)
         );
     }
@@ -866,11 +1028,8 @@ threads = 4
         config
             .rules
             .insert("best-practices/use-natspec".into(), RuleLevel::Off);
-        assert!(!config.is_rule_enabled("docs/natspec-function", RuleCategory::Docs));
-        assert_eq!(
-            config.rule_severity("docs/natspec-function", Severity::Info),
-            None
-        );
+        assert!(!config.is_rule_enabled("docs/natspec", RuleCategory::Docs));
+        assert_eq!(config.rule_severity("docs/natspec", Severity::Info), None);
     }
 
     #[test]
@@ -940,11 +1099,30 @@ threads = 4
         .unwrap();
 
         let config = load_config(&config_path).unwrap();
-        assert_eq!(
-            config.lint.rules.get("docs/natspec-function"),
-            Some(&RuleLevel::Off)
-        );
+        assert_eq!(config.lint.rules.get("docs/natspec"), Some(&RuleLevel::Off));
         assert!(!config.lint.rules.contains_key("best-practices/use-natspec"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_normalizes_deprecated_natspec_settings_alias() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_alias_settings_{}_{}",
+            std::process::id(),
+            3
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            "[lint.settings.\"docs/natspec-function\"]\ncomment_style = \"either\"\n",
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert!(config.lint.settings.contains_key("docs/natspec"));
+        assert!(!config.lint.settings.contains_key("docs/natspec-function"));
 
         let _ = fs::remove_dir_all(root);
     }

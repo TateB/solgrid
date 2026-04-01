@@ -226,23 +226,23 @@ require(tx.origin == owner); // solgrid-disable-line security/tx-origin
 
 ## 4. Rule Inventory
 
-solgrid currently exposes 89 active rules across six categories. The canonical inventory lives in [docs/rules.md](docs/rules.md), which is a better fit than this architecture document for the full catalog.
+solgrid currently exposes 82 active rules across six categories. The canonical inventory lives in [docs/rules.md](docs/rules.md), which is a better fit than this architecture document for the full catalog.
 
 ### Rule Counts Summary
 
 | Category | Count | Fixable |
 |---|---|---|
 | Security | 19 | 2 |
-| Best Practices | 21 | 5 |
+| Best Practices | 19 | 5 |
 | Naming | 16 | 0 |
 | Gas Optimization | 15 | 5 |
-| Style | 10 | 8 |
-| Documentation | 8 | 1 |
-| **Total** | **89** | **21** |
+| Style | 9 | 6 |
+| Documentation | 4 | 2 |
+| **Total** | **82** | **20** |
 
 Notes:
 
-- `best-practices/use-natspec` is a deprecated config alias for `docs/natspec-function`, not an active registered rule.
+- Legacy NatSpec rule IDs such as `best-practices/use-natspec` are deprecated config aliases for `docs/natspec`, not active registered rules.
 - Default preset behavior is documented in [docs/configuration.md](docs/configuration.md).
 
 ---

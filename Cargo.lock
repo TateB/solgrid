@@ -2443,7 +2443,9 @@ version = "0.0.4"
 dependencies = [
  "solar-ast",
  "solar-interface",
+ "solgrid_config",
  "solgrid_parser",
+ "tempfile",
 ]
 
 [[package]]
@@ -2485,6 +2487,8 @@ dependencies = [
  "insta",
  "rayon",
  "regex",
+ "serde",
+ "sha3",
  "solar-ast",
  "solar-data-structures",
  "solar-interface",
@@ -2493,6 +2497,7 @@ dependencies = [
  "solgrid_config",
  "solgrid_diagnostics",
  "solgrid_parser",
+ "tempfile",
  "toml",
 ]
 

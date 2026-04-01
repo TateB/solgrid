@@ -120,22 +120,10 @@ contract Test {
         let engine = LintEngine::new();
         let mut config = Config::default();
         // Disable some rules that might fire on this simple example
-        config.lint.rules.insert(
-            "best-practices/natspec-params".into(),
-            solgrid_config::RuleLevel::Off,
-        );
-        config.lint.rules.insert(
-            "best-practices/natspec-returns".into(),
-            solgrid_config::RuleLevel::Off,
-        );
-        config.lint.rules.insert(
-            "docs/natspec-contract".into(),
-            solgrid_config::RuleLevel::Off,
-        );
-        config.lint.rules.insert(
-            "docs/natspec-function".into(),
-            solgrid_config::RuleLevel::Off,
-        );
+        config
+            .lint
+            .rules
+            .insert("docs/natspec".into(), solgrid_config::RuleLevel::Off);
         let diagnostics = lint_to_lsp_diagnostics(&engine, source, Path::new("clean.sol"), &config);
         // Should not detect any security/naming issues on clean code
         let security_diags: Vec<_> = diagnostics

@@ -75,7 +75,7 @@ emit_section() {
   echo "Notes:"
   echo
   echo "- The current registry contains $TOTAL_RULES active rules."
-  echo "- \`best-practices/use-natspec\` is a deprecated config alias for \`docs/natspec-function\`, not a separately registered rule."
+  echo "- Legacy NatSpec rule IDs such as \`best-practices/use-natspec\` are deprecated config aliases for \`docs/natspec\`, not separately registered rules."
   echo
 } > "$TMP_FILE"
 

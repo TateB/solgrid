@@ -1,10 +1,20 @@
 //! Integration tests for lint rules.
 
-use solgrid_config::{Config, RuleLevel};
+use solgrid_config::{Config, RuleLevel, RulePreset};
 use solgrid_linter::testing::{
     assert_diagnostic_count, assert_no_diagnostics, fix_source, fix_source_unsafe,
-    lint_source_for_rule, lint_source_with_config,
+    fix_source_unsafe_with_config, fix_source_with_config, lint_source_for_rule,
+    lint_source_for_rule_with_config, lint_source_with_config,
 };
+use solgrid_linter::LintEngine;
+use std::fs;
+
+fn load_test_config(toml_str: &str) -> Config {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("solgrid.toml");
+    fs::write(&path, toml_str).unwrap();
+    solgrid_config::load_config(&path).unwrap()
+}
 
 fn table(entries: &[(&str, toml::Value)]) -> toml::Value {
     toml::Value::Table(
@@ -1367,36 +1377,40 @@ contract MyContract {
 }
 
 #[test]
-fn test_docs_natspec_function_detected() {
+fn test_docs_natspec_detected_for_missing_function_tags() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+/// @notice Test contract
 contract Test {
-    function doSomething() public pure returns (uint256) {
-        return 42;
+    function doSomething(uint256 x) public pure returns (uint256) {
+        return x;
     }
 }
 "#;
-    assert_diagnostic_count(source, "docs/natspec-function", 1);
+    assert_diagnostic_count(source, "docs/natspec", 1);
 }
 
 #[test]
-fn test_docs_natspec_function_clean() {
+fn test_docs_natspec_clean_for_function_tags() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+/// @notice Test contract
 contract Test {
     /// @notice Does something useful
-    function doSomething() public pure returns (uint256) {
-        return 42;
+    /// @param x The input value
+    /// @return result The output value
+    function doSomething(uint256 x) public pure returns (uint256 result) {
+        return x;
     }
 }
 "#;
-    assert_no_diagnostics(source, "docs/natspec-function");
+    assert_no_diagnostics(source, "docs/natspec");
 }
 
 #[test]
-fn test_docs_natspec_function_block_comment_clean() {
+fn test_docs_natspec_fixes_block_comment_to_triple_slash() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -1404,30 +1418,33 @@ contract Test {
     /**
      * @notice Does something useful
      */
-    function doSomething() public pure returns (uint256) {
-        return 42;
-    }
+    function doSomething() public {}
 }
 "#;
-    assert_no_diagnostics(source, "docs/natspec-function");
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @notice Does something useful"));
+    assert!(!fixed.contains("/**"));
 }
 
 #[test]
-fn test_docs_natspec_function_skips_internal() {
+fn test_docs_natspec_simple_getter_forbids_return_tag() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+/// @notice Test contract
 contract Test {
-    function _internal() internal pure returns (uint256) {
-        return 42;
+    /// @notice Reads the value
+    /// @return currentValue The stored value
+    function value() public view returns (uint256 currentValue) {
+        return 1;
     }
 }
 "#;
-    assert_no_diagnostics(source, "docs/natspec-function");
+    assert_diagnostic_count(source, "docs/natspec", 1);
 }
 
 #[test]
-fn test_missing_natspec_reports_once_with_default_config() {
+fn test_docs_natspec_disabled_by_default_config() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
@@ -1440,75 +1457,33 @@ contract Test {
     let diagnostics = lint_source_with_config(source, &Config::default());
     let natspec_diagnostics: Vec<_> = diagnostics
         .iter()
-        .filter(|diag| diag.rule_id == "docs/natspec-function")
+        .filter(|diag| diag.rule_id == "docs/natspec")
         .collect();
     assert!(natspec_diagnostics.is_empty());
 }
 
 #[test]
-fn test_natspec_params_detected() {
+fn test_docs_natspec_inheritdoc_skips_missing_tags() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-contract Test {
-    /// @notice Transfers tokens
-    function transfer(address to, uint256 amount) public {
-    }
-}
-"#;
-    let diagnostics = lint_source_for_rule(source, "best-practices/natspec-params");
-    assert!(
-        diagnostics.len() >= 2,
-        "Expected at least 2 diagnostics for missing @param, got {}",
-        diagnostics.len()
-    );
+/// @notice Interface docs
+interface ITest {
+    /// @notice Does foo
+    /// @param x Input value
+    /// @return result Output value
+    function foo(uint256 x) external returns (uint256 result);
 }
 
-#[test]
-fn test_natspec_params_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @notice Transfers tokens
-    /// @param to Recipient address
-    /// @param amount Number of tokens
-    function transfer(address to, uint256 amount) public {
+/// @notice Implementation docs
+contract Test is ITest {
+    /// @inheritdoc ITest
+    function foo(uint256 x) external returns (uint256) {
+        return x;
     }
 }
 "#;
-    assert_no_diagnostics(source, "best-practices/natspec-params");
-}
-
-#[test]
-fn test_natspec_returns_detected() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @notice Gets the balance
-    function getBalance() public pure returns (uint256) {
-        return 42;
-    }
-}
-"#;
-    assert_diagnostic_count(source, "best-practices/natspec-returns", 1);
-}
-
-#[test]
-fn test_natspec_returns_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @notice Gets the balance
-    /// @return The current balance
-    function getBalance() public pure returns (uint256) {
-        return 42;
-    }
-}
-"#;
-    assert_no_diagnostics(source, "best-practices/natspec-returns");
+    assert_no_diagnostics(source, "docs/natspec");
 }
 
 #[test]
@@ -2344,44 +2319,29 @@ contract Test {
 }
 
 #[test]
-fn test_func_order_detected() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    function foo() private {}
-    function bar() external {}
-}
-"#;
-    assert_diagnostic_count(source, "style/func-order", 1);
-}
-
-#[test]
-fn test_func_order_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    constructor() {}
-    function bar() external {}
-    function baz() public {}
-    function foo() private {}
-}
-"#;
-    assert_no_diagnostics(source, "style/func-order");
-}
-
-#[test]
-fn test_ordering_detected() {
+fn test_ordering_detected_at_file_level() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 contract Test {}
 import "./Foo.sol";
 pragma solidity ^0.8.0;
 "#;
-    // import after contract, pragma after contract
-    let diags = lint_source_for_rule(source, "style/ordering");
-    assert!(!diags.is_empty(), "Expected at least 1 ordering diagnostic");
+    let diagnostics = lint_source_for_rule(source, "style/ordering");
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].fix.is_none());
+}
+
+#[test]
+fn test_ordering_detected_in_contract_body() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done();
+    uint256 value;
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
 }
 
 #[test]
@@ -2390,36 +2350,194 @@ fn test_ordering_clean() {
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 import "./Foo.sol";
-contract Test {}
+contract Test {
+    uint256 constant VALUE = 1;
+    uint256 value;
+    event Done();
+    constructor() {}
+    function run() external {}
+    function _helper() internal {}
+}
 "#;
     assert_no_diagnostics(source, "style/ordering");
 }
 
 #[test]
-fn test_contract_layout_detected() {
+fn test_ordering_detected_constructor_after_function() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Test {
-    function foo() external {}
-    uint256 x;
+    function run() external {}
+    constructor() {}
 }
 "#;
-    assert_diagnostic_count(source, "style/contract-layout", 1);
+    assert_diagnostic_count(source, "style/ordering", 1);
 }
 
 #[test]
-fn test_contract_layout_clean() {
+fn test_ordering_detected_receive_after_fallback() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Test {
-    uint256 x;
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    function foo() external {}
+    fallback() external payable {}
+    receive() external payable {}
 }
 "#;
-    assert_no_diagnostics(source, "style/contract-layout");
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_ordering_detected_visibility_ordering_within_functions() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function _helper() internal {}
+    function run() external {}
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_ordering_detected_mutability_ordering_within_visibility() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function inspect() external view returns (uint256) {
+        return 1;
+    }
+
+    function mutate() external returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "style/ordering", 1);
+}
+
+#[test]
+fn test_category_headers_fix_rebuilds_sections() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done();
+    uint256 value;
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Storage"));
+    assert!(fixed.contains("// Events"));
+    assert!(fixed.contains("// Implementation"));
+    assert!(fixed.find("// Storage").unwrap() < fixed.find("// Events").unwrap());
+}
+
+#[test]
+fn test_category_headers_fix_splits_function_sections() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function _helper() internal {}
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Implementation"));
+    assert!(fixed.contains("// Internal Functions"));
+    assert!(fixed.find("function run").unwrap() < fixed.find("function _helper").unwrap());
+}
+
+#[test]
+fn test_category_headers_respects_min_categories_setting() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint.settings."style/category-headers"]
+min_categories = 3
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/category-headers", &config);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn test_category_headers_uses_configured_initialization_functions() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function bootstrap() public {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+initialization_functions = ["bootstrap"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Initialization"));
+    assert!(!fixed.contains("// Implementation"));
+}
+
+#[test]
+fn test_category_headers_fix_keeps_initialize_consistent_with_ordering() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private _value;
+    function initialize() public {}
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_no_diagnostics(&fixed, "style/ordering");
+}
+
+#[test]
+fn test_ordering_uses_configured_initialization_functions() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private _value;
+    function bootstrap() public {}
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+initialization_functions = ["bootstrap"]
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/ordering", &config);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn test_category_headers_empty_contract_body_clean() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/category-headers");
 }
 
 #[test]
@@ -2430,261 +2548,70 @@ import "./Zebra.sol";
 import "./Alpha.sol";
 contract Test {}
 "#;
-    assert_diagnostic_count(source, "style/imports-ordering", 1);
+    let diagnostics = lint_source_for_rule(source, "style/imports-ordering");
+    assert!(!diagnostics.is_empty());
 }
 
 #[test]
-fn test_imports_ordering_clean() {
+fn test_imports_ordering_ignores_nonconsecutive_import_blocks() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./Alpha.sol";
 import "./Zebra.sol";
 contract Test {}
+import "./Alpha.sol";
 "#;
     assert_no_diagnostics(source, "style/imports-ordering");
-}
-
-#[test]
-fn test_imports_ordering_fix() {
-    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Zebra.sol\";\nimport \"./Alpha.sol\";\ncontract Test {}\n";
     let fixed = fix_source(source);
-    assert!(fixed.contains("import \"./Alpha.sol\";\nimport \"./Zebra.sol\";"));
+    assert!(fixed.contains("contract Test {}"));
 }
 
 #[test]
-fn test_imports_ordering_fix_multiple() {
-    let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\nimport \"./Charlie.sol\";\nimport \"./Alpha.sol\";\nimport \"./Bravo.sol\";\ncontract Test {}\n";
-    let fixed = fix_source(source);
-    assert!(fixed
-        .contains("import \"./Alpha.sol\";\nimport \"./Bravo.sol\";\nimport \"./Charlie.sol\";"));
-}
-
-#[test]
-fn test_imports_ordering_fix_attached_to_every_diagnostic() {
+fn test_imports_ordering_fix_groups_and_normalizes_quotes() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./C.sol";
-
-import "./B.sol";
-import "./A.sol";
-contract Test {}
-"#;
-    let diags = lint_source_for_rule(source, "style/imports-ordering");
-    assert_eq!(diags.len(), 2);
-    assert!(
-        diags.iter().all(|diag| diag.fix.is_some()),
-        "Expected every imports-ordering diagnostic to have a fix"
-    );
-
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import "./A.sol";
-
-import "./B.sol";
-import "./C.sol";
+import './Local.sol';
+import "forge-std/Test.sol";
 contract Test {}
 "#;
     let fixed = fix_source(source);
-    assert_eq!(fixed, expected);
+    assert!(fixed.contains("import \"forge-std/Test.sol\";\n\nimport \"./Local.sol\";"));
+    assert!(!fixed.contains("import './Local.sol';"));
 }
 
 #[test]
-fn test_imports_ordering_fix_multiline_import() {
+fn test_imports_ordering_spacing_only_fix() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import {
-    Zebra
-} from "./Zebra.sol";
-import {Alpha} from "./Alpha.sol";
-contract Test {
-    Zebra zebra;
-    Alpha alpha;
-}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import {Alpha} from "./Alpha.sol";
-import {
-    Zebra
-} from "./Zebra.sol";
-contract Test {
-    Zebra zebra;
-    Alpha alpha;
-}
-"#;
-    let fixed = fix_source(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_fix_source_import_overlaps_do_not_cancel_all_fixes() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import {Zebra} from "./Zebra.sol";
-import {Alpha} from "./Alpha.sol";
-contract Test {}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+import "forge-std/Test.sol";
+import "./Local.sol";
 contract Test {}
 "#;
     let fixed = fix_source(source);
-    assert_eq!(fixed, expected);
+    assert!(fixed.contains("import \"forge-std/Test.sol\";\n\nimport \"./Local.sol\";"));
 }
 
 #[test]
-fn test_contract_layout_fix() {
-    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() external {}\n    uint256 x;\n}\n";
-    let diags = lint_source_for_rule(source, "style/contract-layout");
-    assert!(!diags.is_empty());
-    assert!(
-        diags[0].fix.is_some(),
-        "Expected contract-layout diagnostic to have a fix"
-    );
-    let fixed = fix_source_unsafe(source);
-    let x_pos = fixed.find("uint256 x").unwrap();
-    let foo_pos = fixed.find("function foo").unwrap();
-    assert!(
-        x_pos < foo_pos,
-        "Expected state variable before function after fix"
-    );
-}
-
-#[test]
-fn test_contract_layout_fix_attached_to_every_diagnostic() {
+fn test_imports_ordering_respects_regex_group_config() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-contract Test {
-    function foo() external {}
-    error Oops();
-    uint256 x;
-}
+import "./Local.sol";
+import "forge-std/Test.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
 "#;
-    let diags = lint_source_for_rule(source, "style/contract-layout");
-    assert_eq!(diags.len(), 2);
-    assert!(
-        diags.iter().all(|diag| diag.fix.is_some()),
-        "Expected every contract-layout diagnostic to have a fix"
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/imports-ordering"]
+import_order = ["^@openzeppelin/", "^forge-std/"]
+"#,
     );
-
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    uint256 x;
-
-    error Oops();
-
-    function foo() external {}
-}
-"#;
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_contract_layout_fix_normalizes_member_spacing() {
-    let source = r#"abstract contract CCIPBatcher is CCIPReader {
-    /// @notice The batch gateway supplied an incorrect number of responses.
-    /// @dev Error selector: `0x4a5c31ea`
-    error InvalidBatchGatewayResponse();
-
-    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
-    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
-    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
-    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
-    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
-    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
-    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
-
-    uint256 constant FLAGS_ANY_ERROR =
-        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
-    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
-
-    /// @dev An independent `OffchainLookup` session.
-    struct Lookup {
-        address target; // contract to call
-        bytes call; // initial calldata
-        bytes data; // response or error
-        uint256 flags; // see: FLAG_*
-    }
-
-    /// @dev A batch gateway session.
-    struct Batch {
-        Lookup[] lookups;
-        string[] gateways;
-    }
-
-    function createBatch(
-        bytes memory data
-    ) internal pure returns (Batch memory batch) {}
-}
-"#;
-    let expected = r#"abstract contract CCIPBatcher is CCIPReader {
-    /// @dev An independent `OffchainLookup` session.
-    struct Lookup {
-        address target; // contract to call
-        bytes call; // initial calldata
-        bytes data; // response or error
-        uint256 flags; // see: FLAG_*
-    }
-
-    /// @dev A batch gateway session.
-    struct Batch {
-        Lookup[] lookups;
-        string[] gateways;
-    }
-
-    uint256 constant FLAG_OFFCHAIN = 1 << 0; // the lookup reverted `OffchainLookup`
-    uint256 constant FLAG_CALL_ERROR = 1 << 1; // the initial call or callback reverted
-    uint256 constant FLAG_BATCH_ERROR = 1 << 2; // `OffchainLookup` failed on the batch gateway
-    uint256 constant FLAG_EMPTY_RESPONSE = 1 << 3; // the initial call or callback returned `0x`
-    uint256 constant FLAG_EIP140_BEFORE = 1 << 4; // does not have revert op code
-    uint256 constant FLAG_EIP140_AFTER = 1 << 5; // has revert op code
-    uint256 constant FLAG_DONE = 1 << 6; // the lookup has finished processing (private)
-
-    uint256 constant FLAGS_ANY_ERROR =
-        FLAG_CALL_ERROR | FLAG_BATCH_ERROR | FLAG_EMPTY_RESPONSE;
-    uint256 constant FLAGS_ANY_EIP140 = FLAG_EIP140_BEFORE | FLAG_EIP140_AFTER;
-
-    /// @notice The batch gateway supplied an incorrect number of responses.
-    /// @dev Error selector: `0x4a5c31ea`
-    error InvalidBatchGatewayResponse();
-
-    function createBatch(
-        bytes memory data
-    ) internal pure returns (Batch memory batch) {}
-}
-"#;
-
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_contract_layout_fix_preserves_natspec() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @dev Performs work.
-    function run() external {}
-
-    /// @dev Failure signal.
-    error Oops();
-}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @dev Failure signal.
-    error Oops();
-
-    /// @dev Performs work.
-    function run() external {}
-}
-"#;
-
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
+    let fixed = fix_source_with_config(source, &config);
+    assert!(fixed.contains(
+        "import \"@openzeppelin/contracts/token/ERC20/ERC20.sol\";\n\nimport \"forge-std/Test.sol\";\n\nimport \"./Local.sol\";"
+    ));
 }
 
 #[test]
@@ -2741,135 +2668,6 @@ fn test_fix_use_immutable() {
         fixed.contains("immutable"),
         "Expected `immutable` keyword to be inserted"
     );
-}
-
-#[test]
-fn test_fix_func_order() {
-    let source = "\n// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    function foo() private {}\n    function bar() external {}\n}\n";
-    let diags = lint_source_for_rule(source, "style/func-order");
-    assert!(!diags.is_empty());
-    assert!(
-        diags[0].fix.is_some(),
-        "Expected func-order diagnostic to have a fix"
-    );
-    let fixed = fix_source_unsafe(source);
-    let bar_pos = fixed.find("function bar").unwrap();
-    let foo_pos = fixed.find("function foo").unwrap();
-    assert!(
-        bar_pos < foo_pos,
-        "Expected external before private after fix"
-    );
-}
-
-#[test]
-fn test_fix_func_order_attached_to_every_diagnostic() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    function a() private {}
-    function b() public {}
-    function c() external {}
-}
-"#;
-    let diags = lint_source_for_rule(source, "style/func-order");
-    assert_eq!(diags.len(), 2);
-    assert!(
-        diags.iter().all(|diag| diag.fix.is_some()),
-        "Expected every func-order diagnostic to have a fix"
-    );
-
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    function c() external {}
-
-    function b() public {}
-
-    function a() private {}
-}
-"#;
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_fix_func_order_preserves_natspec() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @dev Private helper.
-    function a() private {}
-
-    /// @dev External entrypoint.
-    function b() external {}
-}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @dev External entrypoint.
-    function b() external {}
-
-    /// @dev Private helper.
-    function a() private {}
-}
-"#;
-
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_fix_ordering() {
-    let source = "\n// SPDX-License-Identifier: MIT\ncontract Test {}\nimport \"./Foo.sol\";\npragma solidity ^0.8.0;\n";
-    let diags = lint_source_for_rule(source, "style/ordering");
-    assert!(!diags.is_empty());
-    assert!(
-        diags[0].fix.is_some(),
-        "Expected ordering diagnostic to have a fix"
-    );
-}
-
-#[test]
-fn test_fix_ordering_attached_to_every_diagnostic() {
-    let source = r#"// SPDX-License-Identifier: MIT
-contract Test {}
-library Math {}
-import "./Foo.sol";
-pragma solidity ^0.8.0;
-"#;
-    let diags = lint_source_for_rule(source, "style/ordering");
-    assert_eq!(diags.len(), 3);
-    assert!(
-        diags.iter().all(|diag| diag.fix.is_some()),
-        "Expected every ordering diagnostic to have a fix"
-    );
-
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import "./Foo.sol";
-library Math {}
-contract Test {}
-"#;
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_fix_ordering_preserves_natspec() {
-    let source = r#"// SPDX-License-Identifier: MIT
-/// @dev Top-level test contract.
-contract Test {}
-pragma solidity ^0.8.0;
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-/// @dev Top-level test contract.
-contract Test {}
-"#;
-
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
 }
 
 // =============================================================================
@@ -2999,32 +2797,6 @@ contract Test {
 }
 "#;
     let fixed = fix_source(source);
-    assert_eq!(fixed, expected);
-}
-
-#[test]
-fn test_fix_func_order_preserves_non_function_members() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    uint256 value;
-
-    function foo() private {}
-
-    function bar() external {}
-}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    uint256 value;
-
-    function bar() external {}
-
-    function foo() private {}
-}
-"#;
-    let fixed = fix_source_unsafe(source);
     assert_eq!(fixed, expected);
 }
 
@@ -3410,149 +3182,45 @@ contract Test {}
 }
 
 #[test]
-fn test_natspec_contract_detected() {
+fn test_docs_natspec_detected_on_contract() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Test {}
 "#;
-    assert_diagnostic_count(source, "docs/natspec-contract", 1);
+    assert_diagnostic_count(source, "docs/natspec", 1);
 }
 
 #[test]
-fn test_natspec_contract_clean() {
+fn test_docs_natspec_param_mismatch_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-/// @title Test contract
-/// @author Test author
-contract Test {}
-"#;
-    assert_no_diagnostics(source, "docs/natspec-contract");
-}
-
-#[test]
-fn test_natspec_contract_missing_author() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-/// @title Test contract
-contract Test {}
-"#;
-    assert_diagnostic_count(source, "docs/natspec-contract", 1);
-}
-
-#[test]
-fn test_natspec_interface_detected() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-interface ITest {
-    function foo() external;
-}
-"#;
-    assert_diagnostic_count(source, "docs/natspec-interface", 1);
-}
-
-#[test]
-fn test_natspec_interface_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-interface ITest {
-    /// @notice Does foo
-    function foo() external;
-}
-"#;
-    assert_no_diagnostics(source, "docs/natspec-interface");
-}
-
-#[test]
-fn test_natspec_function_detected() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    function foo() external {}
-}
-"#;
-    assert_diagnostic_count(source, "docs/natspec-function", 1);
-}
-
-#[test]
-fn test_natspec_function_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+/// @notice Test contract
 contract Test {
     /// @notice Does foo
-    function foo() external {}
-}
-"#;
-    assert_no_diagnostics(source, "docs/natspec-function");
-}
-
-#[test]
-fn test_natspec_function_missing_notice() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @param x The value
+    /// @param wrongName The value
     function foo(uint256 x) external {}
 }
 "#;
-    assert_diagnostic_count(source, "docs/natspec-function", 1);
+    assert_diagnostic_count(source, "docs/natspec", 1);
 }
 
 #[test]
-fn test_natspec_event_detected() {
+fn test_docs_natspec_event_clean() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-contract Test {
-    event Transfer(address indexed from, address indexed to, uint256 value);
-}
-"#;
-    assert_diagnostic_count(source, "docs/natspec-event", 1);
-}
-
-#[test]
-fn test_natspec_event_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+/// @notice Test contract
 contract Test {
     /// @notice Emitted on transfer
+    /// @param from Sender
+    /// @param to Recipient
+    /// @param value Amount
     event Transfer(address indexed from, address indexed to, uint256 value);
 }
 "#;
-    assert_no_diagnostics(source, "docs/natspec-event");
-}
-
-#[test]
-fn test_natspec_error_detected() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    error Unauthorized();
-}
-"#;
-    assert_diagnostic_count(source, "docs/natspec-error", 1);
-}
-
-#[test]
-fn test_natspec_error_clean() {
-    let source = r#"
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-contract Test {
-    /// @notice Thrown when unauthorized
-    error Unauthorized();
-}
-"#;
-    assert_no_diagnostics(source, "docs/natspec-error");
+    assert_no_diagnostics(source, "docs/natspec");
 }
 
 #[test]
@@ -3585,31 +3253,147 @@ contract Test {
 }
 
 #[test]
-fn test_natspec_param_mismatch_detected() {
+fn test_selector_tags_error_fix() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Test {
-    /// @notice Does foo
-    /// @param wrongName The value
-    function foo(uint256 x) external {}
+    error Unauthorized(address caller);
 }
 "#;
-    assert_diagnostic_count(source, "docs/natspec-param-mismatch", 1);
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Error selector: `0x8e4a23d6`"));
 }
 
 #[test]
-fn test_natspec_param_mismatch_clean() {
+fn test_selector_tags_interface_fix() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function foo(uint256 x) external returns (bool);
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Interface selector: `0x2fbebd38`"));
+}
+
+#[test]
+fn test_selector_tags_resolves_imported_structs() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared_path = dir.path().join("Shared.sol");
+    let main_path = dir.path().join("Main.sol");
+
+    fs::write(
+        &shared_path,
+        r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+struct Pair {
+    uint256 left;
+    bool right;
+}
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        &main_path,
+        r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Pair} from "./Shared.sol";
+
+error InvalidPair(Pair pair);
+"#,
+    )
+    .unwrap();
+
+    let engine = LintEngine::new();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    let result = engine.fix_source(
+        &fs::read_to_string(&main_path).unwrap(),
+        &main_path,
+        &config,
+        false,
+    );
+    let fixed = result.0;
+    assert!(fixed.contains("/// @dev Error selector: `0x"));
+}
+
+#[test]
+fn test_selector_tags_skip_unresolved_custom_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("Main.sol");
+
+    fs::write(
+        &main_path,
+        r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Pair} from "./Missing.sol";
+
+error InvalidPair(Pair pair);
+"#,
+    )
+    .unwrap();
+
+    let source = fs::read_to_string(&main_path).unwrap();
+    let engine = LintEngine::new();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+
+    let diagnostics = engine.lint_source(&source, &main_path, &config).diagnostics;
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "docs/selector-tags")
+            .count(),
+        0
+    );
+
+    let (fixed, _) = engine.fix_source(&source, &main_path, &config, false);
+    assert!(!fixed.contains("Error selector"));
+}
+
+#[test]
+fn test_selector_tags_rewrites_incorrect_error_tag() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 contract Test {
-    /// @notice Does foo
-    /// @param x The value
-    function foo(uint256 x) external {}
+    /// @dev Error selector: `0xdeadbeef`
+    error Unauthorized(address caller);
 }
 "#;
-    assert_no_diagnostics(source, "docs/natspec-param-mismatch");
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Error selector: `0x8e4a23d6`"));
+    assert!(!fixed.contains("0xdeadbeef"));
+}
+
+#[test]
+fn test_selector_tags_parameterless_interface_rewrites_stale_tag() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Interface selector: `0xdeadbeef`
+interface ITest {
+    function foo() external;
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("/// @dev Interface selector: `0xc2985578`"));
+    assert!(!fixed.contains("0xdeadbeef"));
+}
+
+#[test]
+fn test_selector_tags_ignores_events() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done(address caller);
+}
+"#;
+    assert_no_diagnostics(source, "docs/selector-tags");
 }
 
 // =============================================================================
@@ -3982,10 +3766,11 @@ contract Test { string constant NAME = "123456789012345678901234567890"; }
 fn test_registry_has_all_rules() {
     let engine = solgrid_linter::LintEngine::new();
     let registry = engine.registry();
-    // 89 active rules plus one deprecated config alias for use-natspec.
+    // The NatSpec and ordering cleanup removes several overlapping rules while
+    // adding consolidated replacements.
     assert!(
-        registry.len() >= 89,
-        "Expected at least 89 rules, got {}",
+        registry.len() >= 82,
+        "Expected at least 82 rules, got {}",
         registry.len()
     );
 }
@@ -4002,17 +3787,6 @@ fn test_registry_lookup() {
     assert!(registry.get("naming/interface-starts-with-i").is_some());
     assert!(registry.get("best-practices/no-floating-pragma").is_some());
     assert!(registry.get("best-practices/constructor-syntax").is_some());
-    assert!(registry.get("best-practices/use-natspec").is_some());
-    assert_eq!(
-        registry
-            .get("best-practices/use-natspec")
-            .unwrap()
-            .meta()
-            .id,
-        "docs/natspec-function"
-    );
-    assert!(registry.get("best-practices/natspec-params").is_some());
-    assert!(registry.get("best-practices/natspec-returns").is_some());
     assert!(registry
         .get("best-practices/visibility-modifier-order")
         .is_some());
@@ -4027,6 +3801,11 @@ fn test_registry_lookup() {
     assert!(registry.get("gas/small-strings").is_some());
     assert!(registry.get("gas/custom-errors").is_some());
     assert!(registry.get("gas/use-bytes32").is_some());
+    assert!(registry.get("docs/natspec").is_some());
+    assert!(registry.get("docs/selector-tags").is_some());
+    assert!(registry.get("style/category-headers").is_some());
+    assert!(registry.get("style/imports-ordering").is_some());
+    assert!(registry.get("style/ordering").is_some());
     assert!(registry.get("gas/calldata-parameters").is_some());
     assert!(registry.get("gas/indexed-events").is_some());
     assert!(registry.get("gas/named-return-values").is_some());
@@ -4036,24 +3815,19 @@ fn test_registry_lookup() {
     assert!(registry.get("gas/struct-packing").is_some());
     assert!(registry.get("gas/tight-variable-packing").is_some());
     // Style rules
-    assert!(registry.get("style/func-order").is_some());
     assert!(registry.get("style/ordering").is_some());
+    assert!(registry.get("style/category-headers").is_some());
     assert!(registry.get("style/imports-ordering").is_some());
     assert!(registry.get("style/max-line-length").is_some());
     assert!(registry.get("style/no-trailing-whitespace").is_some());
     assert!(registry.get("style/eol-last").is_some());
     assert!(registry.get("style/no-multiple-empty-lines").is_some());
-    assert!(registry.get("style/contract-layout").is_some());
     assert!(registry.get("style/prefer-remappings").is_some());
     assert!(registry.get("style/file-name-format").is_some());
     // Docs rules
-    assert!(registry.get("docs/natspec-contract").is_some());
-    assert!(registry.get("docs/natspec-interface").is_some());
-    assert!(registry.get("docs/natspec-function").is_some());
-    assert!(registry.get("docs/natspec-event").is_some());
-    assert!(registry.get("docs/natspec-error").is_some());
+    assert!(registry.get("docs/natspec").is_some());
+    assert!(registry.get("docs/selector-tags").is_some());
     assert!(registry.get("docs/natspec-modifier").is_some());
-    assert!(registry.get("docs/natspec-param-mismatch").is_some());
     assert!(registry.get("docs/license-identifier").is_some());
     assert!(registry.get("nonexistent/rule").is_none());
 }

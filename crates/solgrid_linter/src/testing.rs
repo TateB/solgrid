@@ -30,23 +30,48 @@ pub fn lint_source_for_rule(source: &str, rule_id: &str) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// Lint a source string using the provided config and return only diagnostics
+/// for a specific rule.
+pub fn lint_source_for_rule_with_config(
+    source: &str,
+    rule_id: &str,
+    config: &Config,
+) -> Vec<Diagnostic> {
+    lint_source_with_config(source, config)
+        .into_iter()
+        .filter(|d| d.rule_id == rule_id)
+        .collect()
+}
+
 /// Lint a source string and apply fixes, returning the fixed source.
 pub fn fix_source(source: &str) -> String {
-    let engine = LintEngine::new();
     let mut config = Config::default();
     config.lint.preset = RulePreset::All;
+    fix_source_with_config(source, &config)
+}
+
+/// Lint a source string and apply fixes using the provided config, returning
+/// the fixed source.
+pub fn fix_source_with_config(source: &str, config: &Config) -> String {
+    let engine = LintEngine::new();
     let path = Path::new("test.sol");
-    let (fixed, _) = engine.fix_source(source, path, &config, false);
+    let (fixed, _) = engine.fix_source(source, path, config, false);
     fixed
 }
 
 /// Lint a source string and apply all fixes (including unsafe), returning the fixed source.
 pub fn fix_source_unsafe(source: &str) -> String {
-    let engine = LintEngine::new();
     let mut config = Config::default();
     config.lint.preset = RulePreset::All;
+    fix_source_unsafe_with_config(source, &config)
+}
+
+/// Lint a source string and apply all fixes (including unsafe) using the
+/// provided config, returning the fixed source.
+pub fn fix_source_unsafe_with_config(source: &str, config: &Config) -> String {
+    let engine = LintEngine::new();
     let path = Path::new("test.sol");
-    let (fixed, _) = engine.fix_source(source, path, &config, true);
+    let (fixed, _) = engine.fix_source(source, path, config, true);
     fixed
 }
 

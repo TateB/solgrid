@@ -26,6 +26,10 @@ preset = "recommended"
 "security/compiler-version".allowed = [">=0.8.19", "<0.9.0"]
 "naming/foundry-test-functions".pattern = "test(Fork)?(Fuzz)?(Fail)?_"
 "style/max-line-length".limit = 120
+"docs/natspec".comment_style = "triple_slash"
+"docs/natspec".continuation_indent = "padded"
+"style/category-headers".min_categories = 2
+"style/imports-ordering".import_order = ["^forge-std/", "^@openzeppelin/"]
 
 [format]
 line_length = 120
@@ -78,6 +82,13 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `security/compiler-version` | `allowed` | `[">=0.8.19", "<0.9.0"]` | Allowed compiler versions |
 | `naming/foundry-test-functions` | `pattern` | `"test(Fork)?(Fuzz)?(Fail)?_"` | Test function regex |
 | `style/max-line-length` | `limit` | `120` | Max line length |
+| `docs/natspec` | `comment_style` | `"triple_slash"` | Accept only `///` comments or allow `/** */` with `"either"` |
+| `docs/natspec` | `continuation_indent` | `"padded"` | Continuation indent mode: `"padded"` or `"none"` |
+| `docs/natspec` | `tags.<tag>.*` | tag-specific | Configure `enabled`, `include`, `exclude`, `skip_internal` for `title`, `author`, `notice`, `dev`, `param`, `return` |
+| `docs/selector-tags` | none | n/a | No settings |
+| `style/category-headers` | `min_categories` | `2` | Minimum distinct declaration categories before headers are enforced |
+| `style/category-headers` | `initialization_functions` | built-in list | Function names treated as initialization sections |
+| `style/imports-ordering` | `import_order` | default external/relative grouping | Regex-defined import groups |
 
 ## Format Configuration
 
