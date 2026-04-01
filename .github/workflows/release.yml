@@ -256,6 +256,11 @@ jobs:
     name: Publish Prettier Plugin to npm
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_CONFIG_PROVENANCE: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -294,19 +299,20 @@ jobs:
             echo "Publishing @solgrid/$pkg..."
             pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Publish prettier-plugin-solgrid
       - name: Publish prettier-plugin-solgrid
         run: pnpm --filter prettier-plugin-solgrid publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   npm-publish-cli:
     name: Publish CLI to npm
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_CONFIG_PROVENANCE: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -356,11 +362,7 @@ jobs:
             echo "Publishing @solgrid/$pkg..."
             pnpm --filter "@solgrid/$pkg" publish --access public --no-git-checks
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Publish main solgrid package
       - name: Publish solgrid
         run: pnpm --filter solgrid publish --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
