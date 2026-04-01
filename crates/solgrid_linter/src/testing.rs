@@ -76,7 +76,8 @@ pub fn lint_source_with_remappings(
     remappings: &[(String, PathBuf)],
 ) -> Vec<Diagnostic> {
     let engine = LintEngine::with_remappings(remappings.to_vec());
-    let config = Config::default();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
     let result = engine.lint_source(source, path, &config);
     result.diagnostics
 }
@@ -102,7 +103,8 @@ pub fn fix_source_with_remappings(
     include_unsafe: bool,
 ) -> String {
     let engine = LintEngine::with_remappings(remappings.to_vec());
-    let config = Config::default();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
     let (fixed, _) = engine.fix_source(source, path, &config, include_unsafe);
     fixed
 }

@@ -109,7 +109,33 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn canonicalize_best_effort(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path))
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+
+    let normalized = normalize_path(path);
+    let mut current = normalized.clone();
+    let mut suffix = Vec::new();
+
+    loop {
+        if let Ok(canonical_prefix) = std::fs::canonicalize(&current) {
+            let mut resolved = canonical_prefix;
+            for component in suffix.iter().rev() {
+                resolved.push(component);
+            }
+            return resolved;
+        }
+
+        let Some(name) = current.file_name().map(|name| name.to_os_string()) else {
+            break;
+        };
+        suffix.push(name);
+        if !current.pop() {
+            break;
+        }
+    }
+
+    normalized
 }
 
 /// Find a remapped path for the given resolved absolute path.
