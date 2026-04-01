@@ -91,6 +91,14 @@ describe("LSP Server Lifecycle", () => {
     expect(completion!.triggerCharacters).toContain(" ");
   });
 
+  it("declares signature help provider with trigger characters", async () => {
+    const result = await initializeServer(client);
+    const signatureHelp = result.capabilities.signatureHelpProvider;
+    expect(signatureHelp).toBeDefined();
+    expect(signatureHelp!.triggerCharacters).toContain("(");
+    expect(signatureHelp!.triggerCharacters).toContain(",");
+  });
+
   it("handles shutdown request gracefully", async () => {
     await initializeServer(client);
     const result = await client.request("shutdown", undefined);

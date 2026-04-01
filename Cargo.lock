@@ -2443,8 +2443,9 @@ version = "0.0.4"
 dependencies = [
  "solar-ast",
  "solar-interface",
+ "solgrid_config",
  "solgrid_parser",
- "toml",
+ "tempfile",
 ]
 
 [[package]]
@@ -2453,6 +2454,7 @@ version = "0.0.4"
 dependencies = [
  "serde",
  "solgrid_diagnostics",
+ "tempfile",
  "toml",
 ]
 
@@ -2525,6 +2527,7 @@ dependencies = [
 name = "solgrid_server"
 version = "0.0.4"
 dependencies = [
+ "ignore",
  "serde",
  "serde_json",
  "solgrid_ast",

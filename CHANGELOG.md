@@ -7,20 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Intelligent Solidity autocomplete with in-scope symbols, member completions (`msg.`, `MyEnum.`, `MyLib.`), builtins, imported symbols, and auto-import suggestions that can insert missing `import` statements
+- Workspace-wide `.sol` symbol indexing with incremental updates to keep LSP autocomplete current as files change
+- Type-aware member autocomplete and signature help for user-defined functions, constructors, and builtins
+- `style/prefer-remappings` rule that suggests using project remappings instead of relative imports
+
 ### Changed
-- Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
-- Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits
-- Make VSCode `solgrid.configPath` load an explicit config on initialize and config changes, and align the Prettier plugin with `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
-- Generate `docs/rules.md` from `solgrid list-rules` and verify it in CI to keep the rules reference aligned with the live registry
+- Config resolution now honors per-file `solgrid.toml` discovery together with global `include`, `exclude`, `respect_gitignore`, and `threads` controls
+- Runtime now applies documented `[lint.settings]` options, including compiler version ranges, rule thresholds, Foundry test naming patterns, and max line length
+- VS Code `solgrid.configPath` now reloads explicit configs on initialize and config changes, and the Prettier plugin aligns `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
+- `docs/rules.md` is now generated from `solgrid list-rules` and verified in CI so the published rule reference stays in sync
 
 ### Deprecated
 - Treat legacy NatSpec rule IDs such as `best-practices/use-natspec` as deprecated config aliases for `docs/natspec` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
 
 ### Fixed
-- Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
-- Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
-- Fix compiler-version allowed-range checks for wide pragma ranges, make config hashing deterministic for cache invalidation, and cache LSP/CLI config resolution instead of reloading configs on every file or request
-
+- Fixed duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
+- Fixed runtime rule-severity fallback to use each rule's declared default severity instead of category-level defaults
+- Fixed compiler-version range checks for wide pragma constraints, made config hashing deterministic for cache invalidation, and avoided repeated LSP/CLI config reloads
+- Fixed namespace-import autocomplete (`import "./Foo.sol" as Foo; Foo.Bar`) and stale auto-import index entries when files close
+- Fixed `check` / `fix` remapping resolution to use each linted file's workspace instead of only the current working directory
+- Fixed LSP remapping resolution to use each file's nearest workspace instead of one workspace-wide remapping set
+- Fixed file-based remapping discovery to avoid inheriting unrelated current-working-directory remappings
+- Fixed `style/prefer-remappings` path matching by canonicalizing remapping targets before prefix comparison
+- Fixed `style/prefer-remappings` producing mangled import paths when remapping prefixes omit a trailing slash
+### Removed
+- `style/import-path-format` rule (replaced by `style/prefer-remappings`)
 
 ## [0.0.4] - 2026-03-19
 

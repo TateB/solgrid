@@ -6,7 +6,7 @@ use crate::symbols;
 use solgrid_config::Config;
 use solgrid_diagnostics::FileResult;
 use solgrid_linter::LintEngine;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
 
 /// Run the linter on source text and return LSP diagnostics.
@@ -17,6 +17,18 @@ pub fn lint_to_lsp_diagnostics(
     config: &Config,
 ) -> Vec<ls_types::Diagnostic> {
     let result = engine.lint_source(source, path, config);
+    file_result_to_lsp_diagnostics(source, &result)
+}
+
+/// Run the linter with an explicit remapping set and return LSP diagnostics.
+pub fn lint_to_lsp_diagnostics_with_remappings(
+    engine: &LintEngine,
+    source: &str,
+    path: &Path,
+    config: &Config,
+    remappings: &[(String, PathBuf)],
+) -> Vec<ls_types::Diagnostic> {
+    let result = engine.lint_source_with_remappings(source, path, config, remappings);
     file_result_to_lsp_diagnostics(source, &result)
 }
 
@@ -66,6 +78,7 @@ mod tests {
     use super::*;
     use crate::resolve::ImportResolver;
     use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn test_lint_to_lsp_diagnostics_detects_issues() {
@@ -124,6 +137,33 @@ contract Test {
             "clean source should have no security diagnostics, found: {:?}",
             security_diags.iter().map(|d| &d.code).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_lint_to_lsp_diagnostics_with_remappings_detects_prefer_remappings() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+        let engine = LintEngine::new();
+        let mut config = Config::default();
+        config.lint.preset = solgrid_config::RulePreset::All;
+        let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+        let diagnostics = lint_to_lsp_diagnostics_with_remappings(
+            &engine,
+            source,
+            Path::new("/project/src/contracts/Token.sol"),
+            &config,
+            &remappings,
+        );
+
+        assert!(diagnostics.iter().any(|d| {
+            matches!(
+                &d.code,
+                Some(ls_types::NumberOrString::String(id)) if id == "style/prefer-remappings"
+            )
+        }));
     }
 
     #[test]

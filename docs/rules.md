@@ -117,12 +117,12 @@ Notes:
 | `style/category-headers` | `info` | `suggestion` |
 | `style/eol-last` | `info` | `safe` |
 | `style/file-name-format` | `info` | `-` |
-| `style/import-path-format` | `info` | `suggestion` |
 | `style/imports-ordering` | `info` | `safe` |
 | `style/max-line-length` | `info` | `-` |
 | `style/no-multiple-empty-lines` | `info` | `safe` |
 | `style/no-trailing-whitespace` | `info` | `safe` |
 | `style/ordering` | `info` | `-` |
+| `style/prefer-remappings` | `info` | `suggestion` |
 
 ## Docs
 
