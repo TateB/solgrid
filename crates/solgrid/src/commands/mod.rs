@@ -204,9 +204,7 @@ fn workspace_root_for_path(path: &Path) -> Option<PathBuf> {
         path.parent().unwrap_or(path)
     };
 
-    solgrid_config::find_workspace_root(search_root).or_else(|| {
-        solgrid_config::find_workspace_root(&std::env::current_dir().unwrap_or_default())
-    })
+    solgrid_config::find_workspace_root(search_root)
 }
 
 pub fn preload_caches(prepared_files: &[PreparedFile]) -> HashMap<String, Cache> {

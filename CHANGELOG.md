@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed compiler-version range checks for wide pragma constraints, made config hashing deterministic for cache invalidation, and avoided repeated LSP/CLI config reloads
 - Fixed namespace-import autocomplete (`import "./Foo.sol" as Foo; Foo.Bar`) and stale auto-import index entries when files close
 - Fixed `check` / `fix` remapping resolution to use each linted file's workspace instead of only the current working directory
+- Fixed LSP remapping resolution to use each file's nearest workspace instead of one workspace-wide remapping set
+- Fixed file-based remapping discovery to avoid inheriting unrelated current-working-directory remappings
 - Fixed `style/prefer-remappings` path matching by canonicalizing remapping targets before prefix comparison
 - Fixed `style/prefer-remappings` producing mangled import paths when remapping prefixes omit a trailing slash
 ### Removed

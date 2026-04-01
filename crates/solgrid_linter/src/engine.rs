@@ -73,9 +73,15 @@ impl LintEngine {
         self.lint_source(&source, path, config)
     }
 
-    /// Lint source code directly.
-    pub fn lint_source(&self, source: &str, path: &Path, config: &Config) -> FileResult {
-        let ctx = LintContext::new(source, path, config, &self.remappings);
+    /// Lint source code directly with an explicit remapping set.
+    pub fn lint_source_with_remappings(
+        &self,
+        source: &str,
+        path: &Path,
+        config: &Config,
+        remappings: &[(String, PathBuf)],
+    ) -> FileResult {
+        let ctx = LintContext::new(source, path, config, remappings);
         let enabled_rules = self.registry.enabled_rules(config);
         let suppressions = parse_suppressions(source);
 
@@ -106,19 +112,25 @@ impl LintEngine {
         }
     }
 
-    /// Lint and apply fixes to source code.
-    /// Returns the fixed source and any remaining diagnostics.
-    pub fn fix_source(
+    /// Lint source code directly.
+    pub fn lint_source(&self, source: &str, path: &Path, config: &Config) -> FileResult {
+        self.lint_source_with_remappings(source, path, config, &self.remappings)
+    }
+
+    /// Lint and apply fixes with an explicit remapping set.
+    pub fn fix_source_with_remappings(
         &self,
         source: &str,
         path: &Path,
         config: &Config,
         include_unsafe: bool,
+        remappings: &[(String, PathBuf)],
     ) -> (String, FileResult) {
         let mut current_source = source.to_string();
 
         for _ in 0..8 {
-            let result = self.lint_source(&current_source, path, config);
+            let result =
+                self.lint_source_with_remappings(&current_source, path, config, remappings);
             let applicable_fixes = collect_applicable_fixes(&result.diagnostics, include_unsafe);
             let selected_fixes = select_non_overlapping_fixes(&applicable_fixes);
 
@@ -134,8 +146,20 @@ impl LintEngine {
             current_source = next_source;
         }
 
-        let remaining = self.lint_source(&current_source, path, config);
+        let remaining = self.lint_source_with_remappings(&current_source, path, config, remappings);
         (current_source, remaining)
+    }
+
+    /// Lint and apply fixes to source code.
+    /// Returns the fixed source and any remaining diagnostics.
+    pub fn fix_source(
+        &self,
+        source: &str,
+        path: &Path,
+        config: &Config,
+        include_unsafe: bool,
+    ) -> (String, FileResult) {
+        self.fix_source_with_remappings(source, path, config, include_unsafe, &self.remappings)
     }
 }
 

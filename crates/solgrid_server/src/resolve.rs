@@ -1,11 +1,13 @@
 //! Import path resolution — resolves Solidity import paths to filesystem paths.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 /// Resolves Solidity import paths to filesystem paths.
 pub struct ImportResolver {
     workspace_root: Option<PathBuf>,
-    remappings: Vec<(String, PathBuf)>,
+    remappings_cache: RwLock<HashMap<PathBuf, Vec<(String, PathBuf)>>>,
 }
 
 impl ImportResolver {
@@ -13,19 +15,19 @@ impl ImportResolver {
     ///
     /// Loads remappings from `remappings.txt` or `foundry.toml` if present.
     pub fn new(workspace_root: Option<PathBuf>) -> Self {
-        let remappings = workspace_root
-            .as_ref()
-            .map(|root| solgrid_config::load_remappings(root))
-            .unwrap_or_default();
         Self {
             workspace_root,
-            remappings,
+            remappings_cache: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Get the loaded remappings.
-    pub fn remappings(&self) -> &[(String, PathBuf)] {
-        &self.remappings
+    /// Load remappings for the importing file's nearest workspace.
+    pub fn remappings_for_file(&self, importing_file: &Path) -> Vec<(String, PathBuf)> {
+        let Some(workspace_root) = self.workspace_root_for_file(importing_file) else {
+            return Vec::new();
+        };
+
+        self.cached_remappings(&workspace_root)
     }
 
     /// Resolve an import path to a filesystem path.
@@ -39,43 +41,73 @@ impl ImportResolver {
             return resolved.canonicalize().ok().filter(|p| p.exists());
         }
 
+        let workspace_root = self.workspace_root_for_file(importing_file)?;
+        let remappings = self.cached_remappings(&workspace_root);
+
         // 2. Remappings (longest prefix match)
-        if let Some(resolved) = self.resolve_remapping(import_path) {
+        if let Some(resolved) = resolve_remapping(import_path, &remappings) {
             return Some(resolved);
         }
 
-        let ws_root = self.workspace_root.as_deref()?;
-
         // 3. Foundry lib (e.g., `forge-std/src/Test.sol` → `lib/forge-std/src/Test.sol`)
-        if let Some(resolved) = resolve_in_dir(&ws_root.join("lib"), import_path) {
+        if let Some(resolved) = resolve_in_dir(&workspace_root.join("lib"), import_path) {
             return Some(resolved);
         }
 
         // 4. node_modules (walk up from workspace root)
-        resolve_node_modules(import_path, ws_root)
+        resolve_node_modules(import_path, &workspace_root)
     }
 
-    fn resolve_remapping(&self, import_path: &str) -> Option<PathBuf> {
-        // Find the longest matching prefix.
-        let mut best: Option<&(String, PathBuf)> = None;
-        for entry in &self.remappings {
-            if import_path.starts_with(&entry.0) {
-                match best {
-                    None => best = Some(entry),
-                    Some(prev) if entry.0.len() > prev.0.len() => best = Some(entry),
-                    _ => {}
-                }
-            }
+    fn workspace_root_for_file(&self, importing_file: &Path) -> Option<PathBuf> {
+        let search_root = importing_file.parent().unwrap_or(importing_file);
+        solgrid_config::find_workspace_root(search_root).or_else(|| {
+            self.workspace_root
+                .as_ref()
+                .filter(|root| search_root.starts_with(root))
+                .cloned()
+        })
+    }
+
+    fn cached_remappings(&self, workspace_root: &Path) -> Vec<(String, PathBuf)> {
+        if let Some(remappings) = self
+            .remappings_cache
+            .read()
+            .expect("resolver remappings cache poisoned")
+            .get(workspace_root)
+            .cloned()
+        {
+            return remappings;
         }
 
-        let (prefix, target) = best?;
-        let rest = &import_path[prefix.len()..];
-        let resolved = target.join(rest);
-        if resolved.exists() {
-            Some(resolved)
-        } else {
-            None
+        let remappings = solgrid_config::load_remappings(workspace_root);
+        self.remappings_cache
+            .write()
+            .expect("resolver remappings cache poisoned")
+            .insert(workspace_root.to_path_buf(), remappings.clone());
+        remappings
+    }
+}
+
+fn resolve_remapping(import_path: &str, remappings: &[(String, PathBuf)]) -> Option<PathBuf> {
+    // Find the longest matching prefix.
+    let mut best: Option<&(String, PathBuf)> = None;
+    for entry in remappings {
+        if import_path.starts_with(&entry.0) {
+            match best {
+                None => best = Some(entry),
+                Some(prev) if entry.0.len() > prev.0.len() => best = Some(entry),
+                _ => {}
+            }
         }
+    }
+
+    let (prefix, target) = best?;
+    let rest = &import_path[prefix.len()..];
+    let resolved = target.join(rest);
+    if resolved.exists() {
+        Some(resolved)
+    } else {
+        None
     }
 }
 
@@ -191,5 +223,40 @@ mod tests {
         assert!(resolver
             .resolve("nonexistent-pkg/Foo.sol", &importing)
             .is_none());
+    }
+
+    #[test]
+    fn test_resolve_uses_nearest_workspace_remappings() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_target = dir
+            .path()
+            .join("lib/root-contracts/contracts/token/ERC20/ERC20.sol");
+        let nested_target = dir
+            .path()
+            .join("packages/app/lib/app-contracts/contracts/token/ERC20/ERC20.sol");
+        fs::create_dir_all(root_target.parent().unwrap()).unwrap();
+        fs::create_dir_all(nested_target.parent().unwrap()).unwrap();
+        fs::write(&root_target, "contract RootERC20 {}").unwrap();
+        fs::write(&nested_target, "contract AppERC20 {}").unwrap();
+        fs::write(
+            dir.path().join("remappings.txt"),
+            "@openzeppelin/contracts/=lib/root-contracts/contracts/\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("packages/app/foundry.toml"),
+            "[profile.default]\nremappings = [\"@openzeppelin/contracts/=lib/app-contracts/contracts/\"]\n",
+        )
+        .unwrap();
+
+        let importing = dir.path().join("packages/app/src/Main.sol");
+        fs::create_dir_all(importing.parent().unwrap()).unwrap();
+        fs::write(&importing, "").unwrap();
+
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let resolved = resolver
+            .resolve("@openzeppelin/contracts/token/ERC20/ERC20.sol", &importing)
+            .unwrap();
+        assert_eq!(resolved, nested_target);
     }
 }

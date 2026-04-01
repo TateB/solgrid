@@ -113,10 +113,7 @@ impl SolgridServer {
 
     async fn reload_workspace_state(&self) {
         let workspace_root = self.workspace_root.read().await.clone();
-        let resolver = ImportResolver::new(workspace_root);
-        let remappings = resolver.remappings().to_vec();
-        *self.resolver.write().await = resolver;
-        *self.engine.write().await = LintEngine::with_remappings(remappings);
+        *self.resolver.write().await = ImportResolver::new(workspace_root);
     }
 
     async fn relint_open_documents(&self) {
@@ -147,15 +144,21 @@ impl SolgridServer {
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
 
-        let engine = self.engine.read().await;
-        let mut lsp_diags = diagnostics::lint_to_lsp_diagnostics(&engine, &source, &path, &config);
-        drop(engine);
-
         let resolver = self.resolver.read().await;
-        lsp_diags.extend(diagnostics::unresolved_import_diagnostics(
-            &source, &path, &resolver,
-        ));
+        let remappings = resolver.remappings_for_file(&path);
+        let unresolved = diagnostics::unresolved_import_diagnostics(&source, &path, &resolver);
         drop(resolver);
+
+        let engine = self.engine.read().await;
+        let mut lsp_diags = diagnostics::lint_to_lsp_diagnostics_with_remappings(
+            &engine,
+            &source,
+            &path,
+            &config,
+            &remappings,
+        );
+        drop(engine);
+        lsp_diags.extend(unresolved);
 
         // Cache the diagnostics for hover lookups
         {
@@ -189,12 +192,20 @@ impl SolgridServer {
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
         let mut current_source = source;
+        let resolver = self.resolver.read().await;
+        let remappings = resolver.remappings_for_file(&path);
+        drop(resolver);
 
         // Apply safe fixes
         if settings.fix_on_save {
             let engine = self.engine.read().await;
-            let (fixed, _remaining) =
-                engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
+            let (fixed, _remaining) = engine.fix_source_with_remappings(
+                &current_source,
+                &path,
+                &config,
+                settings.fix_on_save_unsafe,
+                &remappings,
+            );
             drop(engine);
             current_source = fixed;
         }
@@ -429,15 +440,29 @@ impl LanguageServer for SolgridServer {
         let config = self.resolve_config_for_path(&path).await;
         let mut current_source = source.clone();
         let mut edits = Vec::new();
+        let resolver = self.resolver.read().await;
+        let remappings = resolver.remappings_for_file(&path);
+        drop(resolver);
 
         // Apply safe fixes
         let engine = self.engine.read().await;
         if settings.fix_on_save {
-            let fix_edits = actions::safe_fix_edits(&engine, &current_source, &path, &config);
+            let fix_edits = actions::safe_fix_edits_with_remappings(
+                &engine,
+                &current_source,
+                &path,
+                &config,
+                &remappings,
+            );
             if !fix_edits.is_empty() {
                 // Apply the fixes to get the intermediate source
-                let (fixed, _) =
-                    engine.fix_source(&current_source, &path, &config, settings.fix_on_save_unsafe);
+                let (fixed, _) = engine.fix_source_with_remappings(
+                    &current_source,
+                    &path,
+                    &config,
+                    settings.fix_on_save_unsafe,
+                    &remappings,
+                );
                 current_source = fixed;
                 edits.extend(fix_edits);
             }
@@ -457,8 +482,13 @@ impl LanguageServer for SolgridServer {
             let mut final_source = source.clone();
 
             if settings.fix_on_save {
-                let (fixed, _) =
-                    engine.fix_source(&final_source, &path, &config, settings.fix_on_save_unsafe);
+                let (fixed, _) = engine.fix_source_with_remappings(
+                    &final_source,
+                    &path,
+                    &config,
+                    settings.fix_on_save_unsafe,
+                    &remappings,
+                );
                 final_source = fixed;
             }
 
@@ -498,9 +528,20 @@ impl LanguageServer for SolgridServer {
 
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
+        let resolver = self.resolver.read().await;
+        let remappings = resolver.remappings_for_file(&path);
+        drop(resolver);
 
         let engine = self.engine.read().await;
-        let result = actions::code_actions(&engine, &source, &path, &config, &params.range, uri);
+        let result = actions::code_actions_with_remappings(
+            &engine,
+            &source,
+            &path,
+            &config,
+            &params.range,
+            uri,
+            &remappings,
+        );
         drop(engine);
 
         if result.is_empty() {

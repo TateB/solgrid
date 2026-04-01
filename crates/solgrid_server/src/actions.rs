@@ -4,7 +4,7 @@ use crate::convert;
 use solgrid_config::Config;
 use solgrid_diagnostics::FixSafety;
 use solgrid_linter::LintEngine;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
 
 /// Generate code actions for a given range in a document.
@@ -19,7 +19,33 @@ pub fn code_actions(
     range: &ls_types::Range,
     uri: &ls_types::Uri,
 ) -> Vec<ls_types::CodeActionOrCommand> {
-    let result = engine.lint_source(source, path, config);
+    code_actions_from_result(engine.lint_source(source, path, config), source, range, uri)
+}
+
+/// Generate code actions using an explicit remapping set.
+pub fn code_actions_with_remappings(
+    engine: &LintEngine,
+    source: &str,
+    path: &Path,
+    config: &Config,
+    range: &ls_types::Range,
+    uri: &ls_types::Uri,
+    remappings: &[(String, PathBuf)],
+) -> Vec<ls_types::CodeActionOrCommand> {
+    code_actions_from_result(
+        engine.lint_source_with_remappings(source, path, config, remappings),
+        source,
+        range,
+        uri,
+    )
+}
+
+fn code_actions_from_result(
+    result: solgrid_diagnostics::FileResult,
+    source: &str,
+    range: &ls_types::Range,
+    uri: &ls_types::Uri,
+) -> Vec<ls_types::CodeActionOrCommand> {
     let range_start = convert::position_to_offset(source, range.start);
     let range_end = convert::position_to_offset(source, range.end);
 
@@ -135,8 +161,27 @@ pub fn safe_fix_edits(
     path: &Path,
     config: &Config,
 ) -> Vec<ls_types::TextEdit> {
-    let result = engine.lint_source(source, path, config);
+    safe_fix_edits_from_result(engine.lint_source(source, path, config), source)
+}
 
+/// Build text edits for applying all safe fixes using an explicit remapping set.
+pub fn safe_fix_edits_with_remappings(
+    engine: &LintEngine,
+    source: &str,
+    path: &Path,
+    config: &Config,
+    remappings: &[(String, PathBuf)],
+) -> Vec<ls_types::TextEdit> {
+    safe_fix_edits_from_result(
+        engine.lint_source_with_remappings(source, path, config, remappings),
+        source,
+    )
+}
+
+fn safe_fix_edits_from_result(
+    result: solgrid_diagnostics::FileResult,
+    source: &str,
+) -> Vec<ls_types::TextEdit> {
     result
         .diagnostics
         .iter()
