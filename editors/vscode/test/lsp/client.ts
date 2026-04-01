@@ -37,8 +37,8 @@ interface PendingRequest {
  *
  * Priority:
  * 1. SOLGRID_BIN environment variable
- * 2. ../../target/release/solgrid (relative to editors/vscode)
- * 3. ../../target/debug/solgrid (relative to editors/vscode)
+ * 2. ../../target/debug/solgrid (relative to editors/vscode)
+ * 3. ../../target/release/solgrid (relative to editors/vscode)
  * 4. "solgrid" (on PATH)
  */
 export function getSolgridBinaryPath(): string {
@@ -47,14 +47,14 @@ export function getSolgridBinaryPath(): string {
   }
 
   const root = path.resolve(__dirname, "../..");
-  const releasePath = path.join(root, "../../target/release/solgrid");
-  if (fs.existsSync(releasePath)) {
-    return releasePath;
-  }
-
   const debugPath = path.join(root, "../../target/debug/solgrid");
   if (fs.existsSync(debugPath)) {
     return debugPath;
+  }
+
+  const releasePath = path.join(root, "../../target/release/solgrid");
+  if (fs.existsSync(releasePath)) {
+    return releasePath;
   }
 
   return "solgrid";

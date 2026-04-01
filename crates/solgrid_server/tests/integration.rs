@@ -2,7 +2,9 @@
 
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
-use solgrid_server::{actions, completion, convert, diagnostics, format, hover, resolve};
+use solgrid_server::{
+    actions, completion, convert, diagnostics, format, hover, resolve, workspace_index,
+};
 use std::path::Path;
 use tower_lsp_server::ls_types;
 
@@ -306,8 +308,19 @@ fn test_completion_after_disable_directive() {
     let engine = LintEngine::new();
     let source = "// solgrid-disable-next-line \ncontract Test {}\n";
     let position = ls_types::Position::new(0, 29);
+    let uri = noop_uri();
+    let index = workspace_index::WorkspaceIndex::new();
+    let resolver = resolve::ImportResolver::new(None);
 
-    let items = completion::suppression_completions(&engine, source, &position);
+    let items = completion::completions(
+        &engine,
+        source,
+        &position,
+        &uri,
+        &noop_source,
+        &resolver,
+        &index,
+    );
     assert!(!items.is_empty(), "should suggest rule IDs after directive");
 
     // Should contain known rules
@@ -321,8 +334,19 @@ fn test_completion_typing_solgrid_comment() {
     let engine = LintEngine::new();
     let source = "// sol\ncontract Test {}\n";
     let position = ls_types::Position::new(0, 6);
+    let uri = noop_uri();
+    let index = workspace_index::WorkspaceIndex::new();
+    let resolver = resolve::ImportResolver::new(None);
 
-    let items = completion::suppression_completions(&engine, source, &position);
+    let items = completion::completions(
+        &engine,
+        source,
+        &position,
+        &uri,
+        &noop_source,
+        &resolver,
+        &index,
+    );
     assert!(
         !items.is_empty(),
         "should suggest directives when typing // sol"
@@ -339,9 +363,25 @@ fn test_completion_not_in_code() {
     let engine = LintEngine::new();
     let source = "contract Test { uint x; }\n";
     let position = ls_types::Position::new(0, 10);
+    let uri = noop_uri();
+    let index = workspace_index::WorkspaceIndex::new();
+    let resolver = resolve::ImportResolver::new(None);
 
-    let items = completion::suppression_completions(&engine, source, &position);
-    assert!(items.is_empty(), "should not suggest completions in code");
+    let items = completion::completions(
+        &engine,
+        source,
+        &position,
+        &uri,
+        &noop_source,
+        &resolver,
+        &index,
+    );
+    // In code context, should now return identifier completions (not suppression)
+    // The key assertion is that suppression completions are not returned
+    assert!(
+        !items.iter().any(|i| i.label == "solgrid-disable"),
+        "should not suggest suppression completions in code"
+    );
 }
 
 // =============================================================================

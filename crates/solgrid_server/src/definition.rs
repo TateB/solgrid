@@ -307,7 +307,7 @@ fn resolve_cross_file_member_symbol_inner(
     visited: &mut HashSet<PathBuf>,
 ) -> Option<CrossFileSymbol> {
     for import in &current_table.imports {
-        let target_name = match &import.symbols {
+        let target = match &import.symbols {
             ImportedSymbols::Named(names) => {
                 let mut found = None;
                 for (original, alias) in names {
@@ -318,11 +318,13 @@ fn resolve_cross_file_member_symbol_inner(
                     }
                 }
                 match found {
-                    Some(n) => n,
+                    Some(n) => (n, false),
                     None => continue,
                 }
             }
-            ImportedSymbols::Plain(None) => container_name,
+            ImportedSymbols::Plain(None) => (container_name, false),
+            ImportedSymbols::Plain(Some(alias)) if alias == container_name => (member_name, true),
+            ImportedSymbols::Glob(alias) if alias == container_name => (member_name, true),
             _ => continue,
         };
 
@@ -345,8 +347,21 @@ fn resolve_cross_file_member_symbol_inner(
             None => continue,
         };
 
+        // Namespace imports resolve `Alias.Member` directly to the imported
+        // file's file-level export named `Member`.
+        if target.1 {
+            if let Some(def) = imported_table.resolve(target.0, 0) {
+                return Some(CrossFileSymbol {
+                    source: imported_source,
+                    def: def.clone(),
+                    table: imported_table,
+                    resolved_path: resolved,
+                });
+            }
+        }
+
         // Try direct resolution: find the container, then the member.
-        if let Some(container_def) = imported_table.resolve(target_name, 0) {
+        if let Some(container_def) = imported_table.resolve(target.0, 0) {
             if let Some(member_def) = imported_table.resolve_member(container_def, member_name) {
                 let def = member_def.clone();
                 return Some(CrossFileSymbol {
@@ -361,7 +376,7 @@ fn resolve_cross_file_member_symbol_inner(
         // Not defined here — follow this file's imports transitively.
         if let Some(result) = resolve_cross_file_member_symbol_inner(
             &imported_table,
-            target_name,
+            target.0,
             member_name,
             &resolved,
             get_source,
@@ -633,6 +648,57 @@ contract Main {
         if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
             let expected_uri =
                 ls_types::Uri::from_file_path(token_path.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_cross_file_member_access_via_namespace_import() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let lib_path = dir.path().join("Lib.sol");
+        let lib_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+library TokenLib {
+    function mint(address to, uint256 amount) internal {}
+}
+"#;
+        fs::write(&lib_path, lib_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "./Lib.sol" as Lib;
+
+contract Main {
+    function doMint() public {
+        Lib.TokenLib.mint(msg.sender, 100);
+    }
+}
+"#;
+        let main_path = dir.path().join("Main.sol");
+        fs::write(&main_path, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        // Click on "TokenLib" in `Lib.TokenLib.mint(...)`
+        let offset = main_source.find("Lib.TokenLib.mint").unwrap() + 4;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "expected definition for namespace-imported Lib.TokenLib"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            let expected_uri =
+                ls_types::Uri::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             assert_ne!(loc.range, ls_types::Range::default());
         } else {
