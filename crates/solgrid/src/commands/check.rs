@@ -23,7 +23,6 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
         return 0;
     }
 
-    let engine = LintEngine::new();
     let mut caches = if cli.no_cache {
         None
     } else {
@@ -64,6 +63,7 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
                         }
                     }
 
+                    let engine = LintEngine::with_remappings((*file.remappings).clone());
                     let result = engine.lint_source(&content, &file.path, &file.config);
                     let update = super::CacheUpdate {
                         cache_dir: file.cache_dir.clone(),
@@ -140,7 +140,8 @@ fn run_stdin(config: &Config, cli: &Cli) -> i32 {
         return 1;
     }
 
-    let engine = LintEngine::new();
+    let current_dir = std::env::current_dir().unwrap_or_default();
+    let engine = LintEngine::with_remappings(super::load_workspace_remappings(&current_dir));
     let result = engine.lint_source(&source, Path::new("<stdin>"), config);
 
     let has_errors = result

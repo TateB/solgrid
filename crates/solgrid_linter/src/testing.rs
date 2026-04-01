@@ -5,7 +5,7 @@
 use crate::LintEngine;
 use solgrid_config::{Config, RulePreset};
 use solgrid_diagnostics::Diagnostic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Lint a source string using the default engine and return diagnostics.
 pub fn lint_source(source: &str) -> Vec<Diagnostic> {
@@ -67,6 +67,46 @@ pub fn assert_diagnostic_count(source: &str, rule_id: &str, expected: usize) {
 /// Assert that linting produces no diagnostics for a rule.
 pub fn assert_no_diagnostics(source: &str, rule_id: &str) {
     assert_diagnostic_count(source, rule_id, 0);
+}
+
+/// Lint a source string with remappings and a specific file path, returning diagnostics.
+pub fn lint_source_with_remappings(
+    source: &str,
+    path: &Path,
+    remappings: &[(String, PathBuf)],
+) -> Vec<Diagnostic> {
+    let engine = LintEngine::with_remappings(remappings.to_vec());
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    let result = engine.lint_source(source, path, &config);
+    result.diagnostics
+}
+
+/// Lint a source string with remappings and return only diagnostics for a specific rule.
+pub fn lint_source_with_remappings_for_rule(
+    source: &str,
+    path: &Path,
+    remappings: &[(String, PathBuf)],
+    rule_id: &str,
+) -> Vec<Diagnostic> {
+    lint_source_with_remappings(source, path, remappings)
+        .into_iter()
+        .filter(|d| d.rule_id == rule_id)
+        .collect()
+}
+
+/// Apply fixes with remappings and a specific file path, returning the fixed source.
+pub fn fix_source_with_remappings(
+    source: &str,
+    path: &Path,
+    remappings: &[(String, PathBuf)],
+    include_unsafe: bool,
+) -> String {
+    let engine = LintEngine::with_remappings(remappings.to_vec());
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    let (fixed, _) = engine.fix_source(source, path, &config, include_unsafe);
+    fixed
 }
 
 /// Format diagnostics into a simple string for snapshot testing.

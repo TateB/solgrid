@@ -2872,26 +2872,6 @@ contract Test {}
     assert_eq!(fixed, expected);
 }
 
-#[test]
-fn test_fix_import_path_format() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import "./External.sol";
-import "Local.sol";
-import "Other.sol";
-contract Test {}
-"#;
-    let expected = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import "External.sol";
-import "Local.sol";
-import "Other.sol";
-contract Test {}
-"#;
-    let fixed = fix_source_unsafe(source);
-    assert_eq!(fixed, expected);
-}
-
 // =============================================================================
 // Edge case tests for autofix bugs
 // =============================================================================
@@ -3048,68 +3028,338 @@ contract Test {
     assert_eq!(fixed, expected);
 }
 
+// =============================================================================
+// prefer-remappings rule tests
+// =============================================================================
+
 #[test]
-fn test_fix_import_path_format_does_not_rewrite_package_imports() {
+fn test_prefer_remappings_no_remappings() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./Local.sol";
-import "./Other.sol";
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "style/prefer-remappings");
+}
+
+#[test]
+fn test_prefer_remappings_relative_matches_remapping() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/utils/Helper.sol"));
+}
+
+#[test]
+fn test_prefer_remappings_no_match() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../lib/External.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/test/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 0);
+}
+
+#[test]
+fn test_prefer_remappings_absolute_import_ignored() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let remappings = vec![(
+        "@openzeppelin/".to_string(),
+        PathBuf::from("/project/lib/openzeppelin-contracts/"),
+    )];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 0);
+}
+
+#[test]
+fn test_prefer_remappings_longest_target_wins() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![
+        ("@root/".to_string(), PathBuf::from("/project/")),
+        ("@src/".to_string(), PathBuf::from("/project/src/")),
+    ];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    // Should use @src/ (more specific) not @root/
+    assert!(diags[0].message.contains("@src/utils/Helper.sol"));
+}
+
+#[test]
+fn test_prefer_remappings_fix_replaces_path() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    let fix = diags[0].fix.as_ref().expect("should have a fix");
+    assert_eq!(fix.edits.len(), 1);
+    assert_eq!(fix.edits[0].replacement, "@src/utils/Helper.sol");
+}
+
+#[test]
+fn test_prefer_remappings_same_dir_relative() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/contracts/Helper.sol"));
+}
+
+#[test]
+fn test_prefer_remappings_named_import() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC20} from "../interfaces/IERC20.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/interfaces/IERC20.sol"));
+}
+
+#[test]
+fn test_prefer_remappings_multiple_imports_mixed() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
+import "../lib/External.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    // ../utils/Helper.sol resolves to /project/src/utils/Helper.sol → matches @src/
+    // ../lib/External.sol resolves to /project/src/lib/External.sol → matches @src/
+    // @openzeppelin/... is not relative → ignored
+    assert_eq!(diags.len(), 2);
+}
+
+#[test]
+fn test_prefer_remappings_chained_parent_dirs() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../../utils/Helper.sol";
+contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/deep/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    // ../../utils/Helper.sol from /project/src/contracts/deep/ → /project/src/utils/Helper.sol
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/utils/Helper.sol"));
+}
+
+#[test]
+fn test_prefer_remappings_fix_end_to_end() {
+    use solgrid_linter::testing::fix_source_with_remappings;
+    use std::path::{Path, PathBuf};
+
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../utils/Helper.sol";
 contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./Local.sol";
-import "./Other.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@src/utils/Helper.sol";
 contract Test {}
 "#;
-    let fixed = fix_source_unsafe(source);
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let fixed = fix_source_with_remappings(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        true, // suggestion fixes require unsafe
+    );
     assert_eq!(fixed, expected);
 }
 
 #[test]
-fn test_fix_import_path_format_does_not_rewrite_parent_relative_imports() {
+#[cfg(unix)]
+fn test_prefer_remappings_matches_canonical_paths() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("solgrid-remap-test-{unique}"));
+    let real_root = root.join("real");
+    fs::create_dir_all(real_root.join("src/contracts")).expect("create contracts");
+    fs::create_dir_all(real_root.join("src/utils")).expect("create utils");
+    symlink(&real_root, root.join("link")).expect("create symlink");
+
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 import "../utils/Helper.sol";
-import "A.sol";
-import "B.sol";
 contract Test {}
+"#;
+    let remappings = vec![("@src/".to_string(), root.join("link/src"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        &real_root.join("src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("@src/utils/Helper.sol"));
+
+    fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
+fn test_prefer_remappings_fix_end_to_end_named_import() {
+    use solgrid_linter::testing::fix_source_with_remappings;
+    use std::path::{Path, PathBuf};
+
+    // Use IERC20 in the contract body to avoid no-unused-imports removing it
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC20} from "../interfaces/IERC20.sol";
+contract Test {
+    IERC20 public token;
+}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "../utils/Helper.sol";
-import "A.sol";
-import "B.sol";
-contract Test {}
+import {IERC20} from "@src/interfaces/IERC20.sol";
+contract Test {
+    IERC20 public token;
+}
 "#;
-    let fixed = fix_source_unsafe(source);
+    let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
+    let fixed = fix_source_with_remappings(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        true,
+    );
     assert_eq!(fixed, expected);
 }
 
 #[test]
-fn test_import_path_format_detected() {
-    let source = r#"// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-import "./Local.sol";
-import "./Other.sol";
-import "lib/External.sol";
-contract Test {}
-"#;
-    // Mix of relative and absolute - minority (absolute) should be flagged
-    assert_diagnostic_count(source, "style/import-path-format", 1);
-}
+fn test_prefer_remappings_prefix_without_trailing_slash() {
+    use solgrid_linter::testing::lint_source_with_remappings_for_rule;
+    use std::path::{Path, PathBuf};
 
-#[test]
-fn test_import_path_format_clean() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
-import "./Local.sol";
-import "./Other.sol";
+import "../utils/Helper.sol";
 contract Test {}
 "#;
-    assert_no_diagnostics(source, "style/import-path-format");
+    // Prefix intentionally lacks trailing slash
+    let remappings = vec![("@src".to_string(), PathBuf::from("/project/src/"))];
+    let diags = lint_source_with_remappings_for_rule(
+        source,
+        Path::new("/project/src/contracts/Token.sol"),
+        &remappings,
+        "style/prefer-remappings",
+    );
+    assert_eq!(diags.len(), 1);
+    // Should produce "@src/utils/Helper.sol", not "@srcutils/Helper.sol"
+    assert!(
+        diags[0].message.contains("@src/utils/Helper.sol"),
+        "got: {}",
+        diags[0].message
+    );
 }
 
 #[test]
@@ -3794,7 +4044,7 @@ fn test_registry_lookup() {
     assert!(registry.get("style/eol-last").is_some());
     assert!(registry.get("style/no-multiple-empty-lines").is_some());
     assert!(registry.get("style/contract-layout").is_some());
-    assert!(registry.get("style/import-path-format").is_some());
+    assert!(registry.get("style/prefer-remappings").is_some());
     assert!(registry.get("style/file-name-format").is_some());
     // Docs rules
     assert!(registry.get("docs/natspec-contract").is_some());
