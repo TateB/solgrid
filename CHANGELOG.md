@@ -26,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed runtime rule-severity fallback to use each rule's declared default severity instead of category-level defaults
 - Fixed compiler-version range checks for wide pragma constraints, made config hashing deterministic for cache invalidation, and avoided repeated LSP/CLI config reloads
 - Fixed namespace-import autocomplete (`import "./Foo.sol" as Foo; Foo.Bar`) and stale auto-import index entries when files close
-- Fixed the VS Code LSP integration test runner to honor `--no-build` when package managers forward extra args after `--`
 
 ## [0.0.4] - 2026-03-19
 

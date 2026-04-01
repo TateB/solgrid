@@ -26,19 +26,20 @@ async function main() {
   // The workspace folder containing test fixtures (source, not compiled)
   const testWorkspace = path.resolve(__dirname, "../../../test/fixtures");
 
-  // If SOLGRID_BIN is set, write workspace settings so the extension can find
-  // the binary. This is more reliable than env var propagation through
-  // VSCode's Extension Host process.
+  const solgridBinary = getSolgridBinaryPath(extensionDevelopmentPath);
+
+  // Write workspace settings so the extension host uses the intended binary
+  // even when environment variables are not propagated through VS Code.
   const settingsDir = path.join(testWorkspace, ".vscode");
   let createdSettings = false;
-  if (process.env.SOLGRID_BIN) {
+  if (solgridBinary !== "solgrid") {
     fs.mkdirSync(settingsDir, { recursive: true });
     fs.writeFileSync(
       path.join(settingsDir, "settings.json"),
-      JSON.stringify({ "solgrid.path": process.env.SOLGRID_BIN }, null, 2)
+      JSON.stringify({ "solgrid.path": solgridBinary }, null, 2)
     );
     createdSettings = true;
-    console.log(`Configured solgrid.path = ${process.env.SOLGRID_BIN}`);
+    console.log(`Configured solgrid.path = ${solgridBinary}`);
   }
 
   try {
@@ -63,6 +64,26 @@ async function main() {
       }
     }
   }
+}
+
+function getSolgridBinaryPath(extensionDevelopmentPath: string): string {
+  if (process.env.SOLGRID_BIN) {
+    return process.env.SOLGRID_BIN;
+  }
+
+  const repoRoot = path.resolve(extensionDevelopmentPath, "../..");
+  const binaryName = process.platform === "win32" ? "solgrid.exe" : "solgrid";
+  const debugPath = path.join(repoRoot, "target", "debug", binaryName);
+  if (fs.existsSync(debugPath)) {
+    return debugPath;
+  }
+
+  const releasePath = path.join(repoRoot, "target", "release", binaryName);
+  if (fs.existsSync(releasePath)) {
+    return releasePath;
+  }
+
+  return "solgrid";
 }
 
 main();

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
-const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const packageDir = resolvePackageDir();
 const scriptPath = join(packageDir, "scripts", "run-lsp-tests.mjs");
 
 describe("run-lsp-tests.mjs", () => {
@@ -38,3 +37,13 @@ describe("run-lsp-tests.mjs", () => {
     }
   });
 });
+
+function resolvePackageDir() {
+  const cwd = process.cwd();
+
+  if (existsSync(join(cwd, "scripts", "run-lsp-tests.mjs"))) {
+    return cwd;
+  }
+
+  return resolve(cwd, "editors", "vscode");
+}
