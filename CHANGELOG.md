@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-04-01
+
 ### Added
 - Intelligent Solidity autocomplete with in-scope symbols, member completions (`msg.`, `MyEnum.`, `MyLib.`), builtins, imported symbols, and auto-import suggestions that can insert missing `import` statements
 - Workspace-wide `.sol` symbol indexing with incremental updates to keep LSP autocomplete current as files change
@@ -137,8 +139,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.4...HEAD
-[0.0.4]: https://github.com/TateB/solgrid/compare/v0.0.3...v0.0.4
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/TateB/solgrid/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/TateB/solgrid/releases/tag/v0.0.4
 [0.0.3]: https://github.com/TateB/solgrid/releases/tag/v0.0.3
 [0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2
 [0.0.1]: https://github.com/TateB/solgrid/releases/tag/v0.0.1

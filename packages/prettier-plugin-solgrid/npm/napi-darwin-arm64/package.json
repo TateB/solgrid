@@ -1,6 +1,6 @@
 {
   "name": "@solgrid/napi-darwin-arm64",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "solgrid NAPI native binding for macOS ARM64 (Apple Silicon)",
   "license": "MIT",
   "repository": {
