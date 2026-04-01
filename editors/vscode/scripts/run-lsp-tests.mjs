@@ -12,11 +12,16 @@ const binaryName = process.platform === "win32" ? "solgrid.exe" : "solgrid";
 const rawArgs = process.argv.slice(2);
 const separatorIndex = rawArgs.indexOf("--");
 const args = separatorIndex === -1 ? rawArgs : rawArgs.slice(0, separatorIndex);
-const vitestArgs = separatorIndex === -1 ? [] : rawArgs.slice(separatorIndex + 1);
+const forwardedArgs =
+  separatorIndex === -1 ? [] : rawArgs.slice(separatorIndex + 1);
+const runnerFlags = new Set(["--release", "--debug", "--no-build"]);
+const liftedArgs = forwardedArgs.filter((arg) => runnerFlags.has(arg));
+const vitestArgs = forwardedArgs.filter((arg) => !runnerFlags.has(arg));
+const runnerArgs = [...args, ...liftedArgs];
 
-const wantsRelease = args.includes("--release");
-const wantsDebug = args.includes("--debug");
-const noBuild = args.includes("--no-build");
+const wantsRelease = runnerArgs.includes("--release");
+const wantsDebug = runnerArgs.includes("--debug");
+const noBuild = runnerArgs.includes("--no-build");
 
 if (wantsRelease && wantsDebug) {
   console.error("Choose only one of --debug or --release.");
