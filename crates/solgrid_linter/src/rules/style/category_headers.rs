@@ -2,6 +2,7 @@
 //!
 //! Enforce canonical category header sections inside contract-like bodies.
 
+use super::initialization;
 use crate::context::LintContext;
 use crate::rule::Rule;
 use serde::Deserialize;
@@ -10,7 +11,7 @@ use solgrid_parser::solar_ast::{
     ContractKind, FunctionKind, Item, ItemFunction, ItemKind, Visibility,
 };
 use solgrid_parser::with_parsed_ast_sequential;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 static META: RuleMeta = RuleMeta {
     id: "style/category-headers",
@@ -485,7 +486,9 @@ fn function_category(
         return "Functions";
     }
 
-    if is_initialization_function(source, func, settings) {
+    let _ = source;
+
+    if initialization::is_initialization_function(func, &settings.initialization_functions) {
         return "Initialization";
     }
 
@@ -504,44 +507,6 @@ fn function_category(
     } else {
         base
     }
-}
-
-fn is_initialization_function(
-    _source: &str,
-    func: &ItemFunction<'_>,
-    settings: &CategoryHeadersSettings,
-) -> bool {
-    let name = if func.kind == FunctionKind::Constructor {
-        "constructor".to_string()
-    } else {
-        match func.header.name {
-            Some(name) => name.as_str().to_string(),
-            None => String::new(),
-        }
-    };
-
-    if name.starts_with("_init") || name.starts_with("__init") {
-        return true;
-    }
-
-    let configured: HashSet<String> = if settings.initialization_functions.is_empty() {
-        [
-            "constructor",
-            "supportsInterface",
-            "supportsFeature",
-            "initialize",
-        ]
-        .into_iter()
-        .map(ToString::to_string)
-        .collect()
-    } else {
-        settings.initialization_functions.iter().cloned().collect()
-    };
-
-    if configured.contains(&name) {
-        return true;
-    }
-    false
 }
 
 fn is_constant_like(source: &str, item: &Item<'_>) -> bool {

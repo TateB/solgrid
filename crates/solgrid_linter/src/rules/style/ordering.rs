@@ -3,6 +3,7 @@
 //! Enforce canonical declaration ordering at the file level and inside
 //! contract-like bodies.
 
+use super::initialization;
 use crate::context::LintContext;
 use crate::rule::Rule;
 use solgrid_diagnostics::*;
@@ -35,6 +36,8 @@ impl Rule for OrderingRule {
 
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
         let filename = ctx.path.to_string_lossy().to_string();
+        let initialization_functions =
+            initialization::configured_initialization_functions(ctx.config);
         with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
 
@@ -56,7 +59,12 @@ impl Rule for OrderingRule {
                 if let Some(diag) = first_scope_violation(
                     ctx,
                     contract.body.iter().filter_map(|body_item| {
-                        contract_item_weight(ctx.source, contract.kind, body_item)
+                        contract_item_weight(
+                            ctx.source,
+                            contract.kind,
+                            body_item,
+                            &initialization_functions,
+                        )
                     }),
                 ) {
                     diagnostics.push(diag);
@@ -128,6 +136,7 @@ fn contract_item_weight(
     source: &str,
     contract_kind: ContractKind,
     item: &Item<'_>,
+    initialization_functions: &[String],
 ) -> Option<WeightedItem> {
     let (weight, label) = match &item.kind {
         ItemKind::Using(_) => (0, "Using declaration"),
@@ -143,7 +152,9 @@ fn contract_item_weight(
         ItemKind::Function(func) if func.kind == FunctionKind::Modifier => {
             (40, "Modifier definition")
         }
-        ItemKind::Function(func) if is_initialization_function(source, func) => {
+        ItemKind::Function(func)
+            if initialization::is_initialization_function(func, initialization_functions) =>
+        {
             (50, "Initialization function")
         }
         ItemKind::Function(func) => function_weight(contract_kind, func)?,
@@ -193,63 +204,4 @@ fn is_constant_like(source: &str, item: &Item<'_>) -> bool {
 fn is_immutable_like(source: &str, item: &Item<'_>) -> bool {
     solgrid_ast::span_text(source, item.span).contains(" immutable ")
         || solgrid_ast::span_text(source, item.span).contains(" immutable;")
-}
-
-fn is_initialization_function(source: &str, func: &ItemFunction<'_>) -> bool {
-    let name = match func.header.name {
-        Some(name) => name.as_str().to_string(),
-        None => String::new(),
-    };
-
-    if name == "initialize"
-        && matches!(func.header.visibility(), Some(Visibility::Public))
-        && func.header.modifiers.iter().any(|modifier| {
-            modifier
-                .name
-                .segments()
-                .iter()
-                .any(|segment| segment.as_str() == "initializer")
-        })
-    {
-        return true;
-    }
-
-    if !matches!(name.as_str(), "supportsInterface" | "supportsFeature") {
-        return false;
-    }
-
-    if !matches!(
-        func.header.visibility(),
-        Some(Visibility::Public) | Some(Visibility::External)
-    ) {
-        return false;
-    }
-
-    if !matches!(
-        func.header.state_mutability(),
-        StateMutability::View | StateMutability::Pure
-    ) {
-        return false;
-    }
-
-    if func.header.parameters.len() != 1 {
-        return false;
-    }
-
-    let returns = match &func.header.returns {
-        Some(returns) => returns,
-        None => return false,
-    };
-    if returns.len() != 1 {
-        return false;
-    }
-
-    let parameter_ty = &func.header.parameters[0].ty;
-    let return_ty = &returns[0].ty;
-
-    is_exact_type(source, parameter_ty, "bytes4") && is_exact_type(source, return_ty, "bool")
-}
-
-fn is_exact_type(source: &str, ty: &solgrid_parser::solar_ast::Type<'_>, expected: &str) -> bool {
-    solgrid_ast::span_text(source, ty.span).trim() == expected
 }

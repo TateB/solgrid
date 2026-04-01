@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed file-based remapping discovery to avoid inheriting unrelated current-working-directory remappings
 - Fixed `style/prefer-remappings` path matching by canonicalizing remapping targets before prefix comparison
 - Fixed `style/prefer-remappings` producing mangled import paths when remapping prefixes omit a trailing slash
+- Fixed `style/imports-ordering` safe autofixes to avoid rewriting across separated import blocks or comment-bearing import gaps
+- Fixed selector-tag autofixes to skip unresolved custom types, and aligned initialization classification between `style/category-headers` and `style/ordering`
 ### Removed
 - `style/import-path-format` rule (replaced by `style/prefer-remappings`)
 

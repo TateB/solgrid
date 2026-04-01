@@ -2495,6 +2495,43 @@ initialization_functions = ["bootstrap"]
 }
 
 #[test]
+fn test_category_headers_fix_keeps_initialize_consistent_with_ordering() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private _value;
+    function initialize() public {}
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert_no_diagnostics(&fixed, "style/ordering");
+}
+
+#[test]
+fn test_ordering_uses_configured_initialization_functions() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 private _value;
+    function bootstrap() public {}
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+initialization_functions = ["bootstrap"]
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/ordering", &config);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
 fn test_category_headers_empty_contract_body_clean() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -2513,6 +2550,19 @@ contract Test {}
 "#;
     let diagnostics = lint_source_for_rule(source, "style/imports-ordering");
     assert!(!diagnostics.is_empty());
+}
+
+#[test]
+fn test_imports_ordering_ignores_nonconsecutive_import_blocks() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./Zebra.sol";
+contract Test {}
+import "./Alpha.sol";
+"#;
+    assert_no_diagnostics(source, "style/imports-ordering");
+    let fixed = fix_source(source);
+    assert!(fixed.contains("contract Test {}"));
 }
 
 #[test]
@@ -3268,6 +3318,40 @@ error InvalidPair(Pair pair);
     );
     let fixed = result.0;
     assert!(fixed.contains("/// @dev Error selector: `0x"));
+}
+
+#[test]
+fn test_selector_tags_skip_unresolved_custom_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let main_path = dir.path().join("Main.sol");
+
+    fs::write(
+        &main_path,
+        r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Pair} from "./Missing.sol";
+
+error InvalidPair(Pair pair);
+"#,
+    )
+    .unwrap();
+
+    let source = fs::read_to_string(&main_path).unwrap();
+    let engine = LintEngine::new();
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+
+    let diagnostics = engine.lint_source(&source, &main_path, &config).diagnostics;
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diag| diag.rule_id == "docs/selector-tags")
+            .count(),
+        0
+    );
+
+    let (fixed, _) = engine.fix_source(&source, &main_path, &config, false);
+    assert!(!fixed.contains("Error selector"));
 }
 
 #[test]

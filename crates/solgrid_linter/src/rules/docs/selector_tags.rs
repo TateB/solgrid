@@ -91,24 +91,26 @@ impl Rule for SelectorTagsRule {
             for item in source_unit.items.iter() {
                 match &item.kind {
                     ItemKind::Error(error) => {
-                        let expected = selector_tag_line(
-                            "Error",
-                            error_selector_hex(
-                                error.name.as_str(),
-                                &error
-                                    .parameters
-                                    .iter()
-                                    .map(|param| {
-                                        db.canonical_type(
-                                            &inline_path,
-                                            None,
-                                            &type_shape_from_ast(ctx.source, &param.ty),
-                                        )
-                                    })
-                                    .collect::<Vec<_>>(),
-                            ),
-                        );
-                        if let Some(diag) = selector_diagnostic(ctx, item, &expected, "Error") {
+                        let expected = error
+                            .parameters
+                            .iter()
+                            .map(|param| {
+                                db.canonical_type(
+                                    &inline_path,
+                                    None,
+                                    &type_shape_from_ast(ctx.source, &param.ty),
+                                )
+                            })
+                            .collect::<Option<Vec<_>>>()
+                            .map(|params| {
+                                selector_tag_line(
+                                    "Error",
+                                    error_selector_hex(error.name.as_str(), &params),
+                                )
+                            });
+                        if let Some(diag) = expected
+                            .and_then(|expected| selector_diagnostic(ctx, item, &expected, "Error"))
+                        {
                             diagnostics.push(diag);
                         }
                     }
@@ -128,47 +130,51 @@ impl Rule for SelectorTagsRule {
                             continue;
                         }
 
-                        let interface_id = functions.iter().fold([0u8; 4], |mut acc, func| {
+                        let interface_id = functions.iter().try_fold([0u8; 4], |mut acc, func| {
                             let selector = function_selector(
                                 ctx.source,
                                 &mut db,
                                 &inline_path,
                                 Some(contract.name.as_str()),
                                 func,
-                            );
+                            )?;
                             for (byte, other) in acc.iter_mut().zip(selector) {
                                 *byte ^= other;
                             }
-                            acc
+                            Some(acc)
                         });
-
-                        let expected = selector_tag_line("Interface", selector_hex(interface_id));
-                        if let Some(diag) = selector_diagnostic(ctx, item, &expected, "Interface") {
-                            diagnostics.push(diag);
+                        if let Some(interface_id) = interface_id {
+                            let expected =
+                                selector_tag_line("Interface", selector_hex(interface_id));
+                            if let Some(diag) =
+                                selector_diagnostic(ctx, item, &expected, "Interface")
+                            {
+                                diagnostics.push(diag);
+                            }
                         }
 
                         for body_item in contract.body.iter() {
                             if let ItemKind::Error(error) = &body_item.kind {
-                                let expected = selector_tag_line(
-                                    "Error",
-                                    error_selector_hex(
-                                        error.name.as_str(),
-                                        &error
-                                            .parameters
-                                            .iter()
-                                            .map(|param| {
-                                                db.canonical_type(
-                                                    &inline_path,
-                                                    Some(contract.name.as_str()),
-                                                    &type_shape_from_ast(ctx.source, &param.ty),
-                                                )
-                                            })
-                                            .collect::<Vec<_>>(),
-                                    ),
-                                );
-                                if let Some(diag) =
+                                let expected = error
+                                    .parameters
+                                    .iter()
+                                    .map(|param| {
+                                        db.canonical_type(
+                                            &inline_path,
+                                            Some(contract.name.as_str()),
+                                            &type_shape_from_ast(ctx.source, &param.ty),
+                                        )
+                                    })
+                                    .collect::<Option<Vec<_>>>()
+                                    .map(|params| {
+                                        selector_tag_line(
+                                            "Error",
+                                            error_selector_hex(error.name.as_str(), &params),
+                                        )
+                                    });
+                                if let Some(diag) = expected.and_then(|expected| {
                                     selector_diagnostic(ctx, body_item, &expected, "Error")
-                                {
+                                }) {
                                     diagnostics.push(diag);
                                 }
                             }
@@ -177,26 +183,26 @@ impl Rule for SelectorTagsRule {
                     ItemKind::Contract(contract) => {
                         for body_item in contract.body.iter() {
                             if let ItemKind::Error(error) = &body_item.kind {
-                                let expected = selector_tag_line(
-                                    "Error",
-                                    error_selector_hex(
-                                        error.name.as_str(),
-                                        &error
-                                            .parameters
-                                            .iter()
-                                            .map(|param| {
-                                                db.canonical_type(
-                                                    &inline_path,
-                                                    Some(contract.name.as_str()),
-                                                    &type_shape_from_ast(ctx.source, &param.ty),
-                                                )
-                                            })
-                                            .collect::<Vec<_>>(),
-                                    ),
-                                );
-                                if let Some(diag) =
+                                let expected = error
+                                    .parameters
+                                    .iter()
+                                    .map(|param| {
+                                        db.canonical_type(
+                                            &inline_path,
+                                            Some(contract.name.as_str()),
+                                            &type_shape_from_ast(ctx.source, &param.ty),
+                                        )
+                                    })
+                                    .collect::<Option<Vec<_>>>()
+                                    .map(|params| {
+                                        selector_tag_line(
+                                            "Error",
+                                            error_selector_hex(error.name.as_str(), &params),
+                                        )
+                                    });
+                                if let Some(diag) = expected.and_then(|expected| {
                                     selector_diagnostic(ctx, body_item, &expected, "Error")
-                                {
+                                }) {
                                     diagnostics.push(diag);
                                 }
                             }
@@ -352,7 +358,7 @@ fn function_selector(
     file: &Path,
     current_contract: Option<&str>,
     func: &ItemFunction<'_>,
-) -> [u8; 4] {
+) -> Option<[u8; 4]> {
     let name = func
         .header
         .name
@@ -369,8 +375,8 @@ fn function_selector(
                 &type_shape_from_ast(source, &param.ty),
             )
         })
-        .collect::<Vec<_>>();
-    selector_bytes(&format!("{name}({})", params.join(",")))
+        .collect::<Option<Vec<_>>>()?;
+    Some(selector_bytes(&format!("{name}({})", params.join(","))))
 }
 
 fn selector_bytes(signature: &str) -> [u8; 4] {
@@ -391,23 +397,25 @@ impl<'a> TypeDatabase<'a> {
         file: &Path,
         current_contract: Option<&str>,
         shape: &TypeShape,
-    ) -> String {
+    ) -> Option<String> {
         match shape {
-            TypeShape::Elementary(value) | TypeShape::Raw(value) => value.clone(),
+            TypeShape::Elementary(value) | TypeShape::Raw(value) => Some(value.clone()),
             TypeShape::Array(element, size) => match size {
-                Some(size) => format!(
+                Some(size) => Some(format!(
                     "{}[{size}]",
-                    self.canonical_type(file, current_contract, element)
-                ),
-                None => format!("{}[]", self.canonical_type(file, current_contract, element)),
+                    self.canonical_type(file, current_contract, element)?
+                )),
+                None => Some(format!(
+                    "{}[]",
+                    self.canonical_type(file, current_contract, element)?
+                )),
             },
             TypeShape::Custom(segments) => {
                 let mut visited = HashSet::new();
                 match self.resolve_type(file, current_contract, segments, &mut visited) {
-                    Some(resolved) => match resolved.def.kind {
-                        StoredTypeKind::Struct(fields) => format!(
-                            "({})",
-                            fields
+                    Some(resolved) => Some(match resolved.def.kind {
+                        StoredTypeKind::Struct(fields) => {
+                            let fields = fields
                                 .iter()
                                 .map(|field| {
                                     self.canonical_type(
@@ -416,18 +424,18 @@ impl<'a> TypeDatabase<'a> {
                                         field,
                                     )
                                 })
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        ),
+                                .collect::<Option<Vec<_>>>()?;
+                            format!("({})", fields.join(","))
+                        }
                         StoredTypeKind::Enum => "uint8".to_string(),
                         StoredTypeKind::ContractLike => "address".to_string(),
                         StoredTypeKind::Udvt(inner) => self.canonical_type(
                             &resolved.file,
                             resolved.def.owner.as_deref(),
                             &inner,
-                        ),
-                    },
-                    None => "address".to_string(),
+                        )?,
+                    }),
+                    None => None,
                 }
             }
         }

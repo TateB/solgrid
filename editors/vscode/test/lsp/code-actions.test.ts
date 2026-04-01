@@ -216,26 +216,26 @@ describe("LSP Code Actions", () => {
   });
 
   it("returns suggestion code actions for later diagnostic ranges", async () => {
-    const uri = fixtureUri("mixed-import-paths.sol");
+    const uri = fixtureUri("constant-vars.sol");
     const content = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.0;
 
-import "forge-std/Test.sol";
-import "./Local.sol";
-
-contract Test {}
+contract Test {
+    uint256 public x = 1;
+    uint256 public y = 2;
+}
 `;
 
     openDocument(client, uri, content);
     const result = await waitForDiagnostics(client, uri);
 
-    const importPathDiags = result.diagnostics.filter(
+    const constantDiags = result.diagnostics.filter(
       (diag): diag is Diagnostic =>
-        diag.code === "style/import-path-format"
+        diag.code === "gas/use-constant"
     );
-    expect(importPathDiags.length).toBeGreaterThan(0);
+    expect(constantDiags.length).toBeGreaterThanOrEqual(2);
 
-    const secondDiag = importPathDiags[0];
+    const secondDiag = constantDiags[1];
     const actions = await requestCodeActions(
       client,
       uri,
@@ -245,7 +245,7 @@ contract Test {}
 
     expect(actions).toContainEqual(
       expect.objectContaining({
-        title: "Convert to absolute import path (suggestion)",
+        title: "Add `constant` modifier (suggestion)",
         kind: "refactor",
       })
     );

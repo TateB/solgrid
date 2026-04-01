@@ -4,6 +4,7 @@ mod category_headers;
 mod eol_last;
 mod file_name_format;
 mod imports_ordering;
+mod initialization;
 mod max_line_length;
 mod no_multiple_empty_lines;
 mod no_trailing_whitespace;
