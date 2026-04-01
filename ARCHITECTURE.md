@@ -579,46 +579,32 @@ EXAMPLES:
 
 ## 11. Project Roadmap
 
-### Phase 1: Foundation
+### Completed Foundation Phases
 
-- Workspace setup with all crates
+The original foundation roadmap has largely landed:
+
+- workspace setup with the current Rust crates
 - Solar parser integration (`solgrid_parser`)
-- Rule engine and built-in rule registry
-- First 30 rules: all security rules, core naming rules, core best practices
-- Three-tier fix system
-- CLI (`solgrid check`, `solgrid fix`)
-- `solgrid.toml` config parsing
-- Snapshot test infrastructure
-- Text and JSON output formats
+- rule engine, formatter, cache, and CLI
+- LSP server and VS Code extension
+- Prettier plugin, WASM target, and release packaging
 
-### Phase 2: Formatter + Full Rules
+### Next Phase: IDE and Security Platform Expansion
 
-- Built-in formatter (`solgrid fmt`)
-- Full rule catalog across gas, style, and docs
-- Inline suppression system
-- Incremental caching
-- GitHub and SARIF output formats
-- Config migration command
-- Foundry.toml compatibility
-- CI integration documentation
+The next major roadmap item is to close the feature gap with Wake-powered Solidity tooling while preserving `solgrid`'s Rust-native architecture.
 
-### Phase 3: Editor Integration
+Planned work includes:
 
-- LSP server (`solgrid_server`)
-- VSCode extension (TypeScript client)
-- Fix-on-save, format-on-save
-- Code action presentation (tiered fixes)
-- Hover docs for rules
-- Extension published to VS Marketplace
+- a shared workspace and semantic project model for imports, symbols, compilation units, and incremental invalidation
+- compiler-aware diagnostics backed by a Rust-native semantic backend (`solar` / `solar-sema` first)
+- a detector platform that can represent severity, confidence, docs, suppression, and fix metadata
+- a VS Code security overview for triage and filtering
+- richer navigation: references, document links, document symbols, workspace symbols, outline, and code lens
+- graph generation and previews for imports, inheritance, linearized inheritance, and control flow
+- inlay hints and coverage ingestion/UI
+- additional editor polish such as semantic tokens, rename, call hierarchy, and richer commands where they fit the product
 
-### Phase 4: Prettier Plugin + Polish
-
-- NAPI-RS bindings (`solgrid_napi`)
-- Prettier plugin (`prettier-plugin-solgrid`)
-- Formatter conformance and regression test suite
-- WASM build (`solgrid_wasm`) for web playground
-- Performance optimization pass
-- v1.0 release
+The detailed execution plan lives in [docs/editor-security-roadmap.md](docs/editor-security-roadmap.md).
 
 ---
 

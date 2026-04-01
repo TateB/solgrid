@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added an IDE and security expansion roadmap covering a Solar-first semantic backend strategy, compiler-aware diagnostics, detector architecture, security overview UX, richer navigation, graph tooling, inlay hints, and coverage planning
+
 ## [0.0.5] - 2026-04-01
 
 ### Added

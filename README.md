@@ -61,6 +61,7 @@ The default `recommended` preset enables `security/*`, `best-practices/*`, and `
 | [Configuration Guide](docs/configuration.md) | Full `solgrid.toml` reference, presets, resolution order |
 | [Rules Reference](docs/rules.md) | Current rule inventory with default severity and fix availability |
 | [Editor Integration](docs/editor-integration.md) | VSCode, Cursor, and LSP setup for other editors |
+| [IDE and Security Roadmap](docs/editor-security-roadmap.md) | Detailed plan for compiler diagnostics, detectors, graphs, and richer editor UX |
 | [Prettier Plugin](docs/prettier-plugin.md) | Using solgrid as a Prettier plugin |
 | [Output Formats](docs/output-formats.md) | Text, JSON, GitHub Actions, and SARIF output |
 | [WASM Bindings](docs/wasm.md) | Browser and web playground API |
