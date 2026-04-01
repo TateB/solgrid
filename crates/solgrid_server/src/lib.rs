@@ -13,7 +13,9 @@ pub mod document;
 pub mod format;
 pub mod hover;
 pub mod resolve;
+pub mod semantic;
 pub mod server;
+pub mod signature_help;
 pub mod symbols;
 pub mod workspace_index;
 

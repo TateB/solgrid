@@ -69,6 +69,24 @@ export interface CompletionItem {
   additionalTextEdits?: TextEdit[];
 }
 
+export interface ParameterInformation {
+  label: string | [number, number];
+  documentation?: string | { kind: string; value: string };
+}
+
+export interface SignatureInformation {
+  label: string;
+  documentation?: string | { kind: string; value: string };
+  parameters?: ParameterInformation[];
+  activeParameter?: number;
+}
+
+export interface SignatureHelp {
+  signatures: SignatureInformation[];
+  activeSignature?: number;
+  activeParameter?: number;
+}
+
 export interface InitializeResult {
   capabilities: {
     textDocumentSync?: {
@@ -82,6 +100,10 @@ export interface InitializeResult {
     documentRangeFormattingProvider?: boolean | unknown;
     hoverProvider?: boolean | unknown;
     completionProvider?: { triggerCharacters?: string[] };
+    signatureHelpProvider?: {
+      triggerCharacters?: string[];
+      retriggerCharacters?: string[];
+    };
   };
   serverInfo?: {
     name: string;
@@ -151,6 +173,14 @@ export async function initializeServer(
         completion: {
           completionItem: {
             snippetSupport: false,
+          },
+        },
+        signatureHelp: {
+          signatureInformation: {
+            documentationFormat: ["markdown", "plaintext"],
+            parameterInformation: {
+              labelOffsetSupport: true,
+            },
           },
         },
         publishDiagnostics: {},
@@ -304,6 +334,17 @@ export async function requestCompletion(
   position: Position
 ): Promise<CompletionItem[] | { items: CompletionItem[] } | null> {
   return client.request("textDocument/completion", {
+    textDocument: { uri },
+    position,
+  });
+}
+
+export async function requestSignatureHelp(
+  client: TestLspClient,
+  uri: string,
+  position: Position
+): Promise<SignatureHelp | null> {
+  return client.request("textDocument/signatureHelp", {
     textDocument: { uri },
     position,
   });

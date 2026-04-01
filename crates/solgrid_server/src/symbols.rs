@@ -1,17 +1,22 @@
 //! Symbol table — build a per-file scope tree from the Solar AST
 //! and resolve identifiers to their definitions.
 
-use solgrid_parser::solar_ast::{ImportItems, ItemKind, Stmt, StmtKind};
+use solgrid_parser::solar_ast::{
+    DataLocation, FunctionKind, ImportItems, ItemFunction, ItemKind, Stmt, StmtKind, Type,
+    TypeKind, VariableDefinition,
+};
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
+use std::collections::HashSet;
 use std::ops::Range;
 
 /// Kind of symbol declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolKind {
     Contract,
     Interface,
     Library,
+    Constructor,
     Function,
     Modifier,
     Event,
@@ -27,6 +32,95 @@ pub enum SymbolKind {
     EnumVariant,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypePath {
+    pub segments: Vec<String>,
+}
+
+impl TypePath {
+    pub fn as_display(&self) -> String {
+        self.segments.join(".")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeSpec {
+    Elementary {
+        display: String,
+    },
+    Custom {
+        path: TypePath,
+        display: String,
+        resolve_offset: usize,
+    },
+    Array {
+        element: Box<TypeSpec>,
+        display: String,
+    },
+    Mapping {
+        value: Box<TypeSpec>,
+        display: String,
+    },
+    Function {
+        display: String,
+    },
+    Other {
+        display: String,
+    },
+}
+
+impl TypeSpec {
+    pub fn display(&self) -> &str {
+        match self {
+            Self::Elementary { display }
+            | Self::Custom { display, .. }
+            | Self::Array { display, .. }
+            | Self::Mapping { display, .. }
+            | Self::Function { display }
+            | Self::Other { display } => display,
+        }
+    }
+
+    pub fn member_target(&self) -> Option<&TypePath> {
+        match self {
+            Self::Custom { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub fn resolve_offset(&self) -> usize {
+        match self {
+            Self::Custom { resolve_offset, .. } => *resolve_offset,
+            Self::Array { element, .. } | Self::Mapping { value: element, .. } => {
+                element.resolve_offset()
+            }
+            _ => 0,
+        }
+    }
+
+    pub fn index_result(&self) -> Option<&TypeSpec> {
+        match self {
+            Self::Array { element, .. } | Self::Mapping { value: element, .. } => Some(element),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureParam {
+    pub label: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureData {
+    pub label: String,
+    pub parameters: Vec<SignatureParam>,
+    pub return_types: Vec<TypeSpec>,
+    pub first_return_type: Option<TypeSpec>,
+}
+
 /// A single symbol definition.
 #[derive(Debug, Clone)]
 pub struct SymbolDef {
@@ -38,6 +132,10 @@ pub struct SymbolDef {
     pub def_span: Range<usize>,
     /// If this symbol creates a child scope (contract, struct, enum), the scope id.
     pub scope: Option<ScopeId>,
+    /// The declared type for values such as variables and parameters.
+    pub type_info: Option<TypeSpec>,
+    /// Callable signature metadata for functions and modifiers.
+    pub signature: Option<SignatureData>,
 }
 
 /// An import statement with its path and imported symbols.
@@ -66,7 +164,7 @@ pub enum ImportedSymbols {
 pub type ScopeId = usize;
 
 /// A lexical scope containing symbol definitions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Scope {
     parent: Option<ScopeId>,
     /// Byte range this scope covers in the source.
@@ -75,7 +173,7 @@ struct Scope {
 }
 
 /// Per-file symbol table with nested scopes.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SymbolTable {
     scopes: Vec<Scope>,
     /// Import statements found in the file.
@@ -106,6 +204,11 @@ impl SymbolTable {
 
     /// Find the innermost scope containing `offset`, then walk up looking for `name`.
     pub fn resolve(&self, name: &str, offset: usize) -> Option<&SymbolDef> {
+        self.resolve_all(name, offset).into_iter().next()
+    }
+
+    /// Find every definition visible for `name` at `offset`.
+    pub fn resolve_all(&self, name: &str, offset: usize) -> Vec<&SymbolDef> {
         // Find the innermost scope containing the offset.
         let mut best: Option<ScopeId> = None;
         for (id, scope) in self.scopes.iter().enumerate() {
@@ -125,17 +228,18 @@ impl SymbolTable {
 
         // Walk up the scope chain.
         let mut current = best;
+        let mut results = Vec::new();
         while let Some(id) = current {
             let scope = &self.scopes[id];
             for sym in &scope.symbols {
                 if sym.name == name {
-                    return Some(sym);
+                    results.push(sym);
                 }
             }
             current = scope.parent;
         }
 
-        None
+        results
     }
 
     /// Find the innermost function or modifier whose def_span contains `offset`.
@@ -143,8 +247,10 @@ impl SymbolTable {
         let mut best: Option<&SymbolDef> = None;
         for scope in &self.scopes {
             for sym in &scope.symbols {
-                if matches!(sym.kind, SymbolKind::Function | SymbolKind::Modifier)
-                    && sym.def_span.contains(&offset)
+                if matches!(
+                    sym.kind,
+                    SymbolKind::Constructor | SymbolKind::Function | SymbolKind::Modifier
+                ) && sym.def_span.contains(&offset)
                 {
                     match best {
                         None => best = Some(sym),
@@ -197,7 +303,7 @@ impl SymbolTable {
             }
         }
 
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let mut result = Vec::new();
 
         // Walk up the scope chain, collecting symbols.
@@ -223,9 +329,38 @@ impl SymbolTable {
         container_def: &SymbolDef,
         member_name: &str,
     ) -> Option<&SymbolDef> {
-        let scope_id = container_def.scope?;
+        self.resolve_member_all(container_def, member_name)
+            .into_iter()
+            .next()
+    }
+
+    /// Resolve all members inside a container symbol's scope.
+    pub fn resolve_member_all(
+        &self,
+        container_def: &SymbolDef,
+        member_name: &str,
+    ) -> Vec<&SymbolDef> {
+        let Some(scope_id) = container_def.scope else {
+            return Vec::new();
+        };
         let scope = &self.scopes[scope_id];
-        scope.symbols.iter().find(|s| s.name == member_name)
+        scope
+            .symbols
+            .iter()
+            .filter(|s| s.name == member_name)
+            .collect()
+    }
+
+    /// Return constructor definitions attached to a container scope.
+    pub fn constructors(&self, container_def: &SymbolDef) -> Vec<&SymbolDef> {
+        let Some(scope_id) = container_def.scope else {
+            return Vec::new();
+        };
+        self.scopes[scope_id]
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Constructor)
+            .collect()
     }
 }
 
@@ -303,6 +438,137 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
+pub(crate) fn normalize_whitespace(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut prev_was_ws = false;
+    for ch in text.trim().chars() {
+        if ch.is_whitespace() {
+            if !prev_was_ws {
+                result.push(' ');
+                prev_was_ws = true;
+            }
+        } else {
+            result.push(ch);
+            prev_was_ws = false;
+        }
+    }
+    result
+}
+
+pub(crate) fn display_for_type(
+    source: &str,
+    ty: &Type<'_>,
+    data_location: Option<DataLocation>,
+) -> String {
+    let mut display = normalize_whitespace(&source[solgrid_ast::span_to_range(ty.span)]);
+    if let Some(location) = data_location {
+        display.push(' ');
+        display.push_str(&location.to_string());
+    }
+    display
+}
+
+pub(crate) fn type_spec_from_ast(
+    source: &str,
+    ty: &Type<'_>,
+    data_location: Option<DataLocation>,
+    resolve_offset: usize,
+) -> TypeSpec {
+    let display = display_for_type(source, ty, data_location);
+    match &ty.kind {
+        TypeKind::Custom(path) => TypeSpec::Custom {
+            path: TypePath {
+                segments: path
+                    .segments()
+                    .iter()
+                    .map(|segment| segment.as_str().to_string())
+                    .collect(),
+            },
+            display,
+            resolve_offset,
+        },
+        TypeKind::Array(array) => TypeSpec::Array {
+            element: Box::new(type_spec_from_ast(
+                source,
+                &array.element,
+                None,
+                resolve_offset,
+            )),
+            display,
+        },
+        TypeKind::Mapping(mapping) => TypeSpec::Mapping {
+            value: Box::new(type_spec_from_ast(
+                source,
+                &mapping.value,
+                None,
+                resolve_offset,
+            )),
+            display,
+        },
+        TypeKind::Function(_) => TypeSpec::Function { display },
+        TypeKind::Elementary(_) => TypeSpec::Elementary { display },
+    }
+}
+
+fn parameter_label(source: &str, param: &VariableDefinition<'_>) -> String {
+    normalize_whitespace(&source[solgrid_ast::span_to_range(param.span)])
+}
+
+fn signature_data_for_function(source: &str, func: &ItemFunction<'_>) -> SignatureData {
+    let label = normalize_whitespace(&source[solgrid_ast::span_to_range(func.header.span)]);
+    let param_labels: Vec<String> = func
+        .header
+        .parameters
+        .iter()
+        .map(|param| parameter_label(source, param))
+        .collect();
+    let parameters = map_parameter_offsets(&label, &param_labels);
+    let return_types: Vec<TypeSpec> = func
+        .header
+        .returns()
+        .iter()
+        .map(|param| {
+            type_spec_from_ast(
+                source,
+                &param.ty,
+                param.data_location,
+                solgrid_ast::span_to_range(func.header.span).start,
+            )
+        })
+        .collect();
+
+    SignatureData {
+        label,
+        parameters,
+        first_return_type: return_types.first().cloned(),
+        return_types,
+    }
+}
+
+fn map_parameter_offsets(label: &str, param_labels: &[String]) -> Vec<SignatureParam> {
+    let mut search_start = 0usize;
+    let mut parameters = Vec::with_capacity(param_labels.len());
+
+    for param_label in param_labels {
+        let found = label[search_start..]
+            .find(param_label)
+            .map(|relative| search_start + relative)
+            .or_else(|| label.find(param_label));
+        let Some(start) = found else {
+            continue;
+        };
+        let end = start + param_label.len();
+        parameters.push(SignatureParam {
+            label: param_label.clone(),
+            start: start as u32,
+            end: end as u32,
+        });
+        search_start = end;
+    }
+
+    parameters
+}
+
 /// Build a symbol table from Solidity source. Returns `None` on parse error.
 pub fn build_symbol_table(source: &str, filename: &str) -> Option<SymbolTable> {
     with_parsed_ast_sequential(source, filename, |source_unit| {
@@ -344,6 +610,8 @@ fn collect_item(
                     name_span,
                     def_span,
                     scope: Some(contract_scope),
+                    type_info: None,
+                    signature: None,
                 },
             );
 
@@ -355,9 +623,10 @@ fn collect_item(
         ItemKind::Function(func) => {
             let def_span = solgrid_ast::span_to_range(item.span);
             let func_scope = table.push_scope(Some(parent_scope), def_span.clone());
+            let signature = signature_data_for_function(source, func);
             if let Some(name_ident) = func.header.name {
                 let kind = match func.kind {
-                    solgrid_parser::solar_ast::FunctionKind::Modifier => SymbolKind::Modifier,
+                    FunctionKind::Modifier => SymbolKind::Modifier,
                     _ => SymbolKind::Function,
                 };
                 let name_span = solgrid_ast::span_to_range(name_ident.span);
@@ -369,6 +638,22 @@ fn collect_item(
                         name_span,
                         def_span: def_span.clone(),
                         scope: Some(func_scope),
+                        type_info: None,
+                        signature: Some(signature.clone()),
+                    },
+                );
+            } else if func.kind == FunctionKind::Constructor {
+                let header_start = solgrid_ast::span_to_range(func.header.span).start;
+                table.add_symbol(
+                    parent_scope,
+                    SymbolDef {
+                        name: "<constructor>".to_string(),
+                        kind: SymbolKind::Constructor,
+                        name_span: header_start..header_start,
+                        def_span: def_span.clone(),
+                        scope: Some(func_scope),
+                        type_info: None,
+                        signature: Some(signature.clone()),
                     },
                 );
             }
@@ -384,8 +669,15 @@ fn collect_item(
                             name: name_ident.as_str().to_string(),
                             kind: SymbolKind::Parameter,
                             name_span,
-                            def_span: param_def_span,
+                            def_span: param_def_span.clone(),
                             scope: None,
+                            type_info: Some(type_spec_from_ast(
+                                source,
+                                &param.ty,
+                                param.data_location,
+                                param_def_span.start,
+                            )),
+                            signature: None,
                         },
                     );
                 }
@@ -403,8 +695,15 @@ fn collect_item(
                                 name: name_ident.as_str().to_string(),
                                 kind: SymbolKind::ReturnParameter,
                                 name_span,
-                                def_span: param_def_span,
+                                def_span: param_def_span.clone(),
                                 scope: None,
+                                type_info: Some(type_spec_from_ast(
+                                    source,
+                                    &param.ty,
+                                    param.data_location,
+                                    param_def_span.start,
+                                )),
+                                signature: None,
                             },
                         );
                     }
@@ -428,6 +727,13 @@ fn collect_item(
                         name_span,
                         def_span: solgrid_ast::span_to_range(item.span),
                         scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &var.ty,
+                            var.data_location,
+                            solgrid_ast::span_to_range(item.span).start,
+                        )),
+                        signature: None,
                     },
                 );
             }
@@ -443,6 +749,8 @@ fn collect_item(
                     name_span,
                     def_span: solgrid_ast::span_to_range(item.span),
                     scope: None,
+                    type_info: None,
+                    signature: None,
                 },
             );
         }
@@ -457,6 +765,8 @@ fn collect_item(
                     name_span,
                     def_span: solgrid_ast::span_to_range(item.span),
                     scope: None,
+                    type_info: None,
+                    signature: None,
                 },
             );
         }
@@ -473,6 +783,8 @@ fn collect_item(
                     name_span,
                     def_span: struct_span,
                     scope: Some(struct_scope),
+                    type_info: None,
+                    signature: None,
                 },
             );
             // Register struct fields.
@@ -486,8 +798,15 @@ fn collect_item(
                             name: name_ident.as_str().to_string(),
                             kind: SymbolKind::StructField,
                             name_span: f_name_span,
-                            def_span: f_def_span,
+                            def_span: f_def_span.clone(),
                             scope: None,
+                            type_info: Some(type_spec_from_ast(
+                                source,
+                                &field.ty,
+                                field.data_location,
+                                f_def_span.start,
+                            )),
+                            signature: None,
                         },
                     );
                 }
@@ -506,6 +825,8 @@ fn collect_item(
                     name_span,
                     def_span: enum_span,
                     scope: Some(enum_scope),
+                    type_info: None,
+                    signature: None,
                 },
             );
 
@@ -520,6 +841,8 @@ fn collect_item(
                         name_span: v_span.clone(),
                         def_span: v_span,
                         scope: None,
+                        type_info: None,
+                        signature: None,
                     },
                 );
             }
@@ -535,6 +858,13 @@ fn collect_item(
                     name_span,
                     def_span: solgrid_ast::span_to_range(item.span),
                     scope: None,
+                    type_info: Some(type_spec_from_ast(
+                        source,
+                        &u.ty,
+                        None,
+                        solgrid_ast::span_to_range(item.span).start,
+                    )),
+                    signature: None,
                 },
             );
         }
@@ -590,6 +920,13 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                         name_span,
                         def_span: solgrid_ast::span_to_range(stmt.span),
                         scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &var_def.ty,
+                            var_def.data_location,
+                            solgrid_ast::span_to_range(stmt.span).start,
+                        )),
+                        signature: None,
                     },
                 );
             }
@@ -608,6 +945,13 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                                 name_span,
                                 def_span: solgrid_ast::span_to_range(var.span),
                                 scope: None,
+                                type_info: Some(type_spec_from_ast(
+                                    source,
+                                    &var.ty,
+                                    var.data_location,
+                                    solgrid_ast::span_to_range(var.span).start,
+                                )),
+                                signature: None,
                             },
                         );
                     }

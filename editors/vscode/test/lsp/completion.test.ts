@@ -11,6 +11,7 @@ import { TestLspClient } from "./client";
 import {
   initializeServer,
   openDocument,
+  closeDocument,
   waitForDiagnostics,
   requestCompletion,
   resetDocumentVersions,
@@ -456,6 +457,124 @@ describe("LSP Completion — Dot Completions", () => {
     expect(senderItem).toBeDefined();
     expect(senderItem!.detail).toBeDefined();
     expect(senderItem!.detail).toBeTruthy();
+  });
+
+  it("returns members for custom-typed contract instances", async () => {
+    const uri = "file:///tmp/completion-contract-instance.sol";
+    const content = [
+      "pragma solidity ^0.8.0;",
+      "",
+      "contract SomethingA {",
+      "  function thisThing() public view returns (string memory) {",
+      '    return "A";',
+      "  }",
+      "}",
+      "",
+      "contract SomethingB {",
+      "  SomethingA public somethingA;",
+      "",
+      "  constructor() {",
+      "    somethingA = new SomethingA();",
+      "  }",
+      "",
+      "  function thisThing() public view returns (string memory) {",
+      "    return somethingA.",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+
+    openDocument(client, uri, content);
+    await waitForDiagnostics(client, uri).catch(() => {});
+
+    const result = await requestCompletion(client, uri, {
+      line: 16,
+      character: 22, // after "somethingA."
+    });
+
+    const items = normalizeCompletionResult(result);
+    const thisThingItem = items.find((item) => item.label === "thisThing");
+
+    expect(thisThingItem).toBeDefined();
+    expect(thisThingItem!.detail).toContain("function thisThing()");
+  });
+
+  it("resolves chained call and index receivers for member completion", async () => {
+    const uri = "file:///tmp/completion-call-receiver.sol";
+    const callContent = [
+      "pragma solidity ^0.8.0;",
+      "",
+      "contract SomethingA {",
+      "  function thisThing() public view returns (string memory) {",
+      '    return "A";',
+      "  }",
+      "}",
+      "",
+      "contract SomethingB {",
+      "  mapping(address => SomethingA) public items;",
+      "",
+      "  constructor() {",
+      "    items[msg.sender] = new SomethingA();",
+      "  }",
+      "",
+      "  function current() public view returns (SomethingA) {",
+      "    return items[msg.sender];",
+      "  }",
+      "",
+      "  function fromCall() public view returns (string memory) {",
+      "    return current().",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+
+    openDocument(client, uri, callContent);
+    await waitForDiagnostics(client, uri).catch(() => {});
+
+    const fromCall = normalizeCompletionResult(
+      await requestCompletion(client, uri, {
+        line: 20,
+        character: 21, // after "current()."
+      })
+    );
+    closeDocument(client, uri);
+
+    const indexUri = "file:///tmp/completion-index-receiver.sol";
+    const indexContent = [
+      "pragma solidity ^0.8.0;",
+      "",
+      "contract SomethingA {",
+      "  function thisThing() public view returns (string memory) {",
+      '    return "A";',
+      "  }",
+      "}",
+      "",
+      "contract SomethingB {",
+      "  mapping(address => SomethingA) public items;",
+      "",
+      "  constructor() {",
+      "    items[msg.sender] = new SomethingA();",
+      "  }",
+      "",
+      "  function fromIndex() public view returns (string memory) {",
+      "    return items[msg.sender].",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+
+    openDocument(client, indexUri, indexContent);
+    await waitForDiagnostics(client, indexUri).catch(() => {});
+
+    const fromIndex = normalizeCompletionResult(
+      await requestCompletion(client, indexUri, {
+        line: 16,
+        character: 29, // after "items[msg.sender]."
+      })
+    );
+
+    expect(fromCall.map((item) => item.label)).toContain("thisThing");
+    expect(fromIndex.map((item) => item.label)).toContain("thisThing");
   });
 });
 

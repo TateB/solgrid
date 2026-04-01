@@ -343,7 +343,9 @@ fn extract_signature(source: &str, def: &SymbolDef, table: &symbols::SymbolTable
         }
 
         // Truncate at `{` to get the header only.
-        SymbolKind::Function | SymbolKind::Modifier => truncate_at_char(text, '{'),
+        SymbolKind::Constructor | SymbolKind::Function | SymbolKind::Modifier => {
+            truncate_at_char(text, '{')
+        }
 
         // Truncate at `;`.
         SymbolKind::Event | SymbolKind::Error | SymbolKind::Udvt => truncate_at_char(text, ';'),

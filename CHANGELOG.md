@@ -8,27 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Intelligent autocomplete with in-scope symbols, dot completions (`msg.`, `MyEnum.`, `MyLib.`), builtin globals/keywords/types, imported symbol completions, and auto-import suggestions with automatic `import` statement insertion
-- Workspace-wide symbol index that scans `.sol` files on startup and updates incrementally as files change
-- Integration tests for intelligent autocomplete: builtins/keywords, dot completions, in-scope symbols, and auto-import
-
-### Fixed
-- Fix VSCode integration test that expected zero completions in non-comment context after adding intelligent autocomplete
+- Intelligent Solidity autocomplete with in-scope symbols, member completions (`msg.`, `MyEnum.`, `MyLib.`), builtins, imported symbols, and auto-import suggestions that can insert missing `import` statements
+- Workspace-wide `.sol` symbol indexing with incremental updates to keep LSP autocomplete current as files change
+- Type-aware member autocomplete and signature help for user-defined functions, constructors, and builtins
 
 ### Changed
-- Make lint presets behaviorally meaningful, resolve `solgrid.toml` per file, and honor global discovery controls such as `include`, `exclude`, `respect_gitignore`, and `threads`
-- Support documented `[lint.settings]` knobs at runtime, including compiler version comparators, rule thresholds, regex-based Foundry test naming, and line-length limits
-- Make VSCode `solgrid.configPath` load an explicit config on initialize and config changes, and align the Prettier plugin with `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
-- Generate `docs/rules.md` from `solgrid list-rules` and verify it in CI to keep the rules reference aligned with the live registry
+- Config resolution now honors per-file `solgrid.toml` discovery together with global `include`, `exclude`, `respect_gitignore`, and `threads` controls
+- Runtime now applies documented `[lint.settings]` options, including compiler version ranges, rule thresholds, Foundry test naming patterns, and max line length
+- VS Code `solgrid.configPath` now reloads explicit configs on initialize and config changes, and the Prettier plugin aligns `solidityContractBodySpacing` / `solidityInheritanceBraceNewLine`
+- `docs/rules.md` is now generated from `solgrid list-rules` and verified in CI so the published rule reference stays in sync
 
 ### Deprecated
-- Treat `best-practices/use-natspec` as an alias for `docs/natspec-function` and keep `solidityContractNewLines` as a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
+- `best-practices/use-natspec` is now an alias for `docs/natspec-function`, and `solidityContractNewLines` remains a deprecated Prettier alias for `solidityContractBodySpacing = "single"`
 
 ### Fixed
-- Remove duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
-- Make runtime rule severity fallback match each rule's declared default severity instead of category-level defaults
-- Fix compiler-version allowed-range checks for wide pragma ranges, make config hashing deterministic for cache invalidation, and cache LSP/CLI config resolution instead of reloading configs on every file or request
-- Fix LSP autocomplete for namespace imports (`import "./Foo.sol" as Foo; Foo.Bar`) and refresh the auto-import index from disk when files close, only dropping entries for deleted files
+- Fixed duplicate NatSpec and custom-error diagnostics by making `docs/*` the canonical NatSpec home and only running `gas/custom-errors` when the best-practices rule is disabled
+- Fixed runtime rule-severity fallback to use each rule's declared default severity instead of category-level defaults
+- Fixed compiler-version range checks for wide pragma constraints, made config hashing deterministic for cache invalidation, and avoided repeated LSP/CLI config reloads
+- Fixed namespace-import autocomplete (`import "./Foo.sol" as Foo; Foo.Bar`) and stale auto-import index entries when files close
 
 ## [0.0.4] - 2026-03-19
 

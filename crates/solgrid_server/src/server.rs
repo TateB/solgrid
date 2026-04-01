@@ -3,7 +3,7 @@
 use crate::document::DocumentStore;
 use crate::resolve::ImportResolver;
 use crate::workspace_index::WorkspaceIndex;
-use crate::{actions, completion, convert, definition, diagnostics, format, hover};
+use crate::{actions, completion, convert, definition, diagnostics, format, hover, signature_help};
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
 use std::collections::HashMap;
@@ -294,6 +294,11 @@ impl LanguageServer for SolgridServer {
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["/".into(), " ".into(), ".".into()]),
                     ..Default::default()
+                }),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec!["(".into(), ",".into()]),
+                    retrigger_characters: Some(vec![",".into()]),
+                    work_done_progress_options: Default::default(),
                 }),
                 ..Default::default()
             },
@@ -650,6 +655,47 @@ impl LanguageServer for SolgridServer {
         } else {
             Ok(Some(CompletionResponse::Array(items)))
         }
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if !is_solidity_file(uri) {
+            return Ok(None);
+        }
+
+        let documents = self.documents.read().await;
+        let doc = match documents.get(uri) {
+            Some(doc) => doc,
+            None => return Ok(None),
+        };
+
+        let source = doc.content.clone();
+        let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
+            .uris()
+            .filter_map(|u| {
+                let path = uri_to_path(u);
+                let content = documents.get(u).map(|d| d.content.clone())?;
+                Some((path, content))
+            })
+            .collect();
+        drop(documents);
+
+        let resolver = self.resolver.read().await;
+        let get_source = |path: &std::path::Path| -> Option<String> {
+            if let Some(content) = open_docs.get(path) {
+                return Some(content.clone());
+            }
+            std::fs::read_to_string(path).ok()
+        };
+        let current_file = uri_to_path(uri);
+
+        Ok(signature_help::signature_help_at_position(
+            &source,
+            &params.text_document_position_params.position,
+            &get_source,
+            &resolver,
+            Some(current_file.as_path()),
+        ))
     }
 
     async fn goto_definition(

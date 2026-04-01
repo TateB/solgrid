@@ -7,8 +7,9 @@
 //! - Auto-import completions (symbols from other workspace files)
 //! - Suppression comment completions (`// solgrid-disable-next-line`)
 
-use crate::definition::{self, uri_to_path};
+use crate::definition::uri_to_path;
 use crate::resolve::ImportResolver;
+use crate::semantic;
 use crate::symbols::{self, ImportedSymbols, SymbolKind};
 use crate::workspace_index::WorkspaceIndex;
 use crate::{builtins, convert};
@@ -115,8 +116,16 @@ pub fn completions(
     let offset = convert::position_to_offset(source, *position);
 
     // 2. Check for dot completion context.
-    if let Some(container_name) = find_dot_context(source, offset) {
-        return dot_completions(source, &container_name, offset, uri, get_source, resolver);
+    if is_dot_context(source, offset) {
+        let container_name = find_dot_context(source, offset);
+        return dot_completions(
+            source,
+            container_name.as_deref(),
+            offset,
+            uri,
+            get_source,
+            resolver,
+        );
     }
 
     // 3. General identifier completions.
@@ -173,6 +182,20 @@ fn find_dot_context(source: &str, offset: usize) -> Option<String> {
     Some(source[pos..end].to_string())
 }
 
+fn is_dot_context(source: &str, offset: usize) -> bool {
+    let bytes = source.as_bytes();
+    if offset == 0 {
+        return false;
+    }
+
+    let mut pos = offset;
+    while pos > 0 && is_ident_char(bytes[pos - 1]) {
+        pos -= 1;
+    }
+
+    pos > 0 && bytes[pos - 1] == b'.'
+}
+
 fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
@@ -219,107 +242,41 @@ fn patch_source_for_completion(source: &str, offset: usize) -> String {
 /// Generate completions for members of a container (after `.`).
 fn dot_completions(
     source: &str,
-    container_name: &str,
+    container_name: Option<&str>,
     offset: usize,
     uri: &ls_types::Uri,
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
 ) -> Vec<ls_types::CompletionItem> {
     // Check builtin namespaces first (msg, block, tx, abi, etc.).
-    let members = builtins::namespace_members(container_name);
-    if !members.is_empty() {
-        return members
-            .into_iter()
-            .map(|(name, def)| ls_types::CompletionItem {
-                label: name.to_string(),
-                kind: Some(ls_types::CompletionItemKind::FIELD),
-                detail: Some(def.signature.to_string()),
-                documentation: Some(ls_types::Documentation::String(def.description.to_string())),
-                ..Default::default()
-            })
-            .collect();
-    }
-
-    // Patch the source to handle incomplete expressions (e.g., `Status.`).
-    let patched = patch_source_for_completion(source, offset);
-    let table = match symbols::build_symbol_table(&patched, "buffer.sol") {
-        Some(t) => t,
-        // If even the patched source fails to parse, try the original.
-        None => match symbols::build_symbol_table(source, "buffer.sol") {
-            Some(t) => t,
-            None => return Vec::new(),
-        },
-    };
-
-    if let Some(container_def) = table.resolve(container_name, offset) {
-        if let Some(scope_id) = container_def.scope {
-            return table
-                .scope_symbols(scope_id)
-                .iter()
-                .map(|sym| symbol_to_completion_item(sym, "a_"))
+    if let Some(container_name) = container_name {
+        let members = builtins::namespace_members(container_name);
+        if !members.is_empty() {
+            return members
+                .into_iter()
+                .map(|(name, def)| ls_types::CompletionItem {
+                    label: name.to_string(),
+                    kind: Some(ls_types::CompletionItemKind::FIELD),
+                    detail: Some(def.signature.to_string()),
+                    documentation: Some(ls_types::Documentation::String(
+                        def.description.to_string(),
+                    )),
+                    ..Default::default()
+                })
                 .collect();
         }
     }
 
-    // Namespace imports (`import "./Foo.sol" as Foo;` / `import * as Foo from "./Foo.sol";`)
-    // expose the imported file's file-level exports as `Foo.Bar`.
-    if let Some(importing_file) = uri_to_path(uri) {
-        for import in &table.imports {
-            let matches_namespace = match &import.symbols {
-                ImportedSymbols::Plain(Some(alias)) | ImportedSymbols::Glob(alias) => {
-                    alias == container_name
-                }
-                _ => false,
-            };
-            if !matches_namespace {
-                continue;
-            }
-
-            let resolved_path = match resolver.resolve(&import.path, &importing_file) {
-                Some(path) => path,
-                None => continue,
-            };
-            let imported_source = match get_source(&resolved_path) {
-                Some(source) => source,
-                None => continue,
-            };
-            let filename = resolved_path.to_string_lossy().to_string();
-            let imported_table = match symbols::build_symbol_table(&imported_source, &filename) {
-                Some(table) => table,
-                None => continue,
-            };
-
-            return imported_table
-                .file_level_symbols()
-                .iter()
-                .map(|sym| symbol_to_completion_item(sym, "b_"))
-                .collect();
-        }
-    }
-
-    // Try cross-file container resolution.
-    if let Some(importing_file) = uri_to_path(uri) {
-        if let Some(cross) = definition::resolve_cross_file_symbol(
-            &table,
-            container_name,
-            &importing_file,
-            get_source,
-            resolver,
-        ) {
-            if let Some(container_def) = cross.table.resolve(&cross.def.name, 0) {
-                if let Some(scope_id) = container_def.scope {
-                    return cross
-                        .table
-                        .scope_symbols(scope_id)
-                        .iter()
-                        .map(|sym| symbol_to_completion_item(sym, "a_"))
-                        .collect();
-                }
-            }
-        }
-    }
-
-    Vec::new()
+    semantic::member_completion_symbols(
+        source,
+        offset,
+        uri_to_path(uri).as_deref(),
+        get_source,
+        resolver,
+    )
+    .into_iter()
+    .map(|sym| symbol_to_completion_item(&sym, "a_"))
+    .collect()
 }
 
 // ── Identifier completions ─────────────────────────────────────────────────
@@ -349,7 +306,11 @@ fn identifier_completions(
     let mut seen_names: HashSet<String> = HashSet::new();
 
     // a) In-scope symbols from the current file.
-    for sym in table.visible_symbols_at(offset) {
+    for sym in table
+        .visible_symbols_at(offset)
+        .into_iter()
+        .filter(|sym| is_completion_symbol(sym))
+    {
         if seen_names.insert(sym.name.clone()) {
             items.push(symbol_to_completion_item(sym, "a_"));
         }
@@ -377,7 +338,11 @@ fn identifier_completions(
                     for (original, alias) in names {
                         let local_name = alias.as_deref().unwrap_or(original.as_str());
                         if seen_names.insert(local_name.to_string()) {
-                            if let Some(sym) = imported_table.resolve(original, 0) {
+                            if let Some(sym) = imported_table
+                                .resolve_all(original, 0)
+                                .into_iter()
+                                .find(|sym| is_completion_symbol(sym))
+                            {
                                 let mut item = symbol_to_completion_item(sym, "b_");
                                 // Use the local alias name if different.
                                 if let Some(a) = alias {
@@ -390,7 +355,11 @@ fn identifier_completions(
                 }
                 ImportedSymbols::Plain(None) => {
                     // Plain import: all file-level symbols are in scope.
-                    for sym in imported_table.file_level_symbols() {
+                    for sym in imported_table
+                        .file_level_symbols()
+                        .iter()
+                        .filter(|sym| is_completion_symbol(sym))
+                    {
                         if seen_names.insert(sym.name.clone()) {
                             items.push(symbol_to_completion_item(sym, "b_"));
                         }
@@ -553,6 +522,11 @@ fn symbol_to_completion_item(
     ls_types::CompletionItem {
         label: sym.name.clone(),
         kind: Some(symbol_kind_to_completion_kind(sym.kind)),
+        detail: sym
+            .signature
+            .as_ref()
+            .map(|signature| signature.label.clone())
+            .or_else(|| sym.type_info.as_ref().map(|ty| ty.display().to_string())),
         sort_text: Some(format!("{sort_prefix}{}", sym.name)),
         ..Default::default()
     }
@@ -564,6 +538,7 @@ fn symbol_kind_to_completion_kind(kind: SymbolKind) -> ls_types::CompletionItemK
         SymbolKind::Contract => ls_types::CompletionItemKind::CLASS,
         SymbolKind::Interface => ls_types::CompletionItemKind::INTERFACE,
         SymbolKind::Library => ls_types::CompletionItemKind::MODULE,
+        SymbolKind::Constructor => ls_types::CompletionItemKind::CONSTRUCTOR,
         SymbolKind::Function => ls_types::CompletionItemKind::FUNCTION,
         SymbolKind::Modifier => ls_types::CompletionItemKind::METHOD,
         SymbolKind::Event => ls_types::CompletionItemKind::EVENT,
@@ -580,6 +555,10 @@ fn symbol_kind_to_completion_kind(kind: SymbolKind) -> ls_types::CompletionItemK
             ls_types::CompletionItemKind::VARIABLE
         }
     }
+}
+
+fn is_completion_symbol(sym: &symbols::SymbolDef) -> bool {
+    sym.kind != SymbolKind::Constructor && !sym.name.is_empty() && !sym.name.starts_with('<')
 }
 
 /// Compute a relative import path from `from_file` to `to_file`.
@@ -996,6 +975,130 @@ contract Main {
 
         assert!(items.iter().any(|i| i.label == "Token"));
         assert!(items.iter().any(|i| i.label == "MathLib"));
+    }
+
+    #[test]
+    fn test_dot_completions_contract_instance_member() {
+        let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract SomethingA {
+    function thisThing() public view returns (string memory) {
+        return "A";
+    }
+}
+
+contract SomethingB {
+    SomethingA public somethingA;
+
+    constructor() {
+        somethingA = new SomethingA();
+    }
+
+    function thisThing() public view returns (string memory) {
+        return somethingA.
+    }
+}
+"#;
+        let offset = source.find("somethingA.").unwrap() + "somethingA.".len();
+        let pos = convert::offset_to_position(source, offset);
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+        let engine = LintEngine::new();
+
+        let items = completions(
+            &engine,
+            source,
+            &pos,
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+            &empty_index(),
+        );
+
+        let this_thing = items.iter().find(|item| item.label == "thisThing").unwrap();
+        assert!(this_thing
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("function thisThing()"));
+    }
+
+    #[test]
+    fn test_dot_completions_chained_call_and_index_receivers() {
+        let call_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract SomethingA {
+    function thisThing() public view returns (string memory) {
+        return "A";
+    }
+}
+
+contract SomethingB {
+    mapping(address => SomethingA) public items;
+
+    constructor() {
+        items[msg.sender] = new SomethingA();
+    }
+
+    function current() public view returns (SomethingA) {
+        return items[msg.sender];
+    }
+
+    function fromCall() public view returns (string memory) {
+        return current().
+    }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+        let engine = LintEngine::new();
+
+        let call_offset = call_source.find("current().").unwrap() + "current().".len();
+        let call_items = completions(
+            &engine,
+            call_source,
+            &convert::offset_to_position(call_source, call_offset),
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+            &empty_index(),
+        );
+
+        let index_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract SomethingA {
+    function thisThing() public view returns (string memory) {
+        return "A";
+    }
+}
+
+contract SomethingB {
+    mapping(address => SomethingA) public items;
+
+    constructor() {
+        items[msg.sender] = new SomethingA();
+    }
+
+    function fromIndex() public view returns (string memory) {
+        return items[msg.sender].
+    }
+}
+"#;
+        let index_offset =
+            index_source.find("items[msg.sender].").unwrap() + "items[msg.sender].".len();
+        let index_items = completions(
+            &engine,
+            index_source,
+            &convert::offset_to_position(index_source, index_offset),
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+            &empty_index(),
+        );
+
+        assert!(call_items.iter().any(|item| item.label == "thisThing"));
+        assert!(index_items.iter().any(|item| item.label == "thisThing"));
     }
 
     // ── In-scope completions ───────────────────────────────────────────────

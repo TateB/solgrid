@@ -135,7 +135,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       # Run LSP protocol integration tests
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter solgrid-vscode run test:integration
+      - run: pnpm --filter solgrid-vscode run test:integration:release -- --no-build
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
