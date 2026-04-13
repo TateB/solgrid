@@ -88,7 +88,7 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `docs/selector-tags` | none | n/a | No settings |
 | `style/category-headers` | `min_categories` | `2` | Minimum distinct declaration categories before headers are enforced |
 | `style/category-headers` | `initialization_functions` | built-in list | Function names treated as initialization sections |
-| `style/imports-ordering` | `import_order` | default external/relative grouping | Regex-defined import groups |
+| `style/imports-ordering` | `import_order` | default external / `../` / `./` grouping | Regex-defined import groups |
 
 ## Format Configuration
 

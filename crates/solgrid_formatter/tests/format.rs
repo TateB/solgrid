@@ -605,6 +605,29 @@ import "./B.sol";
     assert!(b_pos < c_pos, "B.sol should come before C.sol");
 }
 
+#[test]
+fn test_sort_imports_respects_import_groups() {
+    let source = r#"import "./Local.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "forge-std/Test.sol";
+import "../Parent.sol";
+"#;
+    let config = FormatConfig {
+        sort_imports: true,
+        import_order: vec![
+            "^forge-std/".into(),
+            "^@?\\w".into(),
+            "^\\.\\./".into(),
+            "^\\./".into(),
+        ],
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert!(formatted.contains(
+        "import \"forge-std/Test.sol\";\n\nimport \"@openzeppelin/contracts/access/Ownable.sol\";\n\nimport \"../Parent.sol\";\n\nimport \"./Local.sol\";"
+    ));
+}
+
 // --- UDVT formatting ---
 
 #[test]
@@ -927,6 +950,22 @@ fn test_no_blank_line_between_imports() {
     assert!(
         formatted.contains("\"./Foo.sol\";\nimport"),
         "expected no blank line between imports, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_insert_blank_lines_between_import_groups() {
+    let source = r#"import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "../utils/LibString.sol";
+import "./StandaloneReverseRegistrar.sol";
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains(
+            "ERC165.sol\";\n\nimport \"../utils/LibString.sol\";\n\nimport \"./StandaloneReverseRegistrar.sol\";"
+        ),
+        "expected canonical blank lines between import groups, got:\n{formatted}"
     );
 }
 

@@ -358,6 +358,9 @@ pub struct FormatConfig {
     pub contract_body_spacing: ContractBodySpacing,
     /// Put opening brace on new line when inheritance list wraps (default: true).
     pub inheritance_brace_new_line: bool,
+    /// Import grouping patterns propagated from `style/imports-ordering`.
+    #[serde(skip)]
+    pub import_order: Vec<String>,
 }
 
 impl Default for FormatConfig {
@@ -376,6 +379,7 @@ impl Default for FormatConfig {
             multiline_func_header: MultilineFuncHeader::AttributesFirst,
             contract_body_spacing: ContractBodySpacing::Preserve,
             inheritance_brace_new_line: true,
+            import_order: Vec::new(),
         }
     }
 }
@@ -541,6 +545,21 @@ fn warn_for_invalid_settings(config: &Config, path: &Path) {
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct ImportsOrderingSettings {
+    import_order: Vec<String>,
+}
+
+fn populate_derived_format_settings(config: &mut Config) {
+    if config.format.import_order.is_empty() {
+        config.format.import_order = config
+            .lint
+            .rule_settings::<ImportsOrderingSettings>("style/imports-ordering")
+            .import_order;
+    }
+}
+
 /// Load configuration from a TOML file.
 pub fn load_config(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
@@ -548,6 +567,7 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
     let mut config: Config =
         toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     normalize_rule_aliases(&mut config);
+    populate_derived_format_settings(&mut config);
     warn_for_invalid_settings(&config, path);
     Ok(config)
 }
@@ -989,6 +1009,7 @@ threads = 4
         );
         assert_eq!(config.contract_body_spacing, ContractBodySpacing::Preserve);
         assert!(config.inheritance_brace_new_line);
+        assert!(config.import_order.is_empty());
     }
 
     #[test]
@@ -1101,6 +1122,38 @@ threads = 4
         let config = load_config(&config_path).unwrap();
         assert_eq!(config.lint.rules.get("docs/natspec"), Some(&RuleLevel::Off));
         assert!(!config.lint.rules.contains_key("best-practices/use-natspec"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_propagates_import_order_to_formatter() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_import_order_{}_{}",
+            std::process::id(),
+            4
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."style/imports-ordering"]
+import_order = ["^forge-std/", "^@?\\w", "^\\.\\./", "^\\./"]
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.format.import_order,
+            vec![
+                "^forge-std/".to_string(),
+                "^@?\\w".to_string(),
+                "^\\.\\./".to_string(),
+                "^\\./".to_string(),
+            ]
+        );
 
         let _ = fs::remove_dir_all(root);
     }

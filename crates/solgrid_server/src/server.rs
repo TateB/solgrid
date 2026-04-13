@@ -37,6 +37,7 @@ pub struct SolgridServer {
     client: Client,
     engine: Arc<RwLock<LintEngine>>,
     documents: Arc<RwLock<DocumentStore>>,
+    pending_save_documents: Arc<RwLock<HashMap<Uri, String>>>,
     settings: Arc<RwLock<ServerSettings>>,
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
     config_path: Arc<RwLock<Option<PathBuf>>>,
@@ -56,6 +57,7 @@ impl SolgridServer {
             client,
             engine: Arc::new(RwLock::new(LintEngine::new())),
             documents: Arc::new(RwLock::new(DocumentStore::new())),
+            pending_save_documents: Arc::new(RwLock::new(HashMap::new())),
             settings: Arc::new(RwLock::new(ServerSettings::default())),
             workspace_root: Arc::new(RwLock::new(None)),
             config_path: Arc::new(RwLock::new(None)),
@@ -109,6 +111,24 @@ impl SolgridServer {
 
     async fn clear_config_cache(&self) {
         self.config_cache.write().await.clear();
+    }
+
+    async fn set_pending_save_document(&self, uri: &Uri, source: Option<String>) {
+        let mut pending = self.pending_save_documents.write().await;
+        if let Some(source) = source {
+            pending.insert(uri.clone(), source);
+        } else {
+            pending.remove(uri);
+        }
+    }
+
+    async fn source_for_formatting(&self, uri: &Uri) -> Option<String> {
+        if let Some(source) = self.pending_save_documents.read().await.get(uri).cloned() {
+            return Some(source);
+        }
+
+        let documents = self.documents.read().await;
+        documents.get(uri).map(|doc| doc.content.clone())
     }
 
     async fn reload_workspace_state(&self) {
@@ -349,6 +369,7 @@ impl LanguageServer for SolgridServer {
                 params.text_document.version,
             );
         }
+        self.set_pending_save_document(&uri, None).await;
 
         self.lint_and_publish(&uri).await;
     }
@@ -364,6 +385,7 @@ impl LanguageServer for SolgridServer {
             let mut documents = self.documents.write().await;
             documents.update(&uri, change.text, params.text_document.version);
         }
+        self.set_pending_save_document(&uri, None).await;
 
         self.lint_and_publish(&uri).await;
     }
@@ -388,6 +410,16 @@ impl LanguageServer for SolgridServer {
         if !is_solidity_file(&uri) {
             return;
         }
+
+        let saved_source = match params.text {
+            Some(text) => Some(text),
+            None => self.pending_save_documents.read().await.get(&uri).cloned(),
+        };
+        if let Some(saved_source) = saved_source {
+            let mut documents = self.documents.write().await;
+            documents.set_content(&uri, saved_source);
+        }
+        self.set_pending_save_document(&uri, None).await;
         // Trigger on-save actions (fix + format)
         self.on_save_actions(&uri).await;
         // Re-lint after save
@@ -410,6 +442,7 @@ impl LanguageServer for SolgridServer {
             let mut cache = self.published_diagnostics.write().await;
             cache.remove(&uri);
         }
+        self.set_pending_save_document(&uri, None).await;
         self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
@@ -424,6 +457,7 @@ impl LanguageServer for SolgridServer {
 
         let settings = self.settings.read().await.clone();
         if !settings.fix_on_save && !settings.format_on_save {
+            self.set_pending_save_document(uri, None).await;
             return Ok(None);
         }
 
@@ -438,8 +472,7 @@ impl LanguageServer for SolgridServer {
 
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
-        let mut current_source = source.clone();
-        let mut edits = Vec::new();
+        let mut final_source = source.clone();
         let resolver = self.resolver.read().await;
         let remappings = resolver.remappings_for_file(&path);
         drop(resolver);
@@ -447,67 +480,34 @@ impl LanguageServer for SolgridServer {
         // Apply safe fixes
         let engine = self.engine.read().await;
         if settings.fix_on_save {
-            let fix_edits = actions::safe_fix_edits_with_remappings(
-                &engine,
-                &current_source,
+            let (fixed, _) = engine.fix_source_with_remappings(
+                &final_source,
                 &path,
                 &config,
+                settings.fix_on_save_unsafe,
                 &remappings,
             );
-            if !fix_edits.is_empty() {
-                // Apply the fixes to get the intermediate source
-                let (fixed, _) = engine.fix_source_with_remappings(
-                    &current_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                    &remappings,
-                );
-                current_source = fixed;
-                edits.extend(fix_edits);
-            }
+            final_source = fixed;
         }
+        drop(engine);
 
         // Apply formatting
         if settings.format_on_save {
-            let format_edits = format::format_document(&current_source, &config.format);
-            edits.extend(format_edits);
+            if let Ok(formatted) = solgrid_formatter::format_source(&final_source, &config.format) {
+                final_source = formatted;
+            }
         }
 
-        if edits.is_empty() {
+        if final_source == source {
+            self.set_pending_save_document(uri, None).await;
             Ok(None)
         } else {
-            // Since we may have both fix and format edits that can conflict,
-            // produce a single full-document replacement for correctness
-            let mut final_source = source.clone();
-
-            if settings.fix_on_save {
-                let (fixed, _) = engine.fix_source_with_remappings(
-                    &final_source,
-                    &path,
-                    &config,
-                    settings.fix_on_save_unsafe,
-                    &remappings,
-                );
-                final_source = fixed;
-            }
-
-            if settings.format_on_save {
-                if let Ok(formatted) =
-                    solgrid_formatter::format_source(&final_source, &config.format)
-                {
-                    final_source = formatted;
-                }
-            }
-
-            if final_source == source {
-                Ok(None)
-            } else {
-                Ok(Some(vec![TextEdit {
-                    range: full_document_range(&source),
-                    new_text: final_source,
-                }]))
-            }
+            self.set_pending_save_document(uri, Some(final_source.clone()))
+                .await;
+            Ok(Some(vec![TextEdit {
+                range: full_document_range(&source),
+                new_text: final_source,
+            }]))
         }
     }
 
@@ -557,14 +557,10 @@ impl LanguageServer for SolgridServer {
             return Ok(None);
         }
 
-        let documents = self.documents.read().await;
-        let doc = match documents.get(uri) {
-            Some(doc) => doc,
+        let source = match self.source_for_formatting(uri).await {
+            Some(source) => source,
             None => return Ok(None),
         };
-
-        let source = doc.content.clone();
-        drop(documents);
 
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;
@@ -586,14 +582,10 @@ impl LanguageServer for SolgridServer {
             return Ok(None);
         }
 
-        let documents = self.documents.read().await;
-        let doc = match documents.get(uri) {
-            Some(doc) => doc,
+        let source = match self.source_for_formatting(uri).await {
+            Some(source) => source,
             None => return Ok(None),
         };
-
-        let source = doc.content.clone();
-        drop(documents);
 
         let path = uri_to_path(uri);
         let config = self.resolve_config_for_path(&path).await;

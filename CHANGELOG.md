@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed VS Code save-time import ordering so `style/imports-ordering` fixes no longer get reverted by a follow-up `solgrid` formatting request
+- Fixed formatter import spacing to canonicalize blank lines between configured import groups instead of collapsing them on save
+
 ## [0.0.5] - 2026-04-01
 
 ### Added
