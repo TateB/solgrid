@@ -3,8 +3,9 @@
 
 use crate::comments::CommentStore;
 use crate::directives::{compute_disabled_ranges, is_disabled, parse_directives};
-use crate::format_item::{format_item, has_blank_line_between, sort_imports};
+use crate::format_item::{format_item, has_blank_line_between};
 use crate::ir::*;
+use regex::Regex;
 use solar_ast::{ItemKind, SourceUnit};
 use solgrid_ast::span_to_range;
 use solgrid_config::FormatConfig;
@@ -18,20 +19,9 @@ pub fn format_source_unit(
     let directives = parse_directives(source);
     let disabled_ranges = compute_disabled_ranges(source, &directives);
     let mut comment_store = CommentStore::new(source);
+    let import_order = compile_import_order(config);
 
     let mut chunks = Vec::new();
-
-    // Collect import items for potential sorting
-    let import_indices: Vec<usize> = if config.sort_imports {
-        let import_items: Vec<&solar_ast::Item<'_>> = ast
-            .items
-            .iter()
-            .filter(|item| matches!(item.kind, ItemKind::Import(_)))
-            .collect();
-        sort_imports(&import_items, source)
-    } else {
-        Vec::new()
-    };
 
     // Track groups for sorted imports
     let mut import_group: Vec<(usize, &solar_ast::Item<'_>)> = Vec::new();
@@ -69,10 +59,10 @@ pub fn format_source_unit(
             flush_sorted_imports(
                 &mut chunks,
                 &import_group,
-                &import_indices,
                 source,
                 config,
                 &mut comment_store,
+                &import_order,
             );
             import_group.clear();
         }
@@ -89,6 +79,8 @@ pub fn format_source_unit(
                     None
                 },
                 item,
+                source,
+                &import_order,
             );
             for _ in 0..extra_blanks {
                 chunks.push(hardline());
@@ -137,10 +129,10 @@ pub fn format_source_unit(
         flush_sorted_imports(
             &mut chunks,
             &import_group,
-            &import_indices,
             source,
             config,
             &mut comment_store,
+            &import_order,
         );
     }
 
@@ -161,33 +153,26 @@ pub fn format_source_unit(
 fn flush_sorted_imports(
     chunks: &mut Vec<FormatChunk>,
     import_group: &[(usize, &solar_ast::Item<'_>)],
-    _sorted_indices: &[usize],
     source: &str,
     config: &FormatConfig,
     comments: &mut crate::comments::CommentStore,
+    import_order: &[Regex],
 ) {
-    // Sort imports by their path string
     let mut sorted: Vec<&solar_ast::Item<'_>> =
         import_group.iter().map(|(_, item)| *item).collect();
-    sorted.sort_by(|a, b| {
-        let a_path = if let ItemKind::Import(imp) = &a.kind {
-            solgrid_ast::span_text(source, imp.path.span)
-        } else {
-            ""
-        };
-        let b_path = if let ItemKind::Import(imp) = &b.kind {
-            solgrid_ast::span_text(source, imp.path.span)
-        } else {
-            ""
-        };
-        a_path.cmp(b_path)
-    });
+    sorted.sort_by(|a, b| compare_import_items(a, b, source, import_order));
 
+    let mut previous_group = None;
     for item in sorted {
         if !chunks.is_empty() {
             chunks.push(hardline());
         }
+        let group = import_item_group(item, source, import_order);
+        if previous_group.is_some_and(|prev| prev != group) {
+            chunks.push(hardline());
+        }
         chunks.push(format_item(item, source, config, comments));
+        previous_group = Some(group);
     }
 }
 
@@ -196,7 +181,12 @@ fn flush_sorted_imports(
 /// Per the Solidity style guide, each top-level declaration is surrounded by one
 /// blank line on each side. Between two declarations, these stack to produce two
 /// blank lines.
-fn blank_lines_between(prev: Option<&solar_ast::Item<'_>>, current: &solar_ast::Item<'_>) -> usize {
+fn blank_lines_between(
+    prev: Option<&solar_ast::Item<'_>>,
+    current: &solar_ast::Item<'_>,
+    source: &str,
+    import_order: &[Regex],
+) -> usize {
     let Some(prev) = prev else {
         return 0;
     };
@@ -205,12 +195,75 @@ fn blank_lines_between(prev: Option<&solar_ast::Item<'_>>, current: &solar_ast::
     let curr_cat = top_level_category(current);
 
     match (prev_cat, curr_cat) {
+        (Some(TopLevelCategory::Import), Some(TopLevelCategory::Import)) => usize::from(
+            import_item_group(prev, source, import_order)
+                != import_item_group(current, source, import_order),
+        ),
         // Between two declarations: 2 blank lines (1 below prev + 1 above current)
         (Some(a), Some(b)) if is_declaration(&a) && is_declaration(&b) => 2,
         // Directive -> declaration or different directive types: 1 blank line
         (Some(a), Some(b)) if a != b => 1,
         // Same directive type (e.g. import -> import): no blank line
         _ => 0,
+    }
+}
+
+fn compile_import_order(config: &FormatConfig) -> Vec<Regex> {
+    config
+        .import_order
+        .iter()
+        .filter_map(|pattern| Regex::new(pattern).ok())
+        .collect()
+}
+
+fn compare_import_items(
+    left: &solar_ast::Item<'_>,
+    right: &solar_ast::Item<'_>,
+    source: &str,
+    import_order: &[Regex],
+) -> std::cmp::Ordering {
+    let left_path = import_path(left, source);
+    let right_path = import_path(right, source);
+
+    import_item_group(left, source, import_order)
+        .cmp(&import_item_group(right, source, import_order))
+        .then_with(|| {
+            left_path
+                .to_ascii_lowercase()
+                .cmp(&right_path.to_ascii_lowercase())
+        })
+}
+
+fn import_item_group(item: &solar_ast::Item<'_>, source: &str, import_order: &[Regex]) -> usize {
+    import_group_index(import_path(item, source), import_order)
+}
+
+fn import_group_index(path: &str, import_order: &[Regex]) -> usize {
+    if import_order.is_empty() {
+        return default_import_group(path);
+    }
+
+    import_order
+        .iter()
+        .position(|pattern| pattern.is_match(path))
+        .unwrap_or(import_order.len())
+}
+
+fn default_import_group(path: &str) -> usize {
+    if path.starts_with("./") {
+        2
+    } else if path.starts_with("../") || path.starts_with('.') {
+        1
+    } else {
+        0
+    }
+}
+
+fn import_path<'a>(item: &'a solar_ast::Item<'_>, _source: &'a str) -> &'a str {
+    if let ItemKind::Import(import) = &item.kind {
+        import.path.value.as_str()
+    } else {
+        ""
     }
 }
 

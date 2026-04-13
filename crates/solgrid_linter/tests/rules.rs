@@ -2591,6 +2591,18 @@ contract Test {}
 }
 
 #[test]
+fn test_imports_ordering_separates_parent_and_current_dir_groups_by_default() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../Parent.sol";
+import "./Local.sol";
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("import \"../Parent.sol\";\n\nimport \"./Local.sol\";"));
+}
+
+#[test]
 fn test_imports_ordering_respects_regex_group_config() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
