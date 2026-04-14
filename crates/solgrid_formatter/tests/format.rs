@@ -2185,6 +2185,52 @@ fn test_preserve_named_argument_line_comment_after_comma() {
 }
 
 #[test]
+fn test_preserve_last_call_argument_line_comment() {
+    let source = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_last_named_argument_line_comment() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_preserve_parameter_line_comment_after_comma() {
     let source = r#"contract T {
     function f(

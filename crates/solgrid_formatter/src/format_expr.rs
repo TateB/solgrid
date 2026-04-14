@@ -199,7 +199,7 @@ pub fn format_expr(
 
 /// Format an expression outside the main formatter comment-attachment flow.
 pub fn format_expr_detached(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
-    let mut comments = CommentStore::new(source);
+    let mut comments = CommentStore::empty();
     format_expr(expr, source, config, &mut comments)
 }
 
