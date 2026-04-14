@@ -1,6 +1,6 @@
 {
   "name": "solgrid",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "A blazing-fast Solidity linter and formatter",
   "license": "MIT",
   "repository": {

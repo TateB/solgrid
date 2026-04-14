@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-04-14
+
 ### Fixed
 - Fixed `fix` retaining imports referenced by NatSpec `@inheritdoc` tags so autofixes no longer leave compiler-broken documentation references behind
 - Fixed `naming/func-name-mixedcase` to allow public ABI-style uppercase function names by default while still supporting exact-name and regex exceptions
@@ -162,8 +164,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.7...HEAD
-[0.0.7]: https://github.com/TateB/solgrid/compare/v0.0.6...v0.0.7
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/TateB/solgrid/compare/v0.0.7...v0.0.8
+[0.0.7]: https://github.com/TateB/solgrid/releases/tag/v0.0.7
 [0.0.6]: https://github.com/TateB/solgrid/releases/tag/v0.0.6
 [0.0.5]: https://github.com/TateB/solgrid/releases/tag/v0.0.5
 [0.0.4]: https://github.com/TateB/solgrid/releases/tag/v0.0.4

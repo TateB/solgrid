@@ -1,6 +1,6 @@
 {
   "name": "prettier-plugin-solgrid",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Prettier plugin for Solidity — powered by solgrid's Rust formatter",
   "license": "MIT",
   "repository": {
