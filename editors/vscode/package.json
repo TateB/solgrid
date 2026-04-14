@@ -2,7 +2,7 @@
   "name": "solgrid-vscode",
   "displayName": "solgrid",
   "description": "Solidity linter and formatter — powered by solgrid",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "solgrid",
   "license": "MIT",
   "homepage": "https://github.com/TateB/solgrid#readme",
