@@ -1,6 +1,6 @@
 //! Expression formatting — converts Solar AST `Expr` nodes to FormatChunk IR.
 
-use crate::comments::CommentStore;
+use crate::comments::{Comment, CommentStore};
 use crate::format_ty::format_type;
 use crate::ir::*;
 use solar_ast::*;
@@ -264,7 +264,7 @@ pub fn format_call_args(
                 return concat(vec![]);
             }
             let args_end = span_to_range(args.span).end;
-            let items: Vec<FormatChunk> = exprs
+            let items: Vec<(FormatChunk, Vec<Comment>)> = exprs
                 .iter()
                 .enumerate()
                 .map(|(index, expr)| {
@@ -272,42 +272,65 @@ pub fn format_call_args(
                         .get(index + 1)
                         .map(|next| span_to_range(next.span).start)
                         .unwrap_or(args_end);
-                    format_expr_with_attached_comments(expr, next_start, source, config, comments)
+                    take_expr_with_attached_comments(expr, next_start, source, config, comments)
                 })
                 .collect();
-            format_grouped_items(items)
+            if items
+                .iter()
+                .any(|(_, trailing)| has_line_comment(trailing.as_slice()))
+            {
+                format_multiline_items_with_comments(items)
+            } else {
+                format_grouped_items(
+                    items
+                        .into_iter()
+                        .map(|(item, trailing)| attach_inline_comments(item, trailing))
+                        .collect(),
+                )
+            }
         }
         CallArgsKind::Named(named) => {
             if named.is_empty() {
                 return concat(vec![]);
             }
             let args_end = span_to_range(args.span).end;
-            let items: Vec<FormatChunk> = named
+            let items: Vec<(FormatChunk, Vec<Comment>)> = named
                 .iter()
                 .enumerate()
                 .map(|(index, arg)| {
-                    let mut parts = vec![
+                    let item = concat(vec![
                         text(arg.name.as_str()),
                         text(": "),
                         format_expr(arg.value, source, config, comments),
-                    ];
+                    ]);
                     let next_start = named
                         .get(index + 1)
                         .map(|next| span_to_range(next.name.span).start)
                         .unwrap_or(args_end);
                     let trailing =
                         comments.take_within(span_to_range(arg.value.span).end..next_start);
-                    for comment in trailing {
-                        parts.push(space());
-                        parts.push(FormatChunk::Comment(comment.kind, comment.content));
-                    }
-                    concat(parts)
+                    (item, trailing)
                 })
                 .collect();
-            if config.bracket_spacing {
-                concat(vec![text("{ "), join(items, text(", ")), text(" }")])
+            if items
+                .iter()
+                .any(|(_, trailing)| has_line_comment(trailing.as_slice()))
+            {
+                concat(vec![
+                    text("{"),
+                    format_multiline_items_with_comments(items),
+                    text("}"),
+                ])
             } else {
-                concat(vec![text("{"), join(items, text(", ")), text("}")])
+                let items: Vec<FormatChunk> = items
+                    .into_iter()
+                    .map(|(item, trailing)| attach_inline_comments(item, trailing))
+                    .collect();
+                if config.bracket_spacing {
+                    concat(vec![text("{ "), join(items, text(", ")), text(" }")])
+                } else {
+                    concat(vec![text("{"), join(items, text(", ")), text("}")])
+                }
             }
         }
     }
@@ -323,20 +346,91 @@ pub fn format_grouped_items(items: Vec<FormatChunk>) -> FormatChunk {
     ])
 }
 
-fn format_expr_with_attached_comments(
-    expr: &Expr<'_>,
-    comments_end: usize,
-    source: &str,
-    config: &FormatConfig,
-    comments: &mut CommentStore,
+pub(crate) fn format_multiline_items_with_comments(
+    items: Vec<(FormatChunk, Vec<Comment>)>,
 ) -> FormatChunk {
-    let mut parts = vec![format_expr(expr, source, config, comments)];
-    let trailing = comments.take_within(span_to_range(expr.span).end..comments_end);
+    let len = items.len();
+    let mut chunks = Vec::new();
+
+    for (index, (item, trailing)) in items.into_iter().enumerate() {
+        let has_next = index + 1 < len;
+        let (item_chunk, separator_before_comment) =
+            attach_comments_with_separator(item, trailing, has_next);
+        chunks.push(item_chunk);
+        if has_next {
+            if !separator_before_comment {
+                chunks.push(text(","));
+            }
+            chunks.push(hardline());
+        }
+    }
+
+    group(vec![indent(vec![hardline(), concat(chunks)]), hardline()])
+}
+
+pub(crate) fn attach_inline_comments(item: FormatChunk, trailing: Vec<Comment>) -> FormatChunk {
+    let mut parts = vec![item];
     for comment in trailing {
         parts.push(space());
         parts.push(FormatChunk::Comment(comment.kind, comment.content));
     }
     concat(parts)
+}
+
+fn attach_comments_with_separator(
+    item: FormatChunk,
+    trailing: Vec<Comment>,
+    has_next: bool,
+) -> (FormatChunk, bool) {
+    let mut parts = vec![item];
+
+    if has_next {
+        if let Some(line_index) = trailing.iter().position(|comment| {
+            matches!(
+                comment.kind,
+                crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+            )
+        }) {
+            for comment in trailing.iter().take(line_index) {
+                parts.push(space());
+                parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
+            parts.push(text(","));
+            for comment in trailing.iter().skip(line_index) {
+                parts.push(space());
+                parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+            }
+            return (concat(parts), true);
+        }
+    }
+
+    for comment in trailing {
+        parts.push(space());
+        parts.push(FormatChunk::Comment(comment.kind, comment.content));
+    }
+
+    (concat(parts), false)
+}
+
+fn has_line_comment(trailing: &[Comment]) -> bool {
+    trailing.iter().any(|comment| {
+        matches!(
+            comment.kind,
+            crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+        )
+    })
+}
+
+fn take_expr_with_attached_comments(
+    expr: &Expr<'_>,
+    comments_end: usize,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> (FormatChunk, Vec<Comment>) {
+    let item = format_expr(expr, source, config, comments);
+    let trailing = comments.take_within(span_to_range(expr.span).end..comments_end);
+    (item, trailing)
 }
 
 pub fn format_grouped_tuple(items: Vec<FormatChunk>) -> FormatChunk {

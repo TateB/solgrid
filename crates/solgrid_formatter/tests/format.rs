@@ -2135,6 +2135,80 @@ fn test_statement_comment_after_call_is_not_attached_to_argument() {
 }
 
 #[test]
+fn test_preserve_call_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_named_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_parameter_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(

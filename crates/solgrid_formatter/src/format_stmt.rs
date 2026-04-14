@@ -1,7 +1,10 @@
 //! Statement formatting — converts Solar AST `Stmt` nodes to FormatChunk IR.
 
 use crate::comments::CommentStore;
-use crate::format_expr::{format_call_args, format_expr, format_grouped_tuple};
+use crate::format_expr::{
+    attach_inline_comments, format_call_args, format_expr, format_grouped_tuple,
+    format_multiline_items_with_comments,
+};
 use crate::format_item::has_blank_line_between;
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
@@ -378,7 +381,7 @@ pub fn format_params(
 ) -> FormatChunk {
     let mut force_multiline = false;
     let params_end = span_to_range(params.span).end;
-    let items: Vec<FormatChunk> = params
+    let items: Vec<(FormatChunk, Vec<crate::comments::Comment>)> = params
         .iter()
         .enumerate()
         .map(|(index, p)| {
@@ -391,6 +394,7 @@ pub fn format_params(
                 parts.push(space());
                 parts.push(text(name.as_str()));
             }
+            let item = concat(parts);
             let next_start = params
                 .get(index + 1)
                 .map(|next| span_to_range(next.span).start)
@@ -399,22 +403,16 @@ pub fn format_params(
             if !trailing.is_empty() {
                 force_multiline = true;
             }
-            for comment in trailing {
-                parts.push(space());
-                parts.push(FormatChunk::Comment(comment.kind, comment.content));
-            }
-            concat(parts)
+            (item, trailing)
         })
         .collect();
     if force_multiline {
-        group(vec![
-            indent(vec![
-                hardline(),
-                join(items, concat(vec![text(","), hardline()])),
-            ]),
-            hardline(),
-        ])
+        format_multiline_items_with_comments(items)
     } else {
+        let items: Vec<FormatChunk> = items
+            .into_iter()
+            .map(|(item, trailing)| attach_inline_comments(item, trailing))
+            .collect();
         group(vec![
             indent(vec![
                 softline(),
