@@ -120,7 +120,7 @@ fn format_import(import: &ImportDirective<'_>, source: &str, config: &FormatConf
 /// Format a contract/interface/library definition.
 fn format_contract(
     contract: &ItemContract<'_>,
-    _span: solar_interface::Span,
+    span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -195,8 +195,9 @@ fn format_contract(
     let mut prev_kind: Option<ItemCategory> = None;
     let mut prev_multiline = false;
     let mut prev_item_end: usize = 0;
+    let contract_end = span_to_range(span).end;
 
-    for item in contract.body.iter() {
+    for (index, item) in contract.body.iter().enumerate() {
         let item_range = span_to_range(item.span);
         let current_kind = categorize_item(item);
         let current_multiline = is_multiline_item(item);
@@ -260,7 +261,31 @@ fn format_contract(
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
-        prev_item_end = item_range.end;
+        let next_start = contract
+            .body
+            .get(index + 1)
+            .map(|next| span_to_range(next.span).start)
+            .unwrap_or(contract_end);
+        let postfix = comments.take_postfix(
+            source,
+            item_range.end,
+            next_start,
+            index + 1 < contract.body.len(),
+        );
+        for (i, comment) in postfix.iter().enumerate() {
+            body_parts.push(hardline());
+            if i > 0
+                && has_blank_line_between(source, postfix[i - 1].range.end, comment.range.start)
+            {
+                body_parts.push(hardline());
+            }
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
+        prev_item_end = postfix
+            .last()
+            .map(|comment| comment.range.end)
+            .unwrap_or(item_range.end);
         prev_kind = current_kind;
         prev_multiline = current_multiline;
     }

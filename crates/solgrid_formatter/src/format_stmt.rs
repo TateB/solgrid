@@ -462,7 +462,8 @@ pub fn format_block(
 
     let mut body_parts = Vec::new();
     let mut prev_stmt_end: Option<usize> = None;
-    for stmt in block.stmts.iter() {
+    let block_end = span_to_range(block.span).end;
+    for (index, stmt) in block.stmts.iter().enumerate() {
         let stmt_range = span_to_range(stmt.span);
         let need_blank_line = prev_stmt_end
             .map(|end| has_blank_line_between(source, end, stmt_range.start))
@@ -513,7 +514,33 @@ pub fn format_block(
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
-        prev_stmt_end = Some(stmt_range.end);
+        let next_start = block
+            .stmts
+            .get(index + 1)
+            .map(|next| span_to_range(next.span).start)
+            .unwrap_or(block_end);
+        let postfix = comments.take_postfix(
+            source,
+            stmt_range.end,
+            next_start,
+            index + 1 < block.stmts.len(),
+        );
+        for (i, comment) in postfix.iter().enumerate() {
+            body_parts.push(hardline());
+            if i > 0
+                && has_blank_line_between(source, postfix[i - 1].range.end, comment.range.start)
+            {
+                body_parts.push(hardline());
+            }
+            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
+        prev_stmt_end = Some(
+            postfix
+                .last()
+                .map(|comment| comment.range.end)
+                .unwrap_or(stmt_range.end),
+        );
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])

@@ -2325,6 +2325,49 @@ fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
 }
 
 #[test]
+fn test_preserve_postfix_comments_inside_function_bodies_inside_library() {
+    let source = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(
