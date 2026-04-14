@@ -26,85 +26,30 @@ pub fn format_stmt(
             text("unchecked "),
             format_block(block, source, config, comments),
         ]),
-        StmtKind::If(cond, then_stmt, else_stmt) => {
-            let mut parts = vec![
-                group(vec![
-                    text("if ("),
-                    indent(vec![
-                        softline(),
-                        format_condition_expr(cond, source, config, comments),
-                    ]),
-                    softline(),
-                    text(")"),
-                ]),
-                space(),
-                format_stmt(then_stmt, source, config, comments),
-            ];
-            if let Some(else_branch) = else_stmt {
-                parts.push(text(" else "));
-                parts.push(format_stmt(else_branch, source, config, comments));
-            }
-            concat(parts)
-        }
-        StmtKind::While(cond, body) => concat(vec![
-            group(vec![
-                text("while ("),
-                indent(vec![
-                    softline(),
-                    format_condition_expr(cond, source, config, comments),
-                ]),
-                softline(),
-                text(")"),
-            ]),
-            space(),
-            format_stmt(body, source, config, comments),
-        ]),
-        StmtKind::DoWhile(body, cond) => concat(vec![
-            text("do "),
-            format_stmt(body, source, config, comments),
-            space(),
-            group(vec![
-                text("while ("),
-                indent(vec![
-                    softline(),
-                    format_condition_expr(cond, source, config, comments),
-                ]),
-                softline(),
-                text(");"),
-            ]),
-        ]),
+        StmtKind::If(cond, then_stmt, else_stmt) => format_if_stmt(
+            cond,
+            then_stmt,
+            else_stmt.as_ref().map(|stmt| &**stmt),
+            source,
+            config,
+            comments,
+        ),
+        StmtKind::While(cond, body) => format_while_stmt(cond, body, source, config, comments),
+        StmtKind::DoWhile(body, cond) => format_do_while_stmt(body, cond, source, config, comments),
         StmtKind::For {
             init,
             cond,
             next,
             body,
-        } => {
-            let init_chunk = match init {
-                Some(init_stmt) => format_stmt(init_stmt, source, config, comments),
-                None => text(";"),
-            };
-            let cond_chunk = match cond {
-                Some(c) => concat(vec![
-                    format_condition_expr(c, source, config, comments),
-                    text(";"),
-                ]),
-                None => text(";"),
-            };
-            let next_chunk = match next {
-                Some(n) => format_expr(n, source, config, comments),
-                None => concat(vec![]),
-            };
-            group(vec![
-                text("for ("),
-                init_chunk,
-                space(),
-                cond_chunk,
-                space(),
-                next_chunk,
-                text(") "),
-                format_stmt(body, source, config, comments),
-            ])
-        }
+        } => format_for_stmt(
+            init.as_ref().map(|stmt| &**stmt),
+            cond.as_ref().map(|expr| &**expr),
+            next.as_ref().map(|expr| &**expr),
+            body,
+            source,
+            config,
+            comments,
+        ),
         StmtKind::Return(expr) => match expr {
             Some(e) => group(vec![
                 text("return"),
@@ -208,6 +153,274 @@ pub fn format_stmt(
                 text(";"),
             ])
         }
+    }
+}
+
+fn format_if_stmt(
+    cond: &Expr<'_>,
+    then_stmt: &Stmt<'_>,
+    else_stmt: Option<&Stmt<'_>>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let then_is_block_like = is_block_like_stmt(then_stmt);
+    let header = vec![
+        text("if ("),
+        indent(vec![
+            softline(),
+            format_condition_expr(cond, source, config, comments),
+        ]),
+        softline(),
+        text(")"),
+    ];
+    let mut parts = vec![group(header)];
+    if then_is_block_like {
+        parts.push(space());
+        parts.push(format_stmt(then_stmt, source, config, comments));
+    } else {
+        parts.push(indent(vec![
+            line(),
+            format_stmt(then_stmt, source, config, comments),
+        ]));
+    }
+
+    if let Some(else_branch) = else_stmt {
+        parts.extend(format_else_branch(
+            then_is_block_like,
+            else_branch,
+            source,
+            config,
+            comments,
+        ));
+    }
+
+    concat(parts)
+}
+
+fn format_while_stmt(
+    cond: &Expr<'_>,
+    body: &Stmt<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let body_is_block_like = is_block_like_stmt(body);
+    let header = vec![
+        text("while ("),
+        indent(vec![
+            softline(),
+            format_condition_expr(cond, source, config, comments),
+        ]),
+        softline(),
+        text(")"),
+    ];
+    let mut parts = vec![group(header)];
+    if body_is_block_like {
+        parts.push(space());
+        parts.push(format_stmt(body, source, config, comments));
+    } else {
+        parts.push(indent(vec![
+            line(),
+            format_stmt(body, source, config, comments),
+        ]));
+    }
+    concat(parts)
+}
+
+fn format_do_while_stmt(
+    body: &Stmt<'_>,
+    cond: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let body_is_block_like = is_block_like_stmt(body);
+    let mut parts = vec![text("do")];
+
+    if body_is_block_like {
+        parts.push(space());
+        parts.push(format_stmt(body, source, config, comments));
+        parts.push(space());
+    } else {
+        parts.push(indent(vec![
+            line(),
+            format_stmt(body, source, config, comments),
+        ]));
+        parts.push(hardline());
+    }
+
+    parts.push(group(vec![
+        text("while ("),
+        indent(vec![
+            softline(),
+            format_condition_expr(cond, source, config, comments),
+        ]),
+        softline(),
+        text(");"),
+    ]));
+
+    concat(parts)
+}
+
+fn format_for_stmt(
+    init: Option<&Stmt<'_>>,
+    cond: Option<&Expr<'_>>,
+    next: Option<&Expr<'_>>,
+    body: &Stmt<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let body_is_block_like = is_block_like_stmt(body);
+    let header = if init.is_none() && cond.is_none() && next.is_none() {
+        group(vec![text("for (;;)")])
+    } else {
+        let init_clause = init
+            .map(|stmt| format_for_init_clause(stmt, source, config, comments))
+            .unwrap_or_else(|| text(""));
+        let cond_clause = cond
+            .map(|expr| format_condition_expr(expr, source, config, comments))
+            .unwrap_or_else(|| text(""));
+        let next_clause = next
+            .map(|expr| format_expr(expr, source, config, comments))
+            .unwrap_or_else(|| text(""));
+
+        group(vec![if_flat(
+            concat(vec![
+                text("for ("),
+                init_clause.clone(),
+                text("; "),
+                cond_clause.clone(),
+                text("; "),
+                next_clause.clone(),
+                text(")"),
+            ]),
+            concat(vec![
+                text("for ("),
+                indent(vec![
+                    line(),
+                    init_clause,
+                    text(";"),
+                    line(),
+                    cond_clause,
+                    text(";"),
+                    line(),
+                    next_clause,
+                ]),
+                line(),
+                text(")"),
+            ]),
+        )])
+    };
+
+    let mut parts = vec![header];
+    if body_is_block_like {
+        parts.push(space());
+        parts.push(format_stmt(body, source, config, comments));
+    } else {
+        parts.push(indent(vec![
+            line(),
+            format_stmt(body, source, config, comments),
+        ]));
+    }
+    concat(parts)
+}
+
+fn format_else_branch(
+    prev_body_is_block_like: bool,
+    else_branch: &Stmt<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> Vec<FormatChunk> {
+    let mut parts = Vec::new();
+    if prev_body_is_block_like {
+        parts.push(text(" else"));
+    } else {
+        parts.push(hardline());
+        parts.push(text("else"));
+    }
+
+    if matches!(else_branch.kind, StmtKind::If(..)) || is_block_like_stmt(else_branch) {
+        parts.push(space());
+        parts.push(format_stmt(else_branch, source, config, comments));
+    } else {
+        parts.push(indent(vec![
+            line(),
+            format_stmt(else_branch, source, config, comments),
+        ]));
+    }
+
+    parts
+}
+
+fn is_block_like_stmt(stmt: &Stmt<'_>) -> bool {
+    matches!(stmt.kind, StmtKind::Block(_) | StmtKind::UncheckedBlock(_))
+}
+
+fn format_for_init_clause(
+    stmt: &Stmt<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    match &stmt.kind {
+        StmtKind::DeclSingle(var) => {
+            let mut parts = vec![format_type(&var.ty, source, config)];
+            if let Some(loc) = &var.data_location {
+                parts.push(space());
+                parts.push(text(format_data_location(*loc)));
+            }
+            if let Some(name) = &var.name {
+                parts.push(space());
+                parts.push(text(name.as_str()));
+            }
+            if let Some(init) = &var.initializer {
+                let preserve_multiline = matches!(init.kind, ExprKind::Binary(..))
+                    && span_text(source, var.span).contains('\n');
+                parts.push(format_initializer(
+                    init,
+                    source,
+                    config,
+                    comments,
+                    preserve_multiline,
+                ));
+            }
+            concat(parts)
+        }
+        StmtKind::DeclMulti(vars, init) => {
+            let var_chunks: Vec<FormatChunk> = vars
+                .iter()
+                .map(|var| match var {
+                    SpannedOption::Some(v) => {
+                        let mut parts = vec![format_type(&v.ty, source, config)];
+                        if let Some(loc) = &v.data_location {
+                            parts.push(space());
+                            parts.push(text(format_data_location(*loc)));
+                        }
+                        if let Some(name) = &v.name {
+                            parts.push(space());
+                            parts.push(text(name.as_str()));
+                        }
+                        concat(parts)
+                    }
+                    SpannedOption::None(_) => concat(vec![]),
+                })
+                .collect();
+            group(vec![
+                format_grouped_tuple(var_chunks),
+                text(" ="),
+                indent(vec![line(), format_expr(init, source, config, comments)]),
+            ])
+        }
+        StmtKind::Expr(expr) => format_expr(expr, source, config, comments),
+        _ => text(
+            span_text(source, stmt.span)
+                .trim()
+                .trim_end_matches(';')
+                .trim_end(),
+        ),
     }
 }
 

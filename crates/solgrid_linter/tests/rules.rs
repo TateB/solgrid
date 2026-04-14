@@ -295,6 +295,51 @@ interface Test {
 }
 
 #[test]
+fn test_func_name_mixedcase_public_abi_names_clean_by_default() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function ROOT_RESOURCE() external view returns (uint256);
+}
+contract Test {
+    function ABI(bytes32 node, uint256 contentTypes)
+        external
+        pure
+        returns (uint256, bytes memory)
+    {
+        return (0, "");
+    }
+}
+"#;
+    assert_no_diagnostics(source, "naming/func-name-mixedcase");
+}
+
+#[test]
+fn test_func_name_mixedcase_public_abi_names_can_be_disabled() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function ROOT_RESOURCE() external view returns (uint256);
+}
+"#;
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    config.lint.settings.insert(
+        "naming/func-name-mixedcase".into(),
+        toml::toml! {
+            allow_public_abi = false
+        }
+        .into(),
+    );
+
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "naming/func-name-mixedcase", &config);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+}
+
+#[test]
 fn test_const_name_snakecase_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -2708,6 +2753,42 @@ fn test_fix_no_unused_imports_partial() {
         "Expected unused alias to be removed"
     );
     assert!(fixed.contains("Used"), "Expected used alias to remain");
+}
+
+#[test]
+fn test_no_unused_imports_inheritdoc_reference_is_used() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC165} from "some.sol";
+contract Test {
+    /// @inheritdoc IERC165
+    function supportsInterface(bytes4 interfaceId) public pure returns (bool) {
+        interfaceId;
+        return true;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-imports");
+}
+
+#[test]
+fn test_fix_no_unused_imports_preserves_inheritdoc_reference() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC165} from "some.sol";
+contract Test {
+    /// @inheritdoc IERC165
+    function supportsInterface(bytes4 interfaceId) public pure returns (bool) {
+        interfaceId;
+        return true;
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains(r#"import {IERC165} from "some.sol";"#),
+        "Expected import referenced by @inheritdoc to remain"
+    );
 }
 
 #[test]

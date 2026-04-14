@@ -4,9 +4,11 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
+use solgrid_ast::natspec::find_attached_natspec;
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{ImportItems, ItemKind};
 use solgrid_parser::with_parsed_ast_sequential;
+use std::collections::HashSet;
 
 static META: RuleMeta = RuleMeta {
     id: "best-practices/no-unused-imports",
@@ -28,6 +30,7 @@ impl Rule for NoUnusedImportsRule {
         let filename = ctx.path.to_string_lossy().to_string();
         let result = with_parsed_ast_sequential(ctx.source, &filename, |source_unit| {
             let mut diagnostics = Vec::new();
+            let inheritdoc_refs = collect_inheritdoc_references(source_unit, ctx.source);
 
             for item in source_unit.items.iter() {
                 if let ItemKind::Import(import) = &item.kind {
@@ -52,7 +55,9 @@ impl Rule for NoUnusedImportsRule {
                                         alias.0.as_str().to_string()
                                     };
 
-                                    (!is_identifier_used(rest, &imported_name)).then_some((
+                                    (!is_identifier_used(rest, &imported_name)
+                                        && !inheritdoc_refs.contains(imported_name.as_str()))
+                                    .then_some((
                                         idx,
                                         imported_name,
                                         solgrid_ast::span_to_range(
@@ -95,7 +100,9 @@ impl Rule for NoUnusedImportsRule {
 
                             if import_end < ctx.source.len() {
                                 let rest = &ctx.source[import_end..];
-                                if !is_identifier_used(rest, alias_name) {
+                                if !is_identifier_used(rest, alias_name)
+                                    && !inheritdoc_refs.contains(alias_name)
+                                {
                                     let name_range = solgrid_ast::span_to_range(alias.span);
                                     let fix = delete_import_line_fix(ctx.source, &import_range);
                                     diagnostics.push(
@@ -121,6 +128,47 @@ impl Rule for NoUnusedImportsRule {
         });
 
         result.unwrap_or_default()
+    }
+}
+
+fn collect_inheritdoc_references(
+    source_unit: &solgrid_parser::solar_ast::SourceUnit<'_>,
+    source: &str,
+) -> HashSet<String> {
+    let mut refs = HashSet::new();
+
+    for item in source_unit.items.iter() {
+        collect_inheritdoc_references_for_item(item, source, &mut refs);
+        if let ItemKind::Contract(contract) = &item.kind {
+            for body_item in contract.body.iter() {
+                collect_inheritdoc_references_for_item(body_item, source, &mut refs);
+            }
+        }
+    }
+
+    refs
+}
+
+fn collect_inheritdoc_references_for_item(
+    item: &solgrid_parser::solar_ast::Item<'_>,
+    source: &str,
+    refs: &mut HashSet<String>,
+) {
+    let item_start = solgrid_ast::span_to_range(item.span).start;
+    let Some(block) = find_attached_natspec(source, item_start) else {
+        return;
+    };
+
+    for line in block.stripped_lines() {
+        let mut parts = line.split_whitespace();
+        let Some(tag) = parts.next() else {
+            continue;
+        };
+        if tag.eq_ignore_ascii_case("@inheritdoc") {
+            if let Some(target) = parts.next() {
+                refs.insert(target.to_string());
+            }
+        }
     }
 }
 

@@ -21,11 +21,22 @@ static META: RuleMeta = RuleMeta {
 
 pub struct FuncNameMixedcaseRule;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 struct FuncNameMixedcaseSettings {
     allow: Vec<String>,
     allow_regex: Option<String>,
+    allow_public_abi: bool,
+}
+
+impl Default for FuncNameMixedcaseSettings {
+    fn default() -> Self {
+        Self {
+            allow: Vec::new(),
+            allow_regex: None,
+            allow_public_abi: true,
+        }
+    }
 }
 
 fn is_valid_function_name(
@@ -39,6 +50,16 @@ fn is_valid_function_name(
     }
 
     if allow_regex.is_some_and(|pattern| pattern.is_match(name)) {
+        return true;
+    }
+
+    if settings.allow_public_abi
+        && matches!(
+            visibility,
+            Some(Visibility::Public) | Some(Visibility::External)
+        )
+        && solgrid_ast::is_upper_snake_case(name)
+    {
         return true;
     }
 
