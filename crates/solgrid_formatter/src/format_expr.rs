@@ -263,9 +263,23 @@ pub fn format_call_args(
             if exprs.is_empty() {
                 return concat(vec![]);
             }
+            let args_end = span_to_range(args.span).end;
             let items: Vec<FormatChunk> = exprs
                 .iter()
-                .map(|e| format_expr_with_trailing_comments(e, source, config, comments))
+                .enumerate()
+                .map(|(index, expr)| {
+                    let next_start = exprs
+                        .get(index + 1)
+                        .map(|next| span_to_range(next.span).start)
+                        .unwrap_or(args_end);
+                    format_expr_with_attached_comments(
+                        expr,
+                        next_start,
+                        source,
+                        config,
+                        comments,
+                    )
+                })
                 .collect();
             format_grouped_items(items)
         }
@@ -273,16 +287,21 @@ pub fn format_call_args(
             if named.is_empty() {
                 return concat(vec![]);
             }
+            let args_end = span_to_range(args.span).end;
             let items: Vec<FormatChunk> = named
                 .iter()
-                .map(|arg| {
+                .enumerate()
+                .map(|(index, arg)| {
                     let mut parts = vec![
                         text(arg.name.as_str()),
                         text(": "),
                         format_expr(arg.value, source, config, comments),
                     ];
-                    let trailing =
-                        comments.take_trailing(source, span_to_range(arg.value.span).end);
+                    let next_start = named
+                        .get(index + 1)
+                        .map(|next| span_to_range(next.name.span).start)
+                        .unwrap_or(args_end);
+                    let trailing = comments.take_within(span_to_range(arg.value.span).end..next_start);
                     for comment in trailing {
                         parts.push(space());
                         parts.push(FormatChunk::Comment(comment.kind, comment.content));
@@ -309,14 +328,15 @@ pub fn format_grouped_items(items: Vec<FormatChunk>) -> FormatChunk {
     ])
 }
 
-fn format_expr_with_trailing_comments(
+fn format_expr_with_attached_comments(
     expr: &Expr<'_>,
+    comments_end: usize,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
 ) -> FormatChunk {
     let mut parts = vec![format_expr(expr, source, config, comments)];
-    let trailing = comments.take_trailing(source, span_to_range(expr.span).end);
+    let trailing = comments.take_within(span_to_range(expr.span).end..comments_end);
     for comment in trailing {
         parts.push(space());
         parts.push(FormatChunk::Comment(comment.kind, comment.content));

@@ -2116,6 +2116,25 @@ fn test_preserve_argument_local_comment() {
 }
 
 #[test]
+fn test_statement_comment_after_call_is_not_attached_to_argument() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(

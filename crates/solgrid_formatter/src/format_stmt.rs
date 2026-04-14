@@ -377,9 +377,11 @@ pub fn format_params(
     comments: &mut CommentStore,
 ) -> FormatChunk {
     let mut force_multiline = false;
+    let params_end = span_to_range(params.span).end;
     let items: Vec<FormatChunk> = params
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(index, p)| {
             let mut parts = vec![format_type(&p.ty, source, config)];
             if let Some(loc) = &p.data_location {
                 parts.push(space());
@@ -389,7 +391,11 @@ pub fn format_params(
                 parts.push(space());
                 parts.push(text(name.as_str()));
             }
-            let trailing = comments.take_trailing(source, span_to_range(p.span).end);
+            let next_start = params
+                .get(index + 1)
+                .map(|next| span_to_range(next.span).start)
+                .unwrap_or(params_end);
+            let trailing = comments.take_within(span_to_range(p.span).end..next_start);
             if !trailing.is_empty() {
                 force_multiline = true;
             }
