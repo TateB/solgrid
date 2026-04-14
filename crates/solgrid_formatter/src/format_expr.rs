@@ -384,24 +384,33 @@ fn attach_comments_with_separator(
 ) -> (FormatChunk, bool) {
     let mut parts = vec![item];
 
-    if has_next {
-        if let Some(line_index) = trailing.iter().position(|comment| {
-            matches!(
-                comment.kind,
-                crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
-            )
-        }) {
-            for comment in trailing.iter().take(line_index) {
-                parts.push(space());
-                parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
-            }
-            parts.push(text(","));
-            for comment in trailing.iter().skip(line_index) {
-                parts.push(space());
-                parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
-            }
-            return (concat(parts), true);
+    if let Some(line_index) = trailing.iter().position(|comment| {
+        matches!(
+            comment.kind,
+            crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+        )
+    }) {
+        for comment in trailing.iter().take(line_index) {
+            parts.push(space());
+            parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
+
+        if has_next {
+            parts.push(text(","));
+        }
+
+        parts.push(space());
+        parts.push(FormatChunk::Comment(
+            trailing[line_index].kind,
+            trailing[line_index].content.clone(),
+        ));
+
+        for comment in trailing.iter().skip(line_index + 1) {
+            parts.push(hardline());
+            parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+        }
+
+        return (concat(parts), has_next);
     }
 
     for comment in trailing {

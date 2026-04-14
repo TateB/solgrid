@@ -2255,6 +2255,59 @@ fn test_preserve_parameter_line_comment_after_comma() {
 }
 
 #[test]
+fn test_preserve_comment_after_argument_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(
