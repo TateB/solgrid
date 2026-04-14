@@ -28,7 +28,7 @@ pub fn format_item(
             format_contract(contract, item.span, source, config, comments)
         }
         ItemKind::Function(func) => format_function(func, source, config, comments),
-        ItemKind::Variable(var) => format_variable_def(var, source, config),
+        ItemKind::Variable(var) => format_variable_def(var, source, config, comments),
         ItemKind::Struct(s) => format_struct(s, source, config, comments),
         ItemKind::Enum(e) => format_enum(e),
         ItemKind::Udvt(udvt) => format_udvt(udvt, source, config),
@@ -154,7 +154,7 @@ fn format_contract(
                     let args: Vec<FormatChunk> = base
                         .arguments
                         .exprs()
-                        .map(|a| format_expr(a, source, config))
+                        .map(|a| format_expr(a, source, config, comments))
                         .collect();
                     concat(vec![
                         path_chunk,
@@ -332,7 +332,7 @@ fn format_function(
     }
 
     // Parameters
-    let params = format_params(&func.header.parameters, source, config);
+    let params = format_params(&func.header.parameters, source, config, comments);
     header_parts.push(text("("));
     if !func.header.parameters.is_empty() {
         header_parts.push(params);
@@ -399,7 +399,7 @@ fn format_function(
             let args: Vec<FormatChunk> = modifier
                 .arguments
                 .exprs()
-                .map(|a| format_expr(a, source, config))
+                .map(|a| format_expr(a, source, config, comments))
                 .collect();
             attrs.push(concat(vec![
                 text(mod_name),
@@ -414,7 +414,7 @@ fn format_function(
     let mut returns_chunk = None;
     if let Some(returns) = &func.header.returns {
         if !returns.is_empty() {
-            let ret_params = format_params(returns, source, config);
+            let ret_params = format_params(returns, source, config, comments);
             returns_chunk = Some(concat(vec![text("returns ("), ret_params, text(")")]));
         }
     }
@@ -459,6 +459,7 @@ fn format_variable_def(
     var: &VariableDefinition<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
 ) -> FormatChunk {
     let mut parts = vec![format_type(&var.ty, source, config)];
 
@@ -510,7 +511,13 @@ fn format_variable_def(
     if let Some(init) = &var.initializer {
         let preserve_multiline =
             matches!(init.kind, ExprKind::Binary(..)) && span_text(source, var.span).contains('\n');
-        parts.push(format_initializer(init, source, config, preserve_multiline));
+        parts.push(format_initializer(
+            init,
+            source,
+            config,
+            comments,
+            preserve_multiline,
+        ));
     }
 
     parts.push(text(";"));
@@ -566,9 +573,10 @@ fn format_initializer(
     expr: &Expr<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
     preserve_multiline: bool,
 ) -> FormatChunk {
-    let value = format_expr(expr, source, config);
+    let value = format_expr(expr, source, config, comments);
     if preserve_multiline {
         concat(vec![text(" ="), indent(vec![hardline(), value])])
     } else if matches!(expr.kind, ExprKind::Ternary(..)) {
@@ -588,8 +596,7 @@ fn format_enum(e: &ItemEnum<'_>) -> FormatChunk {
     }
 
     let variants: Vec<FormatChunk> = e.variants.iter().map(|v| text(v.as_str())).collect();
-
-    let body = join(variants, text(","));
+    let body = join(variants, concat(vec![text(","), hardline()]));
     parts.push(indent(vec![hardline(), body]));
     parts.push(hardline());
     parts.push(text("}"));

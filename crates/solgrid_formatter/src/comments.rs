@@ -107,6 +107,12 @@ pub struct CommentStore {
 }
 
 impl CommentStore {
+    pub fn empty() -> Self {
+        Self {
+            comments: Vec::new(),
+        }
+    }
+
     pub fn new(source: &str) -> Self {
         Self {
             comments: extract_comments(source),

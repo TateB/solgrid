@@ -1,7 +1,10 @@
 //! Statement formatting — converts Solar AST `Stmt` nodes to FormatChunk IR.
 
 use crate::comments::CommentStore;
-use crate::format_expr::{format_call_args, format_expr, format_grouped_tuple};
+use crate::format_expr::{
+    attach_inline_comments, format_call_args, format_expr, format_grouped_tuple,
+    format_multiline_items_with_comments,
+};
 use crate::format_item::has_blank_line_between;
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
@@ -88,7 +91,7 @@ pub fn format_stmt(
                 None => text(";"),
             };
             let next_chunk = match next {
-                Some(n) => format_expr(n, source, config),
+                Some(n) => format_expr(n, source, config, comments),
                 None => concat(vec![]),
             };
             group(vec![
@@ -104,8 +107,8 @@ pub fn format_stmt(
         }
         StmtKind::Return(expr) => match expr {
             Some(e) => group(vec![
-                text("return "),
-                format_expr(e, source, config),
+                text("return"),
+                indent(vec![line(), format_expr(e, source, config, comments)]),
                 text(";"),
             ]),
             None => text("return;"),
@@ -117,7 +120,7 @@ pub fn format_stmt(
                 .map(|seg| text(seg.as_str()))
                 .collect();
             let path_chunk = join(path_str, text("."));
-            let args_chunk = format_call_args(args, source, config);
+            let args_chunk = format_call_args(args, source, config, comments);
             concat(vec![
                 text("emit "),
                 path_chunk,
@@ -133,7 +136,7 @@ pub fn format_stmt(
                 .map(|seg| text(seg.as_str()))
                 .collect();
             let path_chunk = join(path_str, text("."));
-            let args_chunk = format_call_args(args, source, config);
+            let args_chunk = format_call_args(args, source, config, comments);
             concat(vec![
                 text("revert "),
                 path_chunk,
@@ -149,7 +152,9 @@ pub fn format_stmt(
             let asm_text = span_text(source, stmt.span);
             text(asm_text)
         }
-        StmtKind::Expr(expr) => concat(vec![format_expr(expr, source, config), text(";")]),
+        StmtKind::Expr(expr) => {
+            concat(vec![format_expr(expr, source, config, comments), text(";")])
+        }
         StmtKind::Break => text("break;"),
         StmtKind::Continue => text("continue;"),
         StmtKind::Placeholder => text("_;"),
@@ -166,7 +171,13 @@ pub fn format_stmt(
             if let Some(init) = &var.initializer {
                 let preserve_multiline = matches!(init.kind, ExprKind::Binary(..))
                     && span_text(source, var.span).contains('\n');
-                parts.push(format_initializer(init, source, config, preserve_multiline));
+                parts.push(format_initializer(
+                    init,
+                    source,
+                    config,
+                    comments,
+                    preserve_multiline,
+                ));
             }
             parts.push(text(";"));
             concat(parts)
@@ -193,7 +204,7 @@ pub fn format_stmt(
             group(vec![
                 format_grouped_tuple(var_chunks),
                 text(" ="),
-                indent(vec![line(), format_expr(init, source, config)]),
+                indent(vec![line(), format_expr(init, source, config, comments)]),
                 text(";"),
             ])
         }
@@ -209,7 +220,7 @@ fn format_condition_expr(
     let range = span_to_range(expr.span);
     let inner_comments = comments.take_within(range.clone());
     if inner_comments.is_empty() {
-        format_expr(expr, source, config)
+        format_expr(expr, source, config, comments)
     } else {
         text(span_text(source, expr.span))
     }
@@ -299,9 +310,10 @@ fn format_initializer(
     expr: &Expr<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
     preserve_multiline: bool,
 ) -> FormatChunk {
-    let value = format_expr(expr, source, config);
+    let value = format_expr(expr, source, config, comments);
     if preserve_multiline {
         concat(vec![text(" ="), indent(vec![hardline(), value])])
     } else if matches!(expr.kind, ExprKind::Ternary(..)) {
@@ -318,7 +330,10 @@ fn format_try_stmt(
     config: &FormatConfig,
     comments: &mut CommentStore,
 ) -> FormatChunk {
-    let mut parts = vec![text("try "), format_expr(try_stmt.expr, source, config)];
+    let mut parts = vec![
+        text("try "),
+        format_expr(try_stmt.expr, source, config, comments),
+    ];
 
     // StmtTry has `clauses`: the first clause is the success block,
     // subsequent clauses are catch blocks.
@@ -327,7 +342,7 @@ fn format_try_stmt(
             // Success clause — may have returns
             if !clause.args.is_empty() {
                 parts.push(text(" returns ("));
-                let params = format_params(&clause.args, source, config);
+                let params = format_params(&clause.args, source, config, comments);
                 parts.push(params);
                 parts.push(text(")"));
             }
@@ -341,8 +356,11 @@ fn format_try_stmt(
                 parts.push(text(name.as_str()));
             }
             if !clause.args.is_empty() {
+                if clause.name.is_none() {
+                    parts.push(space());
+                }
                 parts.push(text("("));
-                let params = format_params(&clause.args, source, config);
+                let params = format_params(&clause.args, source, config, comments);
                 parts.push(params);
                 parts.push(text(")"));
             }
@@ -359,10 +377,14 @@ pub fn format_params(
     params: &ParameterList<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
 ) -> FormatChunk {
-    let items: Vec<FormatChunk> = params
+    let mut force_multiline = false;
+    let params_end = span_to_range(params.span).end;
+    let items: Vec<(FormatChunk, Vec<crate::comments::Comment>)> = params
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(index, p)| {
             let mut parts = vec![format_type(&p.ty, source, config)];
             if let Some(loc) = &p.data_location {
                 parts.push(space());
@@ -372,14 +394,31 @@ pub fn format_params(
                 parts.push(space());
                 parts.push(text(name.as_str()));
             }
-            concat(parts)
+            let item = concat(parts);
+            let next_start = params
+                .get(index + 1)
+                .map(|next| span_to_range(next.span).start)
+                .unwrap_or(params_end);
+            let trailing = comments.take_within(span_to_range(p.span).end..next_start);
+            if !trailing.is_empty() {
+                force_multiline = true;
+            }
+            (item, trailing)
         })
         .collect();
-    group(vec![
-        indent(vec![
+    if force_multiline {
+        format_multiline_items_with_comments(items)
+    } else {
+        let items: Vec<FormatChunk> = items
+            .into_iter()
+            .map(|(item, trailing)| attach_inline_comments(item, trailing))
+            .collect();
+        group(vec![
+            indent(vec![
+                softline(),
+                join(items, concat(vec![text(","), line()])),
+            ]),
             softline(),
-            join(items, concat(vec![text(","), line()])),
-        ]),
-        softline(),
-    ])
+        ])
+    }
 }

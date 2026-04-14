@@ -1970,9 +1970,10 @@ fn test_format_logical_or_chain_without_staircase_indent() {
 "#;
     let expected = r#"contract T {
     function supportsInterface(bytes4 interfaceId) public view returns (bool) {
-        return interfaceId == type(INameWrapper).interfaceId
-            || interfaceId == type(IERC721Receiver).interfaceId
-            || super.supportsInterface(interfaceId);
+        return
+            interfaceId == type(INameWrapper).interfaceId
+                || interfaceId == type(IERC721Receiver).interfaceId
+                || super.supportsInterface(interfaceId);
     }
 }
 "#;
@@ -2033,10 +2034,11 @@ fn test_format_parenthesized_logical_chain_like_forge() {
         view
         returns (bool)
     {
-        return (owner == addr
-                || isApprovedForAll(owner, addr)
-                || getApproved(uint256(node)) == addr)
-            && !_isETH2LDInGracePeriod(fuses, expiry);
+        return
+            (owner == addr
+                    || isApprovedForAll(owner, addr)
+                    || getApproved(uint256(node)) == addr)
+                && !_isETH2LDInGracePeriod(fuses, expiry);
     }
 }
 "#;
@@ -2046,4 +2048,378 @@ fn test_format_parenthesized_logical_chain_like_forge() {
     };
     let formatted = format_source(source, &config).unwrap();
     assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_ignored_parameter_comments_in_signature() {
+    let source = r#"contract T {
+    function onERC721Received(
+        address /*operator*/,
+        address /*from*/,
+        uint256 tokenId,
+        bytes calldata data
+    ) external returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function onERC721Received(
+        address /*operator*/,
+        address /*from*/,
+        uint256 tokenId,
+        bytes calldata data
+    )
+        external
+        returns (bytes4)
+    {
+        return this.onERC721Received.selector;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_argument_local_comment() {
+    let source = r#"contract T {
+    function f(Metadata memory md) public {
+        ETH_REGISTRY.register(
+            md.label,
+            md.owner,
+            md.subregistry,
+            md.resolver,
+            REGISTRATION_ROLE_BITMAP,
+            0 // use reserved expiry
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(Metadata memory md) public {
+        ETH_REGISTRY.register(
+            md.label,
+            md.owner,
+            md.subregistry,
+            md.resolver,
+            REGISTRATION_ROLE_BITMAP,
+            0 // use reserved expiry
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_statement_comment_after_call_is_not_attached_to_argument() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_call_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_named_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_last_call_argument_line_comment() {
+    let source = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_last_named_argument_line_comment() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_parameter_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_after_argument_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_break_long_return_after_keyword() {
+    let source = r#"contract T {
+    function f(
+        mapping(address => uint256) storage roles,
+        uint256 resource,
+        address account,
+        uint256 roleBitmap
+    ) internal view returns (bool) {
+        return (roles[resource][account] | roles[0][account]) & roleBitmap == roleBitmap;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        mapping(address => uint256) storage roles,
+        uint256 resource,
+        address account,
+        uint256 roleBitmap
+    )
+        internal
+        view
+        returns (bool)
+    {
+        return
+            (roles[resource][account] | roles[0][account]) & roleBitmap
+            == roleBitmap;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_bitwise_or_chain_without_staircase_indent() {
+    let source = r#"contract T {
+    uint256 constant REGISTRATION_ROLE_BITMAP = 0 |
+        RegistryRolesLib.ROLE_SET_SUBREGISTRY |
+        RegistryRolesLib.ROLE_SET_SUBREGISTRY_ADMIN |
+        RegistryRolesLib.ROLE_SET_RESOLVER |
+        RegistryRolesLib.ROLE_SET_RESOLVER_ADMIN |
+        RegistryRolesLib.ROLE_CAN_TRANSFER_ADMIN;
+}
+"#;
+    let expected = r#"contract T {
+    uint256 constant REGISTRATION_ROLE_BITMAP =
+        0
+        | RegistryRolesLib.ROLE_SET_SUBREGISTRY
+        | RegistryRolesLib.ROLE_SET_SUBREGISTRY_ADMIN
+        | RegistryRolesLib.ROLE_SET_RESOLVER
+        | RegistryRolesLib.ROLE_SET_RESOLVER_ADMIN
+        | RegistryRolesLib.ROLE_CAN_TRANSFER_ADMIN;
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_multiline_enum_keeps_one_member_per_line() {
+    let source = r#"contract T {
+    enum State {
+        START,
+        IGNORED_KEY,
+        IGNORED_KEY_ARG,
+        VALUE,
+        QUOTED_VALUE,
+        UNQUOTED_VALUE,
+        IGNORED_VALUE,
+        IGNORED_QUOTED_VALUE,
+        IGNORED_UNQUOTED_VALUE
+    }
+}
+"#;
+    let expected = r#"contract T {
+    enum State {
+        START,
+        IGNORED_KEY,
+        IGNORED_KEY_ARG,
+        VALUE,
+        QUOTED_VALUE,
+        UNQUOTED_VALUE,
+        IGNORED_VALUE,
+        IGNORED_QUOTED_VALUE,
+        IGNORED_UNQUOTED_VALUE
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_catch_with_typed_parameter_keeps_space() {
+    let source = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch (bytes memory reason) {
+            consume(reason.length);
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("catch (bytes memory reason)"));
 }
