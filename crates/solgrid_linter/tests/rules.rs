@@ -2748,7 +2748,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {B} from "some.sol";
+
 contract Test {
     B public x;
 }
@@ -2785,6 +2787,7 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {}
 "#;
     let fixed = fix_source(source);
@@ -2801,6 +2804,7 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {}
 "#;
     let fixed = fix_source(source);
@@ -2821,7 +2825,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {Used} from "some.sol";
+
 contract Test {
     Used public x;
 }
@@ -2846,6 +2852,7 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {
     modifier onlyOwner(address who) {
         _;
@@ -3087,7 +3094,9 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import "@src/utils/Helper.sol";
+
 contract Test {}
 "#;
     let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
@@ -3152,7 +3161,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {IERC20} from "@src/interfaces/IERC20.sol";
+
 contract Test {
     IERC20 public token;
 }

@@ -162,7 +162,7 @@ contract Test is ERC165 {
     expect(applyEdits(content, edits ?? [])).toBe(expected);
   });
 
-  it("formats the post-fix buffer when VS Code requests formatting after save fixes", async () => {
+  it("returns no extra formatting edits after save fixes already produce canonical text", async () => {
     client.notify("workspace/didChangeConfiguration", {
       settings: {
         fixOnSave: true,
@@ -193,8 +193,6 @@ contract Test {
 
     const fixed = applyEdits(content, saveEdits ?? []);
     const formatEdits = await requestFormatting(client, uri);
-    expect(formatEdits).not.toBeNull();
-    expect(formatEdits).toHaveLength(1);
 
     const expected = `// SPDX-License-Identifier: MIT
 pragma solidity ~0.8.17;
@@ -208,10 +206,8 @@ contract Test {
 }
 `;
 
-    expect(fixed).toContain(
-      `import {Alpha} from "./Alpha.sol";\nimport {Zebra} from "./Zebra.sol";`
-    );
-    expect(formatEdits?.[0]?.newText).toBe(expected);
+    expect(fixed).toBe(expected);
+    expect(formatEdits).toBeNull();
   });
 
   it("returns null for non-solidity file", async () => {
