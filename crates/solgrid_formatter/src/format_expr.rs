@@ -272,13 +272,7 @@ pub fn format_call_args(
                         .get(index + 1)
                         .map(|next| span_to_range(next.span).start)
                         .unwrap_or(args_end);
-                    format_expr_with_attached_comments(
-                        expr,
-                        next_start,
-                        source,
-                        config,
-                        comments,
-                    )
+                    format_expr_with_attached_comments(expr, next_start, source, config, comments)
                 })
                 .collect();
             format_grouped_items(items)
@@ -301,7 +295,8 @@ pub fn format_call_args(
                         .get(index + 1)
                         .map(|next| span_to_range(next.name.span).start)
                         .unwrap_or(args_end);
-                    let trailing = comments.take_within(span_to_range(arg.value.span).end..next_start);
+                    let trailing =
+                        comments.take_within(span_to_range(arg.value.span).end..next_start);
                     for comment in trailing {
                         parts.push(space());
                         parts.push(FormatChunk::Comment(comment.kind, comment.content));

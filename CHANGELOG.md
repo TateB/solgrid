@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed formatter comment attachment for ignored parameters and call arguments so inline annotations stay attached to the parameter or argument they describe
 - Fixed formatter output for multiline bitwise chains, long `return` expressions, multiline enums, and typed `catch (...)` clauses to use stable readable canonical layouts
 
+## [0.0.6] - 2026-04-13
+
+### Fixed
+- Fixed VS Code save-time import ordering so `style/imports-ordering` fixes no longer get reverted by a follow-up `solgrid` formatting request
+- Fixed formatter import spacing to canonicalize blank lines between configured import groups instead of collapsing them on save
+
 ## [0.0.5] - 2026-04-01
 
 ### Added
@@ -149,8 +155,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.5...HEAD
-[0.0.5]: https://github.com/TateB/solgrid/compare/v0.0.4...v0.0.5
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/TateB/solgrid/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/TateB/solgrid/releases/tag/v0.0.5
 [0.0.4]: https://github.com/TateB/solgrid/releases/tag/v0.0.4
 [0.0.3]: https://github.com/TateB/solgrid/releases/tag/v0.0.3
 [0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2
