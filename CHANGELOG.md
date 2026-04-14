@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed `fix` retaining imports referenced by NatSpec `@inheritdoc` tags so autofixes no longer leave compiler-broken documentation references behind
+- Fixed `naming/func-name-mixedcase` to allow public ABI-style uppercase function names by default while still supporting exact-name and regex exceptions
+- Fixed formatter output for long `for` headers, infinite `for (;;)` loops, single-statement control flow, and top-level file-scope declaration spacing to use stable canonical layouts
+
 ## [0.0.7] - 2026-04-14
 
 ### Added

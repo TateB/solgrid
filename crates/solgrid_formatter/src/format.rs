@@ -199,8 +199,10 @@ fn blank_lines_between(
             import_item_group(prev, source, import_order)
                 != import_item_group(current, source, import_order),
         ),
-        // Between two declarations: 2 blank lines (1 below prev + 1 above current)
-        (Some(a), Some(b)) if is_declaration(&a) && is_declaration(&b) => 2,
+        // Contracts remain visually separated, but file-scope declarations such
+        // as constants and UDVTs stay grouped with a single blank line.
+        (Some(TopLevelCategory::Contract), Some(TopLevelCategory::Contract)) => 2,
+        (Some(a), Some(b)) if is_declaration(&a) && is_declaration(&b) => 1,
         // Directive -> declaration or different directive types: 1 blank line
         (Some(a), Some(b)) if a != b => 1,
         // Same directive type (e.g. import -> import): no blank line

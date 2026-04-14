@@ -1036,6 +1036,23 @@ fn test_two_blank_lines_between_contracts_with_doc_comment() {
     );
 }
 
+#[test]
+fn test_one_blank_line_between_top_level_constants() {
+    let source = r#"uint16 constant A = 1;
+/// B doc.
+uint16 constant B = 2;
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(
+        formatted,
+        r#"uint16 constant A = 1;
+
+/// B doc.
+uint16 constant B = 2;
+"#
+    );
+}
+
 // ============================================================================
 // Solidity Style Guide — Yes/No Example Tests
 // https://docs.soliditylang.org/en/latest/style-guide.html
@@ -2422,4 +2439,75 @@ fn test_catch_with_typed_parameter_keeps_space() {
 
     let formatted = format_source(source, &default_config()).unwrap();
     assert!(formatted.contains("catch (bytes memory reason)"));
+}
+
+#[test]
+fn test_format_long_for_header_by_clause() {
+    let source = r#"contract T {
+    function f(bytes memory data) public {
+        for (RRUtils.RRIterator memory iter = RRUtils.iterateRRs(data, 0); !RRUtils.done(iter); RRUtils.next(iter)) {
+            consume(iter);
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bytes memory data) public {
+        for (
+            RRUtils.RRIterator memory iter = RRUtils.iterateRRs(data, 0);
+            !RRUtils.done(iter);
+            RRUtils.next(iter)
+        ) {
+            consume(iter);
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_infinite_loop_uses_canonical_spacing() {
+    let source = r#"contract T {
+    function f() public {
+        for (; ; ) {
+            break;
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        for (;;) {
+            break;
+        }
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_single_statement_if_body_over_multiple_lines() {
+    let source = r#"contract T {
+    function f(uint256 x) public pure {
+        if (x == 0) revert();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 x) public pure {
+        if (x == 0)
+            revert();
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
 }
