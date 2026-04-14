@@ -2497,6 +2497,7 @@ dependencies = [
  "solgrid_ast",
  "solgrid_config",
  "solgrid_diagnostics",
+ "solgrid_formatter",
  "solgrid_parser",
  "tempfile",
  "toml",

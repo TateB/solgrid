@@ -10,6 +10,7 @@ description = "Lint rule engine with 90+ rules for solgrid"
 solgrid_ast = { workspace = true }
 solgrid_config = { workspace = true }
 solgrid_diagnostics = { workspace = true }
+solgrid_formatter = { workspace = true }
 solgrid_parser = { workspace = true }
 solar-ast = { workspace = true }
 solar-data-structures = { workspace = true }

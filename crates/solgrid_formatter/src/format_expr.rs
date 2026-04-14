@@ -1,45 +1,70 @@
 //! Expression formatting — converts Solar AST `Expr` nodes to FormatChunk IR.
 
+use crate::comments::CommentStore;
 use crate::format_ty::format_type;
 use crate::ir::*;
 use solar_ast::*;
-use solgrid_ast::span_text;
+use solgrid_ast::{span_text, span_to_range};
 use solgrid_config::{FormatConfig, NumberUnderscore};
 use solgrid_parser::solar_interface::SpannedOption;
 
 /// Format an expression.
-pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+pub fn format_expr(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     match &expr.kind {
         ExprKind::Lit(lit, sub_denom) => format_literal(lit, sub_denom, source, config),
         ExprKind::Ident(ident) => text(ident.as_str()),
         ExprKind::Unary(op, operand) => {
             let op_str = span_text(source, op.span);
             if op.kind.is_postfix() {
-                concat(vec![format_expr(operand, source, config), text(op_str)])
+                concat(vec![
+                    format_expr(operand, source, config, comments),
+                    text(op_str),
+                ])
             } else {
                 // Prefix operators: no space for !, ~, ++, --; space for delete
-                concat(vec![text(op_str), format_expr(operand, source, config)])
+                concat(vec![
+                    text(op_str),
+                    format_expr(operand, source, config, comments),
+                ])
             }
         }
         ExprKind::Binary(lhs, op, rhs) => match op.kind {
-            BinOpKind::And | BinOpKind::Or => format_logical_chain(lhs, *op, rhs, source, config),
+            BinOpKind::And | BinOpKind::Or => {
+                format_binary_chain(lhs, *op, rhs, source, config, comments, true)
+            }
+            BinOpKind::BitAnd | BinOpKind::BitOr | BinOpKind::BitXor => {
+                format_binary_chain(lhs, *op, rhs, source, config, comments, false)
+            }
             _ => {
                 let op_str = span_text(source, op.span);
-                group(vec![
-                    format_expr(lhs, source, config),
-                    indent(vec![
-                        line(),
-                        text(op_str),
-                        space(),
-                        format_expr(rhs, source, config),
-                    ]),
-                ])
+                let rest = vec![
+                    line(),
+                    text(op_str),
+                    space(),
+                    format_expr(rhs, source, config, comments),
+                ];
+                if matches!(op_str, "==" | "!=" | "<" | ">" | "<=" | ">=") {
+                    group(vec![
+                        format_expr(lhs, source, config, comments),
+                        concat(rest),
+                    ])
+                } else {
+                    group(vec![
+                        format_expr(lhs, source, config, comments),
+                        indent(rest),
+                    ])
+                }
             }
         },
         ExprKind::Ternary(cond, if_true, if_false) => {
-            let cond_chunk = format_expr(cond, source, config);
-            let true_chunk = format_expr(if_true, source, config);
-            let false_chunk = format_expr(if_false, source, config);
+            let cond_chunk = format_expr(cond, source, config, comments);
+            let true_chunk = format_expr(if_true, source, config, comments);
+            let false_chunk = format_expr(if_false, source, config, comments);
 
             if span_text(source, expr.span).contains('\n') {
                 concat(vec![
@@ -74,26 +99,26 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
                 "= ".to_string()
             };
             group(vec![
-                format_expr(lhs, source, config),
+                format_expr(lhs, source, config, comments),
                 space(),
                 text(op_str),
-                format_expr(rhs, source, config),
+                format_expr(rhs, source, config, comments),
             ])
         }
         ExprKind::Call(callee, args) => {
-            let callee_chunk = format_expr(callee, source, config);
-            let args_chunk = format_call_args(args, source, config);
+            let callee_chunk = format_expr(callee, source, config, comments);
+            let args_chunk = format_call_args(args, source, config, comments);
             concat(vec![callee_chunk, text("("), args_chunk, text(")")])
         }
         ExprKind::CallOptions(callee, options) => {
-            let callee_chunk = format_expr(callee, source, config);
+            let callee_chunk = format_expr(callee, source, config, comments);
             let opts: Vec<FormatChunk> = options
                 .iter()
                 .map(|opt| {
                     concat(vec![
                         text(opt.name.as_str()),
                         text(": "),
-                        format_expr(opt.value, source, config),
+                        format_expr(opt.value, source, config, comments),
                     ])
                 })
                 .collect();
@@ -105,18 +130,18 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             }
         }
         ExprKind::Index(base, index) => {
-            let base_chunk = format_expr(base, source, config);
+            let base_chunk = format_expr(base, source, config, comments);
             let idx = match index {
-                IndexKind::Index(Some(idx)) => format_expr(idx, source, config),
+                IndexKind::Index(Some(idx)) => format_expr(idx, source, config, comments),
                 IndexKind::Index(None) => concat(vec![]),
                 IndexKind::Range(start, end) => {
                     let s = start
                         .as_ref()
-                        .map(|e| format_expr(e, source, config))
+                        .map(|e| format_expr(e, source, config, comments))
                         .unwrap_or_else(|| concat(vec![]));
                     let e = end
                         .as_ref()
-                        .map(|e| format_expr(e, source, config))
+                        .map(|e| format_expr(e, source, config, comments))
                         .unwrap_or_else(|| concat(vec![]));
                     concat(vec![s, text(":"), e])
                 }
@@ -124,7 +149,7 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             concat(vec![base_chunk, text("["), idx, text("]")])
         }
         ExprKind::Member(base, member) => concat(vec![
-            format_expr(base, source, config),
+            format_expr(base, source, config, comments),
             text("."),
             text(member.as_str()),
         ]),
@@ -132,7 +157,7 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             if let [SpannedOption::Some(expr)] = elements.as_ref() {
                 return group(vec![
                     text("("),
-                    indent(vec![format_expr(expr, source, config)]),
+                    indent(vec![format_expr(expr, source, config, comments)]),
                     text(")"),
                 ]);
             }
@@ -140,7 +165,7 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             let items: Vec<FormatChunk> = elements
                 .iter()
                 .map(|elem| match elem {
-                    SpannedOption::Some(e) => format_expr(e, source, config),
+                    SpannedOption::Some(e) => format_expr(e, source, config, comments),
                     SpannedOption::None(_) => concat(vec![]),
                 })
                 .collect();
@@ -153,17 +178,18 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
             text(")"),
         ]),
         ExprKind::New(ty) => concat(vec![text("new "), format_type(ty, source, config)]),
-        ExprKind::Delete(operand) => {
-            concat(vec![text("delete "), format_expr(operand, source, config)])
-        }
+        ExprKind::Delete(operand) => concat(vec![
+            text("delete "),
+            format_expr(operand, source, config, comments),
+        ]),
         ExprKind::Payable(args) => {
-            let args_chunk = format_call_args(args, source, config);
+            let args_chunk = format_call_args(args, source, config, comments);
             concat(vec![text("payable("), args_chunk, text(")")])
         }
         ExprKind::Array(elements) => {
             let items: Vec<FormatChunk> = elements
                 .iter()
-                .map(|e| format_expr(e, source, config))
+                .map(|e| format_expr(e, source, config, comments))
                 .collect();
             let inner = join(items, text(", "));
             group(vec![text("["), inner, text("]")])
@@ -171,49 +197,67 @@ pub fn format_expr(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> Form
     }
 }
 
-fn format_logical_chain(
+/// Format an expression outside the main formatter comment-attachment flow.
+pub fn format_expr_detached(expr: &Expr<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+    let mut comments = CommentStore::new(source);
+    format_expr(expr, source, config, &mut comments)
+}
+
+fn format_binary_chain(
     lhs: &Expr<'_>,
     op: BinOp,
     rhs: &Expr<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
+    indent_rest: bool,
 ) -> FormatChunk {
     let mut parts = Vec::new();
-    collect_logical_terms(lhs, op.kind, source, config, &mut parts);
-    collect_logical_terms(rhs, op.kind, source, config, &mut parts);
+    collect_binary_terms(lhs, op.kind, source, config, comments, &mut parts);
+    collect_binary_terms(rhs, op.kind, source, config, comments, &mut parts);
 
     let mut iter = parts.into_iter();
     let first = iter
         .next()
-        .unwrap_or_else(|| format_expr(lhs, source, config));
+        .unwrap_or_else(|| format_expr(lhs, source, config, comments));
     let op_str = span_text(source, op.span).to_string();
-    let rest = iter
+    let rest: Vec<FormatChunk> = iter
         .flat_map(|part| vec![line(), text(op_str.clone()), space(), part])
         .collect();
 
-    group(vec![first, indent(rest)])
+    if indent_rest {
+        group(vec![first, indent(rest)])
+    } else {
+        group(vec![first, concat(rest)])
+    }
 }
 
-fn collect_logical_terms(
+fn collect_binary_terms(
     expr: &Expr<'_>,
     op_kind: BinOpKind,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
     out: &mut Vec<FormatChunk>,
 ) {
     if let ExprKind::Binary(lhs, op, rhs) = &expr.kind {
         if op.kind == op_kind {
-            collect_logical_terms(lhs, op_kind, source, config, out);
-            collect_logical_terms(rhs, op_kind, source, config, out);
+            collect_binary_terms(lhs, op_kind, source, config, comments, out);
+            collect_binary_terms(rhs, op_kind, source, config, comments, out);
             return;
         }
     }
 
-    out.push(format_expr(expr, source, config));
+    out.push(format_expr(expr, source, config, comments));
 }
 
 /// Format call arguments (positional or named).
-pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig) -> FormatChunk {
+pub fn format_call_args(
+    args: &CallArgs<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
     match &args.kind {
         CallArgsKind::Unnamed(exprs) => {
             if exprs.is_empty() {
@@ -221,7 +265,7 @@ pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig
             }
             let items: Vec<FormatChunk> = exprs
                 .iter()
-                .map(|e| format_expr(e, source, config))
+                .map(|e| format_expr_with_trailing_comments(e, source, config, comments))
                 .collect();
             format_grouped_items(items)
         }
@@ -232,11 +276,18 @@ pub fn format_call_args(args: &CallArgs<'_>, source: &str, config: &FormatConfig
             let items: Vec<FormatChunk> = named
                 .iter()
                 .map(|arg| {
-                    concat(vec![
+                    let mut parts = vec![
                         text(arg.name.as_str()),
                         text(": "),
-                        format_expr(arg.value, source, config),
-                    ])
+                        format_expr(arg.value, source, config, comments),
+                    ];
+                    let trailing =
+                        comments.take_trailing(source, span_to_range(arg.value.span).end);
+                    for comment in trailing {
+                        parts.push(space());
+                        parts.push(FormatChunk::Comment(comment.kind, comment.content));
+                    }
+                    concat(parts)
                 })
                 .collect();
             if config.bracket_spacing {
@@ -256,6 +307,21 @@ pub fn format_grouped_items(items: Vec<FormatChunk>) -> FormatChunk {
         ]),
         softline(),
     ])
+}
+
+fn format_expr_with_trailing_comments(
+    expr: &Expr<'_>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> FormatChunk {
+    let mut parts = vec![format_expr(expr, source, config, comments)];
+    let trailing = comments.take_trailing(source, span_to_range(expr.span).end);
+    for comment in trailing {
+        parts.push(space());
+        parts.push(FormatChunk::Comment(comment.kind, comment.content));
+    }
+    concat(parts)
 }
 
 pub fn format_grouped_tuple(items: Vec<FormatChunk>) -> FormatChunk {
