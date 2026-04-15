@@ -2325,6 +2325,127 @@ fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
 }
 
 #[test]
+fn test_preserve_tail_comments_inside_function_bodies_inside_library() {
+    let source = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_gap_comment_between_functions() {
+    let source = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_tail_comment_after_last_struct_field() {
+    let source = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
+    }
+}
+"#;
+    let expected = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_single_spacing_keeps_block_doc_comment_with_next_item() {
+    let source = r#"contract T {
+    function a() internal pure {}
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function a() internal pure {}
+
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
+        ..default_config()
+    };
+
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(

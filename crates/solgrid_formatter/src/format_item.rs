@@ -3,7 +3,7 @@
 //! Handles pragma, imports, contracts, functions, structs, enums, events,
 //! errors, UDVTs, using-for, and variable declarations.
 
-use crate::comments::CommentStore;
+use crate::comments::{Comment, CommentStore};
 use crate::format_expr::{format_expr, format_grouped_items};
 use crate::format_stmt::{format_block, format_params};
 use crate::format_ty::{
@@ -29,7 +29,7 @@ pub fn format_item(
         }
         ItemKind::Function(func) => format_function(func, source, config, comments),
         ItemKind::Variable(var) => format_variable_def(var, source, config, comments),
-        ItemKind::Struct(s) => format_struct(s, source, config, comments),
+        ItemKind::Struct(s) => format_struct(s, item.span, source, config, comments),
         ItemKind::Enum(e) => format_enum(e),
         ItemKind::Udvt(udvt) => format_udvt(udvt, source, config),
         ItemKind::Event(event) => format_event(event, source, config),
@@ -120,7 +120,7 @@ fn format_import(import: &ImportDirective<'_>, source: &str, config: &FormatConf
 /// Format a contract/interface/library definition.
 fn format_contract(
     contract: &ItemContract<'_>,
-    _span: solar_interface::Span,
+    span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -264,6 +264,16 @@ fn format_contract(
         prev_kind = current_kind;
         prev_multiline = current_multiline;
     }
+
+    let contract_end = span_to_range(span).end;
+    let tail_comments = comments.take_within(prev_item_end..contract_end);
+    append_gap_comments(
+        &mut body_parts,
+        &tail_comments,
+        source,
+        prev_item_end,
+        contract_end,
+    );
 
     let mut result = header;
     result.push(indent(body_parts));
@@ -527,6 +537,7 @@ fn format_variable_def(
 /// Format a struct definition.
 fn format_struct(
     s: &ItemStruct<'_>,
+    span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -539,6 +550,7 @@ fn format_struct(
     }
 
     let mut body = Vec::new();
+    let mut last_field_end = None;
     for field in s.fields.iter() {
         let field_range = span_to_range(field.span);
         let leading = comments.take_leading(field_range.start);
@@ -561,6 +573,20 @@ fn format_struct(
             body.push(space());
             body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
+
+        last_field_end = Some(field_range.end);
+    }
+
+    let struct_end = span_to_range(span).end;
+    if let Some(last_field_end) = last_field_end {
+        let tail_comments = comments.take_within(last_field_end..struct_end);
+        append_gap_comments(
+            &mut body,
+            &tail_comments,
+            source,
+            last_field_end,
+            struct_end,
+        );
     }
 
     parts.push(indent(body));
@@ -703,6 +729,37 @@ pub(crate) fn has_blank_line_between(source: &str, start: usize, end: usize) -> 
         }
     }
     false
+}
+
+pub(crate) fn append_gap_comments(
+    parts: &mut Vec<FormatChunk>,
+    comments: &[Comment],
+    source: &str,
+    gap_start: usize,
+    gap_end: usize,
+) {
+    if comments.is_empty() {
+        return;
+    }
+
+    for (index, comment) in comments.iter().enumerate() {
+        parts.push(hardline());
+        let prev_end = if index == 0 {
+            gap_start
+        } else {
+            comments[index - 1].range.end
+        };
+        if has_blank_line_between(source, prev_end, comment.range.start) {
+            parts.push(hardline());
+        }
+        parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+    }
+
+    if let Some(last) = comments.last() {
+        if has_blank_line_between(source, last.range.end, gap_end) {
+            parts.push(hardline());
+        }
+    }
 }
 
 /// Sort import items if sort_imports is enabled.

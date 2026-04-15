@@ -5,7 +5,7 @@ use crate::format_expr::{
     attach_inline_comments, format_call_args, format_expr, format_grouped_tuple,
     format_multiline_items_with_comments,
 };
-use crate::format_item::has_blank_line_between;
+use crate::format_item::{append_gap_comments, has_blank_line_between};
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
 use solar_ast::*;
@@ -462,6 +462,7 @@ pub fn format_block(
 
     let mut body_parts = Vec::new();
     let mut prev_stmt_end: Option<usize> = None;
+    let block_end = span_to_range(block.span).end;
     for stmt in block.stmts.iter() {
         let stmt_range = span_to_range(stmt.span);
         let need_blank_line = prev_stmt_end
@@ -514,6 +515,17 @@ pub fn format_block(
         }
 
         prev_stmt_end = Some(stmt_range.end);
+    }
+
+    if let Some(prev_stmt_end) = prev_stmt_end {
+        let tail_comments = comments.take_within(prev_stmt_end..block_end);
+        append_gap_comments(
+            &mut body_parts,
+            &tail_comments,
+            source,
+            prev_stmt_end,
+            block_end,
+        );
     }
 
     concat(vec![text("{"), indent(body_parts), hardline(), text("}")])
