@@ -165,7 +165,7 @@ impl CommentStore {
                 continue;
             }
 
-            if comment.kind == CommentKind::DocLine {
+            if is_doc_comment(source, comment) {
                 break;
             }
 
@@ -244,6 +244,13 @@ fn has_blank_line_between(source: &str, start: usize, end: usize) -> bool {
     false
 }
 
+fn is_doc_comment(source: &str, comment: &Comment) -> bool {
+    comment.kind == CommentKind::DocLine
+        || source
+            .get(comment.range.clone())
+            .is_some_and(|text| text.starts_with("/**"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +325,20 @@ mod tests {
         let end = source.find("function b()").unwrap();
         let postfix = store.take_postfix(source, start, end, true);
         assert!(postfix.is_empty());
+    }
+
+    #[test]
+    fn test_comment_store_postfix_keeps_doc_block_leading_comment() {
+        let source = "function a() {}\n/** doc */\n\nfunction b() {}\n";
+        let mut store = CommentStore::new(source);
+        let start = source.find("function a() {}").unwrap() + "function a() {}".len();
+        let next_start = source.find("function b()").unwrap();
+        let postfix = store.take_postfix(source, start, next_start, true);
+        assert!(postfix.is_empty());
+
+        let leading = store.take_leading(next_start);
+        assert_eq!(leading.len(), 1);
+        assert_eq!(leading[0].kind, CommentKind::Block);
+        assert_eq!(leading[0].content, "* doc ");
     }
 }

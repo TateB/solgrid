@@ -2368,6 +2368,32 @@ fn test_preserve_postfix_comments_inside_function_bodies_inside_library() {
 }
 
 #[test]
+fn test_single_spacing_keeps_block_doc_comment_with_next_item() {
+    let source = r#"contract T {
+    function a() internal pure {}
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function a() internal pure {}
+
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
+        ..default_config()
+    };
+
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_break_long_return_after_keyword() {
     let source = r#"contract T {
     function f(
