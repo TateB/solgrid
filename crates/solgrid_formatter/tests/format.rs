@@ -148,6 +148,26 @@ fn test_preserve_constructor_base_comment_in_header() {
 }
 
 #[test]
+fn test_preserve_comment_on_last_modifier_when_modifiers_share_a_line() {
+    let source = r#"contract T {
+    function f() public onlyOwner whenNotPaused // note
+    {
+        return;
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner\n        whenNotPaused // note"),
+        "expected comment to stay attached to the last modifier, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("onlyOwner // note"),
+        "comment moved onto the wrong modifier:\n{formatted}"
+    );
+}
+
+#[test]
 fn test_format_fallback() {
     let source = "contract T {\n    fallback() external payable {}\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();

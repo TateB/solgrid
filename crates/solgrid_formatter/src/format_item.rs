@@ -396,9 +396,14 @@ fn format_function(
 
     // Modifiers
     let mut attrs_have_line_comments = false;
-    for modifier in func.header.modifiers.iter() {
+    for (index, modifier) in func.header.modifiers.iter().enumerate() {
+        let next_start = func
+            .header
+            .modifiers
+            .get(index + 1)
+            .map(|next| span_to_range(next.name.span()).start);
         let (modifier_chunk, has_line_comment) =
-            format_modifier_invocation(modifier, source, config, comments);
+            format_modifier_invocation(modifier, next_start, source, config, comments);
         attrs.push(modifier_chunk);
         attrs_have_line_comments |= has_line_comment;
     }
@@ -454,6 +459,7 @@ fn format_function(
 
 fn format_modifier_invocation(
     modifier: &Modifier<'_>,
+    next_modifier_start: Option<usize>,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -486,7 +492,13 @@ fn format_modifier_invocation(
     } else {
         span_to_range(modifier.arguments.span).end
     };
-    let trailing = comments.take_trailing(source, modifier_end);
+    let line_end = source[modifier_end..]
+        .find('\n')
+        .map_or(source.len(), |offset| modifier_end + offset);
+    let trailing_end = next_modifier_start
+        .map(|next_start| next_start.min(line_end))
+        .unwrap_or(line_end);
+    let trailing = comments.take_within(modifier_end..trailing_end);
     let has_line_comment = trailing.iter().any(|comment| {
         matches!(
             comment.kind,
