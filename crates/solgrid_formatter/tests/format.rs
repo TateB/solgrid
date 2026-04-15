@@ -188,6 +188,42 @@ fn test_preserve_comment_on_returns_instead_of_last_modifier() {
 }
 
 #[test]
+fn test_keep_semicolon_outside_modifier_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external onlyOwner // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner // note\n    ;"),
+        "expected semicolon on its own line after modifier line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by modifier line comment:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_keep_semicolon_outside_returns_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external returns (uint256) // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("returns (uint256) // note\n    ;"),
+        "expected semicolon on its own line after returns line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by returns line comment:\n{formatted}"
+    );
+}
+
+#[test]
 fn test_format_fallback() {
     let source = "contract T {\n    fallback() external payable {}\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();

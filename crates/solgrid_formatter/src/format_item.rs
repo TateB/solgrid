@@ -477,8 +477,14 @@ fn format_function(
             }
         }
         None => {
-            signature.push(text(";"));
-            group(signature)
+            if attrs_have_line_comments {
+                signature.push(line());
+                signature.push(text(";"));
+                concat(signature)
+            } else {
+                signature.push(text(";"));
+                group(signature)
+            }
         }
     }
 }
