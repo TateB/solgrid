@@ -4,7 +4,7 @@
 //! errors, UDVTs, using-for, and variable declarations.
 
 use crate::comments::{Comment, CommentStore};
-use crate::format_expr::{format_expr, format_grouped_items};
+use crate::format_expr::{attach_inline_comments, format_expr, format_grouped_items};
 use crate::format_stmt::{format_block, format_params};
 use crate::format_ty::{
     format_data_location, format_state_mutability, format_type, format_visibility,
@@ -394,30 +394,33 @@ fn format_function(
         }
     }
 
+    let returns_start = func
+        .header
+        .returns
+        .as_ref()
+        .filter(|returns| !returns.is_empty())
+        .map(|returns| span_to_range(returns.span).start);
+
     // Modifiers
-    for modifier in func.header.modifiers.iter() {
-        let mod_path: Vec<String> = modifier
-            .name
-            .segments()
-            .iter()
-            .map(|s| s.as_str().to_string())
-            .collect();
-        let mod_name = mod_path.join(".");
-        if modifier.arguments.is_empty() {
-            attrs.push(text(mod_name));
-        } else {
-            let args: Vec<FormatChunk> = modifier
-                .arguments
-                .exprs()
-                .map(|a| format_expr(a, source, config, comments))
-                .collect();
-            attrs.push(concat(vec![
-                text(mod_name),
-                text("("),
-                format_grouped_items(args),
-                text(")"),
-            ]));
-        }
+    let mut attrs_have_line_comments = false;
+    for (index, modifier) in func.header.modifiers.iter().enumerate() {
+        let next_modifier_start = func
+            .header
+            .modifiers
+            .get(index + 1)
+            .map(|next| span_to_range(next.name.span()).start);
+        let next_start = match (next_modifier_start, returns_start) {
+            (Some(next_modifier_start), Some(returns_start)) => {
+                Some(next_modifier_start.min(returns_start))
+            }
+            (Some(next_modifier_start), None) => Some(next_modifier_start),
+            (None, Some(returns_start)) => Some(returns_start),
+            (None, None) => None,
+        };
+        let (modifier_chunk, has_line_comment) =
+            format_modifier_invocation(modifier, next_start, source, config, comments);
+        attrs.push(modifier_chunk);
+        attrs_have_line_comments |= has_line_comment;
     }
 
     // Returns
@@ -425,7 +428,18 @@ fn format_function(
     if let Some(returns) = &func.header.returns {
         if !returns.is_empty() {
             let ret_params = format_params(returns, source, config, comments);
-            returns_chunk = Some(concat(vec![text("returns ("), ret_params, text(")")]));
+            let trailing = comments.take_trailing(source, span_to_range(returns.span).end);
+            let has_line_comment = trailing.iter().any(|comment| {
+                matches!(
+                    comment.kind,
+                    crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+                )
+            });
+            returns_chunk = Some(attach_inline_comments(
+                concat(vec![text("returns ("), ret_params, text(")")]),
+                trailing,
+            ));
+            attrs_have_line_comments |= has_line_comment;
         }
     }
 
@@ -454,14 +468,80 @@ fn format_function(
             // When the signature wraps, put { on its own line at the
             // function's indent level (Solidity style guide).
             // When it fits on one line, { stays on the same line.
-            signature.push(if_flat(space(), line()));
-            concat(vec![group(signature), block])
+            if attrs_have_line_comments {
+                signature.push(line());
+                concat(vec![concat(signature), block])
+            } else {
+                signature.push(if_flat(space(), line()));
+                concat(vec![group(signature), block])
+            }
         }
         None => {
-            signature.push(text(";"));
-            group(signature)
+            if attrs_have_line_comments {
+                signature.push(line());
+                signature.push(text(";"));
+                concat(signature)
+            } else {
+                signature.push(text(";"));
+                group(signature)
+            }
         }
     }
+}
+
+fn format_modifier_invocation(
+    modifier: &Modifier<'_>,
+    next_modifier_start: Option<usize>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> (FormatChunk, bool) {
+    let mod_path: Vec<String> = modifier
+        .name
+        .segments()
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
+    let mod_name = mod_path.join(".");
+    let modifier_chunk = if modifier.arguments.is_empty() {
+        text(mod_name)
+    } else {
+        let args: Vec<FormatChunk> = modifier
+            .arguments
+            .exprs()
+            .map(|a| format_expr(a, source, config, comments))
+            .collect();
+        concat(vec![
+            text(mod_name),
+            text("("),
+            format_grouped_items(args),
+            text(")"),
+        ])
+    };
+
+    let modifier_end = if modifier.arguments.is_empty() {
+        span_to_range(modifier.name.span()).end
+    } else {
+        span_to_range(modifier.arguments.span).end
+    };
+    let line_end = source[modifier_end..]
+        .find('\n')
+        .map_or(source.len(), |offset| modifier_end + offset);
+    let trailing_end = next_modifier_start
+        .map(|next_start| next_start.min(line_end))
+        .unwrap_or(line_end);
+    let trailing = comments.take_within(modifier_end..trailing_end);
+    let has_line_comment = trailing.iter().any(|comment| {
+        matches!(
+            comment.kind,
+            crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+        )
+    });
+
+    (
+        attach_inline_comments(modifier_chunk, trailing),
+        has_line_comment,
+    )
 }
 
 /// Format a variable definition (state variable or local).

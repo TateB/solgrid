@@ -1,6 +1,6 @@
 //! Integration tests for the solgrid formatter.
 
-use solgrid_config::FormatConfig;
+use solgrid_config::{FormatConfig, OperatorLineBreak};
 use solgrid_formatter::{check_formatted, format_source, format_source_verified};
 
 fn default_config() -> FormatConfig {
@@ -107,6 +107,120 @@ fn test_format_constructor() {
     let source = "contract T {\n    constructor(uint256 x) {\n        value = x;\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();
     assert!(formatted.contains("constructor("));
+}
+
+#[test]
+fn test_preserve_constructor_base_comment_in_header() {
+    let source = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_on_last_modifier_when_modifiers_share_a_line() {
+    let source = r#"contract T {
+    function f() public onlyOwner whenNotPaused // note
+    {
+        return;
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner\n        whenNotPaused // note"),
+        "expected comment to stay attached to the last modifier, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("onlyOwner // note"),
+        "comment moved onto the wrong modifier:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_preserve_comment_on_returns_instead_of_last_modifier() {
+    let source = r#"contract T {
+    function f() public onlyOwner returns (uint256) // note
+    {
+        return 1;
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner\n        returns (uint256) // note"),
+        "expected comment to stay attached to returns, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("onlyOwner // note"),
+        "comment moved onto the wrong modifier:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_keep_semicolon_outside_modifier_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external onlyOwner // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner // note\n    ;"),
+        "expected semicolon on its own line after modifier line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by modifier line comment:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_keep_semicolon_outside_returns_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external returns (uint256) // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("returns (uint256) // note\n    ;"),
+        "expected semicolon on its own line after returns line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by returns line comment:\n{formatted}"
+    );
 }
 
 #[test]
@@ -1995,6 +2109,86 @@ fn test_format_logical_or_chain_without_staircase_indent() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_binary_expr_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return calculateAvailableBalance() +
+            collectPendingRewards();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            calculateAvailableBalance() +
+                collectPendingRewards();
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_logical_or_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return
+            interfaceId == type(INameWrapper).interfaceId ||
+                interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_bitwise_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            CANNOT_TRANSFER |
+            CANNOT_SET_RESOLVER |
+            CANNOT_SET_TTL;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
     assert_eq!(formatted, expected);
 }
 

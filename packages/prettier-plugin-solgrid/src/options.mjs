@@ -40,6 +40,16 @@ export const options = {
     default: false,
     description: "Wrap comments to fit within printWidth.",
   },
+  solidityOperatorLineBreak: {
+    category: "Solidity",
+    type: "choice",
+    default: "leading",
+    description: "Place multiline binary operators at the start or end of wrapped lines.",
+    choices: [
+      { value: "leading", description: "Put operators at the start of continued lines" },
+      { value: "trailing", description: "Put operators at the end of continued lines" },
+    ],
+  },
   soliditySortImports: {
     category: "Solidity",
     type: "boolean",
