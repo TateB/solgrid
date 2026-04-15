@@ -5,7 +5,7 @@ use crate::format_expr::{
     attach_inline_comments, format_call_args, format_expr, format_grouped_tuple,
     format_multiline_items_with_comments,
 };
-use crate::format_item::has_blank_line_between;
+use crate::format_item::{append_gap_comments, has_blank_line_between};
 use crate::format_ty::{format_data_location, format_type};
 use crate::ir::*;
 use solar_ast::*;
@@ -463,7 +463,7 @@ pub fn format_block(
     let mut body_parts = Vec::new();
     let mut prev_stmt_end: Option<usize> = None;
     let block_end = span_to_range(block.span).end;
-    for (index, stmt) in block.stmts.iter().enumerate() {
+    for stmt in block.stmts.iter() {
         let stmt_range = span_to_range(stmt.span);
         let need_blank_line = prev_stmt_end
             .map(|end| has_blank_line_between(source, end, stmt_range.start))
@@ -514,32 +514,17 @@ pub fn format_block(
             body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
 
-        let next_start = block
-            .stmts
-            .get(index + 1)
-            .map(|next| span_to_range(next.span).start)
-            .unwrap_or(block_end);
-        let postfix = comments.take_postfix(
-            source,
-            stmt_range.end,
-            next_start,
-            index + 1 < block.stmts.len(),
-        );
-        for (i, comment) in postfix.iter().enumerate() {
-            body_parts.push(hardline());
-            if i > 0
-                && has_blank_line_between(source, postfix[i - 1].range.end, comment.range.start)
-            {
-                body_parts.push(hardline());
-            }
-            body_parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
-        }
+        prev_stmt_end = Some(stmt_range.end);
+    }
 
-        prev_stmt_end = Some(
-            postfix
-                .last()
-                .map(|comment| comment.range.end)
-                .unwrap_or(stmt_range.end),
+    if let Some(prev_stmt_end) = prev_stmt_end {
+        let tail_comments = comments.take_within(prev_stmt_end..block_end);
+        append_gap_comments(
+            &mut body_parts,
+            &tail_comments,
+            source,
+            prev_stmt_end,
+            block_end,
         );
     }
 

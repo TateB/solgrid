@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `fix` retaining imports referenced by NatSpec `@inheritdoc` tags so autofixes no longer leave compiler-broken documentation references behind
 - Fixed `naming/func-name-mixedcase` to allow public ABI-style uppercase function names by default while still supporting exact-name and regex exceptions
 - Fixed formatter output for long `for` headers, infinite `for (;;)` loops, single-statement control flow, and top-level file-scope declaration spacing to use stable canonical layouts
-- Fixed formatter comment attachment for explanatory comments that appear after the last statement in a function body so they stay inside the enclosing contract or library instead of drifting onto the next item or outside the enclosing scope
+- Fixed formatter comment preservation so standalone comments stay in their original gap by default and comments after the last child in a block or declaration stay inside the enclosing scope instead of drifting onto neighboring items or outside the closing brace
 
 ## [0.0.7] - 2026-04-14
 

@@ -2325,7 +2325,7 @@ fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
 }
 
 #[test]
-fn test_preserve_postfix_comments_inside_function_bodies_inside_library() {
+fn test_preserve_tail_comments_inside_function_bodies_inside_library() {
     let source = r#"library T {
     /// @dev A helper.
     function a() internal pure returns (uint256 ret) {
@@ -2359,6 +2359,58 @@ fn test_preserve_postfix_comments_inside_function_bodies_inside_library() {
             ret := 2
         }
         // Equivalent: return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_gap_comment_between_functions() {
+    let source = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_tail_comment_after_last_struct_field() {
+    let source = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
+    }
+}
+"#;
+    let expected = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
     }
 }
 "#;

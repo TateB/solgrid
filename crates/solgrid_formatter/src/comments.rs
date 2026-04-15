@@ -147,57 +147,6 @@ impl CommentStore {
         result
     }
 
-    /// Take contiguous non-doc comments immediately following a node. These are
-    /// comments that belong with the preceding item or statement rather than the
-    /// following one.
-    pub fn take_postfix(
-        &mut self,
-        source: &str,
-        start: usize,
-        end: usize,
-        next_item_exists: bool,
-    ) -> Vec<Comment> {
-        let mut indices = Vec::new();
-        let mut cursor = start;
-
-        for (index, comment) in self.comments.iter().enumerate() {
-            if comment.consumed || comment.range.start < start || comment.range.end > end {
-                continue;
-            }
-
-            if is_doc_comment(source, comment) {
-                break;
-            }
-
-            if has_blank_line_between(source, cursor, comment.range.start) {
-                if indices.is_empty() {
-                    return Vec::new();
-                }
-                break;
-            }
-
-            indices.push(index);
-            cursor = comment.range.end;
-        }
-
-        let Some(&last_index) = indices.last() else {
-            return Vec::new();
-        };
-
-        if next_item_exists
-            && !has_blank_line_between(source, self.comments[last_index].range.end, end)
-        {
-            return Vec::new();
-        }
-
-        let mut result = Vec::new();
-        for index in indices {
-            self.comments[index].consumed = true;
-            result.push(self.comments[index].clone());
-        }
-        result
-    }
-
     /// Take all remaining unconsumed comments.
     pub fn take_remaining(&mut self) -> Vec<Comment> {
         let mut result = Vec::new();
@@ -221,34 +170,6 @@ impl CommentStore {
         }
         result
     }
-}
-
-fn has_blank_line_between(source: &str, start: usize, end: usize) -> bool {
-    if start >= end || end > source.len() {
-        return false;
-    }
-    let between = &source[start..end];
-    let mut prev_was_newline = false;
-    for ch in between.chars() {
-        if ch == '\n' {
-            if prev_was_newline {
-                return true;
-            }
-            prev_was_newline = true;
-        } else if ch == '\r' || ch == ' ' || ch == '\t' {
-            // Keep scanning whitespace.
-        } else {
-            prev_was_newline = false;
-        }
-    }
-    false
-}
-
-fn is_doc_comment(source: &str, comment: &Comment) -> bool {
-    comment.kind == CommentKind::DocLine
-        || source
-            .get(comment.range.clone())
-            .is_some_and(|text| text.starts_with("/**"))
 }
 
 #[cfg(test)]
@@ -304,41 +225,5 @@ mod tests {
         let trailing = store.take_trailing(source, 10); // position after "uint256 x;"
         assert_eq!(trailing.len(), 1);
         assert_eq!(trailing[0].content, " trailing");
-    }
-
-    #[test]
-    fn test_comment_store_postfix_comments() {
-        let source = "function a() {}\n// trailing\n\nfunction b() {}\n";
-        let mut store = CommentStore::new(source);
-        let start = source.find("function a() {}").unwrap() + "function a() {}".len();
-        let end = source.find("function b()").unwrap();
-        let postfix = store.take_postfix(source, start, end, true);
-        assert_eq!(postfix.len(), 1);
-        assert_eq!(postfix[0].content, " trailing");
-    }
-
-    #[test]
-    fn test_comment_store_postfix_keeps_leading_comment() {
-        let source = "function a() {}\n\n// leading\nfunction b() {}\n";
-        let mut store = CommentStore::new(source);
-        let start = source.find("function a() {}").unwrap() + "function a() {}".len();
-        let end = source.find("function b()").unwrap();
-        let postfix = store.take_postfix(source, start, end, true);
-        assert!(postfix.is_empty());
-    }
-
-    #[test]
-    fn test_comment_store_postfix_keeps_doc_block_leading_comment() {
-        let source = "function a() {}\n/** doc */\n\nfunction b() {}\n";
-        let mut store = CommentStore::new(source);
-        let start = source.find("function a() {}").unwrap() + "function a() {}".len();
-        let next_start = source.find("function b()").unwrap();
-        let postfix = store.take_postfix(source, start, next_start, true);
-        assert!(postfix.is_empty());
-
-        let leading = store.take_leading(next_start);
-        assert_eq!(leading.len(), 1);
-        assert_eq!(leading[0].kind, CommentKind::Block);
-        assert_eq!(leading[0].content, "* doc ");
     }
 }
