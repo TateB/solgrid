@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-04-15
+
 ### Added
 - Added a formatter `operator_line_break` option, plus Prettier `solidityOperatorLineBreak`, so multiline binary and logical chains converge to either canonical leading-operator or trailing-operator layouts
 
@@ -173,8 +175,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.9...HEAD
-[0.0.9]: https://github.com/TateB/solgrid/compare/v0.0.8...v0.0.9
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/TateB/solgrid/compare/v0.0.9...v0.0.10
+[0.0.9]: https://github.com/TateB/solgrid/releases/tag/v0.0.9
 [0.0.8]: https://github.com/TateB/solgrid/releases/tag/v0.0.8
 [0.0.7]: https://github.com/TateB/solgrid/releases/tag/v0.0.7
 [0.0.6]: https://github.com/TateB/solgrid/releases/tag/v0.0.6
