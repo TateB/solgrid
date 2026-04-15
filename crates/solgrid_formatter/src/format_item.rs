@@ -394,14 +394,29 @@ fn format_function(
         }
     }
 
+    let returns_start = func
+        .header
+        .returns
+        .as_ref()
+        .filter(|returns| !returns.is_empty())
+        .map(|returns| span_to_range(returns.span).start);
+
     // Modifiers
     let mut attrs_have_line_comments = false;
     for (index, modifier) in func.header.modifiers.iter().enumerate() {
-        let next_start = func
+        let next_modifier_start = func
             .header
             .modifiers
             .get(index + 1)
             .map(|next| span_to_range(next.name.span()).start);
+        let next_start = match (next_modifier_start, returns_start) {
+            (Some(next_modifier_start), Some(returns_start)) => {
+                Some(next_modifier_start.min(returns_start))
+            }
+            (Some(next_modifier_start), None) => Some(next_modifier_start),
+            (None, Some(returns_start)) => Some(returns_start),
+            (None, None) => None,
+        };
         let (modifier_chunk, has_line_comment) =
             format_modifier_invocation(modifier, next_start, source, config, comments);
         attrs.push(modifier_chunk);
@@ -413,7 +428,18 @@ fn format_function(
     if let Some(returns) = &func.header.returns {
         if !returns.is_empty() {
             let ret_params = format_params(returns, source, config, comments);
-            returns_chunk = Some(concat(vec![text("returns ("), ret_params, text(")")]));
+            let trailing = comments.take_trailing(source, span_to_range(returns.span).end);
+            let has_line_comment = trailing.iter().any(|comment| {
+                matches!(
+                    comment.kind,
+                    crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+                )
+            });
+            returns_chunk = Some(attach_inline_comments(
+                concat(vec![text("returns ("), ret_params, text(")")]),
+                trailing,
+            ));
+            attrs_have_line_comments |= has_line_comment;
         }
     }
 
