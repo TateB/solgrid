@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added a formatter `operator_line_break` option, plus Prettier `solidityOperatorLineBreak`, so multiline binary and logical chains converge to either canonical leading-operator or trailing-operator layouts
+
+### Fixed
+- Fixed formatter header comment attachment so inline comments after constructor base calls stay on the header line instead of moving into the constructor body
+
 ## [0.0.8] - 2026-04-14
 
 ### Fixed

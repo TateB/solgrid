@@ -80,6 +80,24 @@ uint256 public y;
       expect(canonical).toContain("uint256 public x;\n\n  uint256 public y;");
     });
 
+    it("respects operator line break option", async () => {
+      const source = `contract T {
+function f() public pure returns (uint256) {
+  return CANNOT_TRANSFER |
+    CANNOT_SET_RESOLVER |
+    CANNOT_SET_TTL;
+}
+}
+`;
+      const result = await formatSol(source, {
+        printWidth: 40,
+        solidityOperatorLineBreak: "trailing",
+      });
+
+      expect(result).toContain("CANNOT_TRANSFER |\n");
+      expect(result).toContain("CANNOT_SET_RESOLVER |\n");
+    });
+
     it("respects inheritance brace placement option", async () => {
       const source =
         "contract OwnedResolver is Ownable, ABIResolver, AddrResolver, ContentHashResolver, DNSResolver, InterfaceResolver, NameResolver, PubkeyResolver, TextResolver, ExtendedResolver {}\n";
@@ -142,6 +160,7 @@ describe("plugin exports", () => {
     expect(plugin.options.solidityMultilineFuncHeader).toBeDefined();
     expect(plugin.options.solidityOverrideSpacing).toBeDefined();
     expect(plugin.options.solidityWrapComments).toBeDefined();
+    expect(plugin.options.solidityOperatorLineBreak).toBeDefined();
     expect(plugin.options.solidityContractBodySpacing).toBeDefined();
     expect(plugin.options.solidityInheritanceBraceNewLine).toBeDefined();
     expect(plugin.options.solidityContractNewLines).toBeDefined();

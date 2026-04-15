@@ -30,6 +30,7 @@ export const printers = {
         uintType: options.solidityUintType,
         overrideSpacing: options.solidityOverrideSpacing,
         wrapComments: options.solidityWrapComments,
+        operatorLineBreak: options.solidityOperatorLineBreak,
         sortImports: options.soliditySortImports,
         multilineFuncHeader: options.solidityMultilineFuncHeader,
         contractBodySpacing,

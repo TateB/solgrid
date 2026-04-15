@@ -5,7 +5,7 @@ use crate::format_ty::format_type;
 use crate::ir::*;
 use solar_ast::*;
 use solgrid_ast::{span_text, span_to_range};
-use solgrid_config::{FormatConfig, NumberUnderscore};
+use solgrid_config::{FormatConfig, NumberUnderscore, OperatorLineBreak};
 use solgrid_parser::solar_interface::SpannedOption;
 
 /// Format an expression.
@@ -42,22 +42,16 @@ pub fn format_expr(
             }
             _ => {
                 let op_str = span_text(source, op.span);
-                let rest = vec![
-                    line(),
-                    text(op_str),
-                    space(),
-                    format_expr(rhs, source, config, comments),
-                ];
-                if matches!(op_str, "==" | "!=" | "<" | ">" | "<=" | ">=") {
-                    group(vec![
-                        format_expr(lhs, source, config, comments),
-                        concat(rest),
-                    ])
-                } else {
-                    group(vec![
-                        format_expr(lhs, source, config, comments),
-                        indent(rest),
-                    ])
+                let lhs_chunk = format_expr(lhs, source, config, comments);
+                let rhs_chunk = format_expr(rhs, source, config, comments);
+                let rest = format_binary_break(op_str, rhs_chunk, config.operator_line_break);
+                match config.operator_line_break {
+                    OperatorLineBreak::Leading
+                        if matches!(op_str, "==" | "!=" | "<" | ">" | "<=" | ">=") =>
+                    {
+                        group(vec![lhs_chunk, concat(rest)])
+                    }
+                    _ => group(vec![lhs_chunk, indent(rest)]),
                 }
             }
         },
@@ -222,7 +216,7 @@ fn format_binary_chain(
         .unwrap_or_else(|| format_expr(lhs, source, config, comments));
     let op_str = span_text(source, op.span).to_string();
     let rest: Vec<FormatChunk> = iter
-        .flat_map(|part| vec![line(), text(op_str.clone()), space(), part])
+        .flat_map(|part| format_binary_break(&op_str, part, config.operator_line_break))
         .collect();
 
     if indent_rest {
@@ -249,6 +243,17 @@ fn collect_binary_terms(
     }
 
     out.push(format_expr(expr, source, config, comments));
+}
+
+fn format_binary_break(
+    op_str: &str,
+    rhs: FormatChunk,
+    operator_line_break: OperatorLineBreak,
+) -> Vec<FormatChunk> {
+    match operator_line_break {
+        OperatorLineBreak::Leading => vec![line(), text(op_str), space(), rhs],
+        OperatorLineBreak::Trailing => vec![space(), text(op_str), line(), rhs],
+    }
 }
 
 /// Format call arguments (positional or named).

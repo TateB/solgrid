@@ -39,6 +39,7 @@ single_quote = false
 bracket_spacing = false
 number_underscore = "preserve"
 uint_type = "uint256"
+operator_line_break = "leading"
 sort_imports = false
 multiline_func_header = "attributes_first"
 
@@ -105,6 +106,7 @@ All formatter options live under `[format]`:
 | `uint_type` | `"uint256"` / `"uint"` / `"preserve"` | `"uint256"` | `int_types` | -- |
 | `override_spacing` | bool | true | `override_spacing` | -- |
 | `wrap_comments` | bool | false | `wrap_comments` | -- |
+| `operator_line_break` | `"leading"` / `"trailing"` | `"leading"` | -- | -- |
 | `sort_imports` | bool | false | `sort_imports` | -- |
 | `multiline_func_header` | `"attributes_first"` / `"params_first"` / `"all"` | `"attributes_first"` | `multiline_func_header` | -- |
 | `contract_body_spacing` | `"preserve"` / `"single"` / `"compact"` | `"preserve"` | `contract_new_lines`* | -- |

@@ -350,6 +350,8 @@ pub struct FormatConfig {
     pub override_spacing: bool,
     /// Wrap comments to fit within line length.
     pub wrap_comments: bool,
+    /// Position operators at the start or end of broken binary lines.
+    pub operator_line_break: OperatorLineBreak,
     /// Sort import statements alphabetically.
     pub sort_imports: bool,
     /// Style for multiline function headers.
@@ -375,6 +377,7 @@ impl Default for FormatConfig {
             uint_type: UintType::Long,
             override_spacing: true,
             wrap_comments: false,
+            operator_line_break: OperatorLineBreak::Leading,
             sort_imports: false,
             multiline_func_header: MultilineFuncHeader::AttributesFirst,
             contract_body_spacing: ContractBodySpacing::Preserve,
@@ -404,6 +407,16 @@ pub enum UintType {
     Short,
     /// Don't change.
     Preserve,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatorLineBreak {
+    /// Place operators at the start of continued lines.
+    #[default]
+    Leading,
+    /// Place operators at the end of continued lines.
+    Trailing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -713,6 +726,12 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
         if let Some(v) = fmt.get("wrap_comments").and_then(|v| v.as_bool()) {
             config.format.wrap_comments = v;
         }
+        if let Some(v) = fmt.get("operator_line_break").and_then(|v| v.as_str()) {
+            config.format.operator_line_break = match v {
+                "trailing" => OperatorLineBreak::Trailing,
+                _ => OperatorLineBreak::Leading,
+            };
+        }
     }
 
     Ok(config)
@@ -852,6 +871,7 @@ tab_width = 2
 use_tabs = true
 single_quote = true
 bracket_spacing = true
+operator_line_break = "trailing"
 
 [global]
 exclude = ["lib/**"]
@@ -873,6 +893,10 @@ threads = 4
         assert!(config.format.use_tabs);
         assert!(config.format.single_quote);
         assert!(config.format.bracket_spacing);
+        assert_eq!(
+            config.format.operator_line_break,
+            OperatorLineBreak::Trailing
+        );
         assert!(!config.global.respect_gitignore);
         assert_eq!(config.global.threads, 4);
     }
@@ -1002,6 +1026,7 @@ threads = 4
         assert_eq!(config.uint_type, UintType::Long);
         assert!(config.override_spacing);
         assert!(!config.wrap_comments);
+        assert_eq!(config.operator_line_break, OperatorLineBreak::Leading);
         assert!(!config.sort_imports);
         assert_eq!(
             config.multiline_func_header,
@@ -1311,6 +1336,22 @@ remappings = [
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, "@oz/");
         assert_eq!(result[1].0, "forge-std/");
+    }
+
+    #[test]
+    fn test_resolve_config_reads_operator_line_break_from_foundry_fmt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("foundry.toml"),
+            "[fmt]\noperator_line_break = \"trailing\"\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(dir.path());
+        assert_eq!(
+            config.format.operator_line_break,
+            OperatorLineBreak::Trailing
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Integration tests for the solgrid formatter.
 
-use solgrid_config::FormatConfig;
+use solgrid_config::{FormatConfig, OperatorLineBreak};
 use solgrid_formatter::{check_formatted, format_source, format_source_verified};
 
 fn default_config() -> FormatConfig {
@@ -107,6 +107,44 @@ fn test_format_constructor() {
     let source = "contract T {\n    constructor(uint256 x) {\n        value = x;\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();
     assert!(formatted.contains("constructor("));
+}
+
+#[test]
+fn test_preserve_constructor_base_comment_in_header() {
+    let source = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
 }
 
 #[test]
@@ -1995,6 +2033,86 @@ fn test_format_logical_or_chain_without_staircase_indent() {
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_binary_expr_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return calculateAvailableBalance() +
+            collectPendingRewards();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            calculateAvailableBalance() +
+                collectPendingRewards();
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_logical_or_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return
+            interfaceId == type(INameWrapper).interfaceId ||
+                interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_bitwise_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            CANNOT_TRANSFER |
+            CANNOT_SET_RESOLVER |
+            CANNOT_SET_TTL;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
     assert_eq!(formatted, expected);
 }
 
