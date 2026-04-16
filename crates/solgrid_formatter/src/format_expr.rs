@@ -51,7 +51,8 @@ pub fn format_expr(
                     {
                         group(vec![lhs_chunk, concat(rest)])
                     }
-                    _ => group(vec![lhs_chunk, indent(rest)]),
+                    OperatorLineBreak::Trailing => group(vec![lhs_chunk, concat(rest)]),
+                    OperatorLineBreak::Leading => group(vec![lhs_chunk, indent(rest)]),
                 }
             }
         },
@@ -219,7 +220,7 @@ fn format_binary_chain(
         .flat_map(|part| format_binary_break(&op_str, part, config.operator_line_break))
         .collect();
 
-    if indent_rest {
+    if indent_rest && config.operator_line_break == OperatorLineBreak::Leading {
         group(vec![first, indent(rest)])
     } else {
         group(vec![first, concat(rest)])

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed trailing-operator formatter output so wrapped binary and logical expressions align flat instead of adding an extra continuation indent
+
 ## [0.0.10] - 2026-04-15
 
 ### Added

@@ -2125,7 +2125,7 @@ fn test_format_binary_expr_with_trailing_operator_line_break() {
     function f() public pure returns (uint256) {
         return
             calculateAvailableBalance() +
-                collectPendingRewards();
+            collectPendingRewards();
     }
 }
 "#;
@@ -2152,8 +2152,8 @@ fn test_format_logical_or_chain_with_trailing_operator_line_break() {
     function supportsInterface(bytes4 interfaceId) public view returns (bool) {
         return
             interfaceId == type(INameWrapper).interfaceId ||
-                interfaceId == type(IERC721Receiver).interfaceId ||
-                super.supportsInterface(interfaceId);
+            interfaceId == type(IERC721Receiver).interfaceId ||
+            super.supportsInterface(interfaceId);
     }
 }
 "#;
@@ -2185,6 +2185,37 @@ fn test_format_bitwise_chain_with_trailing_operator_line_break() {
 "#;
     let config = FormatConfig {
         line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_if_condition_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f(address registrant) public view {
+        if (registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)) {
+            revert();
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address registrant) public view {
+        if (
+            registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
         operator_line_break: OperatorLineBreak::Trailing,
         ..default_config()
     };
