@@ -921,7 +921,7 @@ fn call_options_contain_named_arg(options: &solar_ast::NamedArgList<'_>, name: &
     options.iter().any(|arg| arg.name.as_str() == name)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum SinkKind {
     Delegatecall,
     EthTransfer,
@@ -957,7 +957,7 @@ struct FileSemanticInfo {
 
 #[derive(Debug, Clone)]
 struct FunctionCallEdge {
-    callee: CallableTargetKey,
+    callees: Vec<CallableTargetKey>,
     argument_parameters: Vec<Option<String>>,
 }
 
@@ -1036,22 +1036,18 @@ fn build_function_sink_summaries(
 
         for summary in summaries.values_mut() {
             for edge in &summary.call_edges {
-                let Some(callee) = previous.get(&edge.callee) else {
-                    continue;
-                };
-
-                changed |= propagate_sink_indices(
+                changed |= propagate_sink_indices_through_edge(
                     &mut summary.delegatecall_parameters,
-                    &callee.delegatecall_parameters,
-                    &callee.parameter_names,
-                    &edge.argument_parameters,
+                    SinkKind::Delegatecall,
+                    edge,
+                    &previous,
                     &summary.parameter_names,
                 );
-                changed |= propagate_sink_indices(
+                changed |= propagate_sink_indices_through_edge(
                     &mut summary.eth_transfer_parameters,
-                    &callee.eth_transfer_parameters,
-                    &callee.parameter_names,
-                    &edge.argument_parameters,
+                    SinkKind::EthTransfer,
+                    edge,
+                    &previous,
                     &summary.parameter_names,
                 );
             }
@@ -1547,11 +1543,11 @@ fn collect_function_sink_expr(
                     summary.eth_transfer_parameters.insert(*index);
                 }
             }
-            if let Some(callee) =
-                resolved_callable_target(file, current_contract, callee, args.len(), context)
-            {
+            let callees =
+                resolved_callable_targets(file, current_contract, callee, args.len(), context);
+            if !callees.is_empty() {
                 summary.call_edges.push(FunctionCallEdge {
-                    callee,
+                    callees,
                     argument_parameters: args.exprs().map(parameter_name_for_expr).collect(),
                 });
             }
@@ -1921,8 +1917,8 @@ fn infer_value_types_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            if let Some(target) =
-                resolved_callable_target(file, current_contract, callee, args.len(), context)
+            for target in
+                resolved_callable_targets(file, current_contract, callee, args.len(), context)
             {
                 if let Some(signature) = callable_signature_for_target(&target, context) {
                     if let Some(first_return_type) = signature.first_return_type {
@@ -2028,8 +2024,8 @@ fn resolve_contract_targets_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            if let Some(target) =
-                resolved_callable_target(file, current_contract, callee, args.len(), context)
+            for target in
+                resolved_callable_targets(file, current_contract, callee, args.len(), context)
             {
                 if let Some(signature) = callable_signature_for_target(&target, context) {
                     if let Some(first_return_type) = signature.first_return_type {
@@ -2065,13 +2061,24 @@ fn resolve_contract_targets_from_expr(
     dedup_contract_targets(targets)
 }
 
-fn resolved_callable_target(
+fn dedup_callable_targets(candidates: Vec<CallableTargetKey>) -> Vec<CallableTargetKey> {
+    let mut unique = candidates;
+    unique.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.offset.cmp(&right.offset))
+    });
+    unique.dedup();
+    unique
+}
+
+fn resolved_callable_targets(
     file: &FileSemanticInfo,
     current_contract: Option<&str>,
     callee: &Expr<'_>,
     arg_count: usize,
     context: &SinkSummaryContext<'_>,
-) -> Option<CallableTargetKey> {
+) -> Vec<CallableTargetKey> {
     let callee = callee.peel_parens();
     match &callee.kind {
         ExprKind::Ident(ident) => {
@@ -2086,80 +2093,90 @@ fn resolved_callable_target(
                     offset: def.name_span.start,
                 })
                 .collect::<Vec<_>>();
-            if let Some(target) = unique_callable_target(defs) {
-                return Some(target);
-            }
+            let mut candidates = dedup_callable_targets(defs);
 
             if let Some(contract_name) = current_contract {
-                if let Some(target) = resolve_named_contract_callable_target(
+                let mut visited = HashSet::new();
+                candidates.extend(resolve_contract_callable_targets(
                     file,
                     contract_name,
                     ident.as_str(),
                     arg_count,
                     context,
-                    false,
-                ) {
-                    return Some(target);
-                }
+                    true,
+                    &mut visited,
+                ));
             }
 
             let cached_source = |candidate: &Path| {
                 cached_source(candidate, context.semantic_files, context.get_source)
             };
-            let candidates = resolve_cross_file_symbol_defs(
-                &file.table,
-                ident.as_str(),
-                &file.path,
-                &cached_source,
-                context.resolver,
-            )
-            .into_iter()
-            .filter(|(_, def)| is_callable_symbol(def, arg_count))
-            .map(|(path, def)| CallableTargetKey {
-                path,
-                offset: def.name_span.start,
-            })
-            .collect::<Vec<_>>();
-            unique_callable_target(candidates)
+            candidates.extend(
+                resolve_cross_file_symbol_defs(
+                    &file.table,
+                    ident.as_str(),
+                    &file.path,
+                    &cached_source,
+                    context.resolver,
+                )
+                .into_iter()
+                .filter(|(_, def)| is_callable_symbol(def, arg_count))
+                .map(|(path, def)| CallableTargetKey {
+                    path,
+                    offset: def.name_span.start,
+                }),
+            );
+            dedup_callable_targets(candidates)
         }
         ExprKind::Member(base, member) => {
             let base = base.peel_parens();
             if let ExprKind::Ident(container) = &base.kind {
                 let container_name = container.as_str();
                 if container_name == "super" {
-                    let contract_name = current_contract?;
-                    return resolve_named_contract_callable_target(
-                        file,
-                        contract_name,
-                        member.as_str(),
-                        arg_count,
-                        context,
-                        true,
-                    );
-                }
-                if container_name == "this" {
-                    let contract_name = current_contract?;
-                    return resolve_named_contract_callable_target(
+                    let Some(contract_name) = current_contract else {
+                        return Vec::new();
+                    };
+                    let mut visited = HashSet::new();
+                    return dedup_callable_targets(resolve_contract_callable_targets(
                         file,
                         contract_name,
                         member.as_str(),
                         arg_count,
                         context,
                         false,
-                    );
+                        &mut visited,
+                    ));
+                }
+                if container_name == "this" {
+                    let Some(contract_name) = current_contract else {
+                        return Vec::new();
+                    };
+                    let mut visited = HashSet::new();
+                    return dedup_callable_targets(resolve_contract_callable_targets(
+                        file,
+                        contract_name,
+                        member.as_str(),
+                        arg_count,
+                        context,
+                        true,
+                        &mut visited,
+                    ));
                 }
                 if file.contracts.contains_key(container_name) {
-                    return resolve_contract_callable_target(
+                    let mut visited = HashSet::new();
+                    return dedup_callable_targets(resolve_contract_callable_targets(
                         file,
                         container_name,
                         member.as_str(),
                         arg_count,
                         context,
-                    );
+                        true,
+                        &mut visited,
+                    ));
                 }
 
                 let offset = solgrid_ast::span_to_range(container.span).start;
-                let defs = file
+                let mut candidates = file
                     .table
                     .resolve(container_name, offset)
                     .map(|container_def| {
@@ -2174,9 +2191,6 @@ fn resolved_callable_target(
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                if let Some(target) = unique_callable_target(defs) {
-                    return Some(target);
-                }
 
                 if let Some(container_def) = file.table.resolve(container_name, offset) {
                     if let Some(type_path) = container_def
@@ -2189,15 +2203,16 @@ fn resolved_callable_target(
                         {
                             if let Some(contract_file) = context.semantic_files.get(&contract_path)
                             {
-                                if let Some(target) = resolve_contract_callable_target(
+                                let mut visited = HashSet::new();
+                                candidates.extend(resolve_contract_callable_targets(
                                     contract_file,
                                     &contract_name,
                                     member.as_str(),
                                     arg_count,
                                     context,
-                                ) {
-                                    return Some(target);
-                                }
+                                    true,
+                                    &mut visited,
+                                ));
                             }
                         }
                     }
@@ -2206,83 +2221,47 @@ fn resolved_callable_target(
                 let cached_source = |candidate: &Path| {
                     cached_source(candidate, context.semantic_files, context.get_source)
                 };
-                let candidates = resolve_cross_file_member_defs(
-                    &file.table,
-                    container_name,
-                    member.as_str(),
-                    &file.path,
-                    &cached_source,
-                    context.resolver,
-                )
-                .into_iter()
-                .filter(|(_, def)| is_callable_symbol(def, arg_count))
-                .map(|(path, def)| CallableTargetKey {
-                    path,
-                    offset: def.name_span.start,
-                })
-                .collect::<Vec<_>>();
-                unique_callable_target(candidates)
+                candidates.extend(
+                    resolve_cross_file_member_defs(
+                        &file.table,
+                        container_name,
+                        member.as_str(),
+                        &file.path,
+                        &cached_source,
+                        context.resolver,
+                    )
+                    .into_iter()
+                    .filter(|(_, def)| is_callable_symbol(def, arg_count))
+                    .map(|(path, def)| CallableTargetKey {
+                        path,
+                        offset: def.name_span.start,
+                    }),
+                );
+                dedup_callable_targets(candidates)
             } else {
                 let candidates =
                     resolve_contract_targets_from_expr(file, current_contract, base, context)
                         .into_iter()
-                        .filter_map(|(path, contract_name)| {
+                        .flat_map(|(path, contract_name)| {
                             let contract_file = context.semantic_files.get(&path)?;
-                            resolve_contract_callable_target(
+                            let mut visited = HashSet::new();
+                            Some(resolve_contract_callable_targets(
                                 contract_file,
                                 &contract_name,
                                 member.as_str(),
                                 arg_count,
                                 context,
-                            )
+                                true,
+                                &mut visited,
+                            ))
                         })
+                        .flatten()
                         .collect::<Vec<_>>();
-                unique_callable_target(candidates)
+                dedup_callable_targets(candidates)
             }
         }
-        _ => None,
+        _ => Vec::new(),
     }
-}
-
-fn resolve_named_contract_callable_target(
-    file: &FileSemanticInfo,
-    contract_name: &str,
-    callable_name: &str,
-    arg_count: usize,
-    context: &SinkSummaryContext<'_>,
-    super_only: bool,
-) -> Option<CallableTargetKey> {
-    let mut visited = HashSet::new();
-    let candidates = resolve_contract_callable_targets(
-        file,
-        contract_name,
-        callable_name,
-        arg_count,
-        context,
-        !super_only,
-        &mut visited,
-    );
-    unique_callable_target(candidates)
-}
-
-fn resolve_contract_callable_target(
-    file: &FileSemanticInfo,
-    contract_name: &str,
-    callable_name: &str,
-    arg_count: usize,
-    context: &SinkSummaryContext<'_>,
-) -> Option<CallableTargetKey> {
-    let mut visited = HashSet::new();
-    let candidates = resolve_contract_callable_targets(
-        file,
-        contract_name,
-        callable_name,
-        arg_count,
-        context,
-        true,
-        &mut visited,
-    );
-    unique_callable_target(candidates)
 }
 
 fn resolve_contract_callable_targets(
@@ -2585,17 +2564,6 @@ fn dedup_cross_file_symbol_defs(defs: Vec<(PathBuf, SymbolDef)>) -> Vec<(PathBuf
     unique
 }
 
-fn unique_callable_target(candidates: Vec<CallableTargetKey>) -> Option<CallableTargetKey> {
-    let mut unique = candidates;
-    unique.sort_by(|left, right| {
-        left.path
-            .cmp(&right.path)
-            .then_with(|| left.offset.cmp(&right.offset))
-    });
-    unique.dedup();
-    (unique.len() == 1).then(|| unique.remove(0))
-}
-
 fn cached_source(
     path: &Path,
     semantic_files: &HashMap<PathBuf, FileSemanticInfo>,
@@ -2607,14 +2575,13 @@ fn cached_source(
         .or_else(|| get_source(path))
 }
 
-fn propagate_sink_indices(
-    destinations: &mut HashSet<usize>,
+fn sink_indices_for_summary(
     callee_sinks: &HashSet<usize>,
     callee_parameter_names: &[String],
     argument_parameters: &[Option<String>],
     current_parameter_names: &[String],
-) -> bool {
-    let mut changed = false;
+) -> HashSet<usize> {
+    let mut propagated = HashSet::new();
     for callee_index in callee_sinks {
         let Some(parameter_name) = callee_parameter_names.get(*callee_index) else {
             continue;
@@ -2628,14 +2595,73 @@ fn propagate_sink_indices(
         else {
             continue;
         };
-        if destinations.insert(current_index) {
-            changed = true;
-        }
-        if parameter_name == argument_name && destinations.insert(current_index) {
-            changed = true;
+        propagated.insert(current_index);
+        if parameter_name == argument_name {
+            propagated.insert(current_index);
         }
     }
-    changed
+    propagated
+}
+
+fn sink_indices_for_summary_kind(
+    summary: &FunctionSinkSummary,
+    sink_kind: SinkKind,
+    argument_parameters: &[Option<String>],
+    current_parameter_names: &[String],
+) -> HashSet<usize> {
+    let callee_sinks = match sink_kind {
+        SinkKind::Delegatecall => &summary.delegatecall_parameters,
+        SinkKind::EthTransfer => &summary.eth_transfer_parameters,
+    };
+    sink_indices_for_summary(
+        callee_sinks,
+        &summary.parameter_names,
+        argument_parameters,
+        current_parameter_names,
+    )
+}
+
+fn propagate_sink_indices_through_edge(
+    destinations: &mut HashSet<usize>,
+    sink_kind: SinkKind,
+    edge: &FunctionCallEdge,
+    previous: &HashMap<CallableTargetKey, FunctionSinkSummary>,
+    current_parameter_names: &[String],
+) -> bool {
+    let mut propagated_candidates = Vec::<HashSet<usize>>::new();
+    for callee in &edge.callees {
+        let Some(summary) = previous.get(callee) else {
+            continue;
+        };
+        let propagated = sink_indices_for_summary_kind(
+            summary,
+            sink_kind,
+            &edge.argument_parameters,
+            current_parameter_names,
+        );
+        if propagated.is_empty() || propagated_candidates.contains(&propagated) {
+            continue;
+        }
+        propagated_candidates.push(propagated);
+        if propagated_candidates.len() > 1 {
+            return false;
+        }
+    }
+
+    let Some(propagated) = propagated_candidates.pop() else {
+        return false;
+    };
+    let previous_len = destinations.len();
+    destinations.extend(propagated);
+    destinations.len() != previous_len
+}
+
+fn normalized_propagated_parameters(
+    mut propagated: Vec<(String, SinkKind)>,
+) -> Vec<(String, SinkKind)> {
+    propagated.sort();
+    propagated.dedup();
+    propagated
 }
 
 fn propagated_sink_summary(
@@ -2660,13 +2686,33 @@ fn propagated_sink_summary(
         .find_enclosing_function(call_offset)
         .and_then(|function| file.callable_contracts.get(&function.name_span.start))
         .and_then(|contract| contract.as_deref());
-    let callee =
-        resolved_callable_target(file, current_contract, callee_expr, args.len(), &context)?;
-    let summary = summaries.get(&callee)?;
-    if summary.delegatecall_parameters.is_empty() && summary.eth_transfer_parameters.is_empty() {
+    let (call_name, call_span) = call_site_label_and_span(callee_expr)?;
+    let candidates =
+        resolved_callable_targets(file, current_contract, callee_expr, args.len(), &context);
+    let mut propagated_candidates = candidates
+        .into_iter()
+        .filter_map(|callee| {
+            let summary = summaries.get(&callee)?;
+            let propagated = normalized_propagated_parameters(propagated_parameters_for_summary(
+                file, args, summary,
+            ));
+            (!propagated.is_empty()).then_some((callee, propagated))
+        })
+        .collect::<Vec<_>>();
+    propagated_candidates.sort_by(|left, right| left.1.cmp(&right.1));
+    propagated_candidates.dedup_by(|left, right| left.1 == right.1);
+    if propagated_candidates.len() != 1 {
         return None;
     }
-    let (call_name, call_span) = call_site_label_and_span(callee_expr)?;
+    let (_, propagated) = propagated_candidates.pop()?;
+    (!propagated.is_empty()).then_some((call_span, call_name, propagated))
+}
+
+fn propagated_parameters_for_summary(
+    file: &FileSemanticInfo,
+    args: &solar_ast::CallArgs<'_>,
+    summary: &FunctionSinkSummary,
+) -> Vec<(String, SinkKind)> {
     let mut propagated = Vec::new();
     for index in &summary.delegatecall_parameters {
         let Some(argument) = args.exprs().nth(*index) else {
@@ -2684,7 +2730,7 @@ fn propagated_sink_summary(
             propagated.push((parameter_name, SinkKind::EthTransfer));
         }
     }
-    (!propagated.is_empty()).then_some((call_span, call_name, propagated))
+    propagated
 }
 
 fn resolved_parameter_name(file: &FileSemanticInfo, expr: &Expr<'_>) -> Option<String> {
@@ -3799,6 +3845,73 @@ contract Main {
     }
 
     #[test]
+    fn test_compiler_diagnostics_report_overloaded_getter_returned_eth_transfer_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("PayHelper.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+contract PayHelper {
+    function pay(address target, uint256 amount) public payable {
+        payable(target).call{value: amount}("");
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./PayHelper.sol";
+
+contract Main {
+    PayHelper private helper;
+
+    constructor(PayHelper initialHelper) {
+        helper = initialHelper;
+    }
+
+    function getHelper(address recipient) internal view returns (PayHelper) {
+        recipient;
+        return helper;
+    }
+
+    function getHelper(address payable recipient) internal view returns (PayHelper) {
+        recipient;
+        return helper;
+    }
+
+    function pay(address payable recipient, uint256 amount) external payable {
+        getHelper(recipient).pay(recipient, amount);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `pay`")
+            })
+            .expect("expected overloaded getter-returned ETH transfer wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_indexed_eth_transfer_wrapper_flow() {
         let dir = tempfile::tempdir().unwrap();
         let helper_path = dir.path().join("PayHelper.sol");
@@ -3857,12 +3970,13 @@ contract Main {
         let helper_path = dir.path().join("BridgeHelper.sol");
         let main_path = dir.path().join("Main.sol");
         let helper_source = r#"pragma solidity ^0.8.0;
-function bridge(address target) {
-    target.code.length;
-}
-
 function bridge(address target, bytes memory payload) {
     target.delegatecall(payload);
+}
+
+function bridge(uint256 marker, bytes memory payload) {
+    marker;
+    payload.length;
 }
 "#;
         let main_source = r#"pragma solidity ^0.8.0;
@@ -3911,12 +4025,13 @@ contract Main {
         let main_path = dir.path().join("Main.sol");
         let helper_source = r#"pragma solidity ^0.8.0;
 library PayLib {
-    function pay(address target) internal {
-        target.code.length;
-    }
-
     function pay(address target, uint256 amount) internal {
         payable(target).call{value: amount}("");
+    }
+
+    function pay(uint256 marker, uint256 amount) internal {
+        marker;
+        amount;
     }
 }
 "#;
@@ -3948,6 +4063,180 @@ contract Main {
                         .contains("flows into an ETH transfer via `pay`")
             })
             .expect("expected imported overloaded ETH transfer wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_same_summary_overloaded_delegatecall_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("BridgeHelper.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+function bridge(address target, bytes memory payload) {
+    target.delegatecall(payload);
+}
+
+function bridge(address payable target, bytes memory payload) {
+    address(target).delegatecall(payload);
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+contract Main {
+    function run(address payable implementation, bytes memory payload) external {
+        _run(implementation, payload);
+    }
+
+    function _run(address payable implementation, bytes memory payload) internal {
+        bridge(implementation, payload);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `_run`")
+            })
+            .expect("expected same-summary overloaded delegatecall wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_transitive_imported_delegatecall_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("BridgeHelper.sol");
+        let forwarder_path = dir.path().join("Forwarder.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+function bridge(address target, bytes memory payload) {
+    target.delegatecall(payload);
+}
+
+function bridge(address payable target, bytes memory payload) {
+    address(target).delegatecall(payload);
+}
+"#;
+        let forwarder_source = r#"pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+function forward(address payable target, bytes memory payload) {
+    bridge(target, payload);
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./Forwarder.sol";
+
+contract Main {
+    function run(address payable implementation, bytes memory payload) external {
+        forward(implementation, payload);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&forwarder_path, forwarder_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `forward`")
+            })
+            .expect("expected transitive imported delegatecall wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_same_summary_overloaded_eth_transfer_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("PayLib.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+library PayLib {
+    function pay(address target, uint256 amount) internal {
+        payable(target).call{value: amount}("");
+    }
+
+    function pay(address payable target, uint256 amount) internal {
+        target.call{value: amount}("");
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./PayLib.sol";
+
+contract Main {
+    function pay(address payable recipient, uint256 amount) external payable {
+        PayLib.pay(recipient, amount);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `pay`")
+            })
+            .expect("expected same-summary overloaded ETH transfer wrapper finding");
 
         let meta: FindingMeta = serde_json::from_value(
             propagated
