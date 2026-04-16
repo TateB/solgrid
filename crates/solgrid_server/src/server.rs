@@ -734,7 +734,8 @@ impl LanguageServer for SolgridServer {
             documents.close(&uri);
         }
         if is_solidity_file(&uri) {
-            self.publish_closed_file_diagnostics(uri.clone(), path).await;
+            self.publish_closed_file_diagnostics(uri.clone(), path)
+                .await;
         } else {
             self.clear_published_diagnostics(uri.clone()).await;
         }
