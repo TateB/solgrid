@@ -586,6 +586,14 @@ struct FoundryTestFunctionSettings {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+struct FuncNameMixedcaseSettings {
+    allow: Vec<String>,
+    allow_regex: Option<String>,
+    allow_public_abi: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct MaxLineLengthSettings {
     limit: usize,
 }
@@ -634,6 +642,20 @@ fn validate_rule_settings(config: &Config, path: &Path) -> Result<(), String> {
                 let settings: FoundryTestFunctionSettings =
                     parse_rule_settings(rule_id, value, path)?;
                 if let Some(pattern) = settings.pattern {
+                    Regex::new(&pattern).map_err(|error| {
+                        format!(
+                            "invalid settings for `{rule_id}` in {}: invalid regex `{pattern}`: {error}",
+                            path.display()
+                        )
+                    })?;
+                }
+            }
+            "naming/func-name-mixedcase" => {
+                let settings: FuncNameMixedcaseSettings =
+                    parse_rule_settings(rule_id, value, path)?;
+                let _ = settings.allow;
+                let _ = settings.allow_public_abi;
+                if let Some(pattern) = settings.allow_regex {
                     Regex::new(&pattern).map_err(|error| {
                         format!(
                             "invalid settings for `{rule_id}` in {}: invalid regex `{pattern}`: {error}",
@@ -1383,6 +1405,60 @@ order = ["types", "types"]
         let error = load_config(&config_path).unwrap_err();
         assert!(error.contains("style/category-headers"));
         assert!(error.contains("duplicate category id"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_accepts_func_name_mixedcase_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_func_name_mixedcase_{}_{}",
+            std::process::id(),
+            8
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."naming/func-name-mixedcase"]
+allow = ["ROOT_RESOURCE"]
+allow_regex = "^[A-Z][A-Z0-9_]*$"
+allow_public_abi = false
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert!(config
+            .lint
+            .settings
+            .contains_key("naming/func-name-mixedcase"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_rejects_invalid_func_name_mixedcase_regex() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_func_name_mixedcase_regex_{}_{}",
+            std::process::id(),
+            9
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."naming/func-name-mixedcase"]
+allow_regex = "("
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(error.contains("naming/func-name-mixedcase"));
+        assert!(error.contains("invalid regex"));
 
         let _ = fs::remove_dir_all(root);
     }

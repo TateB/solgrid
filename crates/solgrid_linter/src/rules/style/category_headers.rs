@@ -178,7 +178,7 @@ fn rebuild_contract_body(
 
     let merge_constants = should_merge_constants(&sections);
 
-    for category in settings.ordered_categories() {
+    for category in settings.display_categories() {
         let chunks = match category {
             CategoryHeaderId::ConstantsAndImmutables if merge_constants => {
                 let mut merged = Vec::new();

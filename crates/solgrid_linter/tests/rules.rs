@@ -2729,6 +2729,32 @@ implementation = "External API"
 }
 
 #[test]
+fn test_category_headers_partial_order_preserves_unlisted_categories() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done();
+    uint256 value;
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+order = ["storage", "implementation"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("event Done();"), "{fixed}");
+    assert!(fixed.contains("// Events"), "{fixed}");
+    assert!(fixed.contains("// Storage"), "{fixed}");
+    assert!(fixed.contains("// Implementation"), "{fixed}");
+}
+
+#[test]
 fn test_category_headers_merges_constants_and_immutables_when_both_present() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;

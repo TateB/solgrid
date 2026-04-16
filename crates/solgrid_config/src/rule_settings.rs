@@ -219,12 +219,22 @@ impl CategoryHeadersSettings {
         }
     }
 
+    pub fn display_categories(&self) -> Vec<CategoryHeaderId> {
+        let mut ordered = self.ordered_categories();
+        for id in CategoryHeaderId::ALL {
+            if !ordered.contains(&id) {
+                ordered.push(id);
+            }
+        }
+        ordered
+    }
+
     pub fn label_for(&self, id: CategoryHeaderId) -> Cow<'_, str> {
         self.labels.label_for(id)
     }
 
     pub fn category_for_label(&self, label: &str) -> Option<CategoryHeaderId> {
-        self.ordered_categories()
+        self.display_categories()
             .into_iter()
             .find(|id| self.label_for(*id).as_ref() == label)
     }
@@ -239,7 +249,7 @@ impl CategoryHeadersSettings {
         }
 
         let mut seen_labels = std::collections::HashSet::new();
-        for id in ordered {
+        for id in self.display_categories() {
             let label = self.label_for(id);
             if !seen_labels.insert(label.to_string()) {
                 return Err(format!("duplicate category label `{label}`"));

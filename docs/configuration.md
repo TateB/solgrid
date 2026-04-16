@@ -82,6 +82,7 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `best-practices/max-states-count` | `max_count` | `15` | Max state variables per contract |
 | `security/compiler-version` | `allowed` | `[">=0.8.19", "<0.9.0"]` | Allowed compiler versions |
 | `naming/foundry-test-functions` | `pattern` | `"test(Fork)?(Fuzz)?(Fail)?_"` | Test function regex |
+| `naming/func-name-mixedcase` | `allow`, `allow_regex`, `allow_public_abi` | rule-specific | Allow exact names, regex-matched names, or public/external ABI-style uppercase names |
 | `style/max-line-length` | `limit` | `120` | Max line length |
 | `docs/natspec` | `comment_style` | `"triple_slash"` | Accept only `///` comments or allow `/** */` with `"either"` |
 | `docs/natspec` | `continuation_indent` | `"padded"` | Continuation indent mode: `"padded"` or `"none"` |
@@ -102,6 +103,7 @@ Some rules accept additional configuration in `[lint.settings]`:
 `types`, `constants_and_immutables`, `constants`, `immutables`, `storage`, `events`,
 `errors`, `modifiers`, `initialization`, `functions`, `implementation`,
 `internal_functions`, `private_functions`.
+Any category IDs omitted from `order` are appended afterward in the built-in order.
 
 Unknown or invalid rule settings now fail config loading instead of being ignored.
 
