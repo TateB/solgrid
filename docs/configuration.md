@@ -104,6 +104,8 @@ Some rules accept additional configuration in `[lint.settings]`:
 `errors`, `modifiers`, `initialization`, `functions`, `implementation`,
 `internal_functions`, `private_functions`.
 Any category IDs omitted from `order` are appended afterward in the built-in order.
+When both constants and immutables are present, solgrid uses the combined header by default;
+specifying `constants` or `immutables` in `order`, or overriding either label, keeps them split.
 
 Unknown or invalid rule settings now fail config loading instead of being ignored.
 

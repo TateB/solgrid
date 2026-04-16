@@ -176,7 +176,7 @@ fn rebuild_contract_body(
         parts.push(preamble.join("\n\n"));
     }
 
-    let merge_constants = should_merge_constants(&sections);
+    let merge_constants = should_merge_constants(&sections, settings);
 
     for category in settings.display_categories() {
         let chunks = match category {
@@ -227,9 +227,13 @@ fn rebuild_contract_body(
     }
 }
 
-fn should_merge_constants(sections: &BTreeMap<CategoryHeaderId, Vec<String>>) -> bool {
+fn should_merge_constants(
+    sections: &BTreeMap<CategoryHeaderId, Vec<String>>,
+    settings: &CategoryHeadersSettings,
+) -> bool {
     sections.contains_key(&CategoryHeaderId::Constants)
         && sections.contains_key(&CategoryHeaderId::Immutables)
+        && !settings.prefers_split_constants_and_immutables()
 }
 
 fn body_indent(

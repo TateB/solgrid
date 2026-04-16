@@ -258,4 +258,14 @@ impl CategoryHeadersSettings {
 
         Ok(())
     }
+
+    pub fn prefers_split_constants_and_immutables(&self) -> bool {
+        self.order.iter().any(|id| {
+            matches!(
+                id,
+                CategoryHeaderId::Constants | CategoryHeaderId::Immutables
+            )
+        }) || self.labels.constants.is_some()
+            || self.labels.immutables.is_some()
+    }
 }

@@ -2773,6 +2773,61 @@ contract Test {
 }
 
 #[test]
+fn test_category_headers_respects_separate_constant_and_immutable_order() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+order = ["constants", "immutables", "initialization"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Constants"), "{fixed}");
+    assert!(fixed.contains("// Immutables"), "{fixed}");
+    assert!(!fixed.contains("// Constants & Immutables"), "{fixed}");
+}
+
+#[test]
+fn test_category_headers_respects_custom_constant_and_immutable_labels() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers".labels]
+constants = "Compile-Time Values"
+immutables = "Constructor State"
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Compile-Time Values"), "{fixed}");
+    assert!(fixed.contains("// Constructor State"), "{fixed}");
+    assert!(!fixed.contains("// Constants & Immutables"), "{fixed}");
+}
+
+#[test]
 fn test_category_headers_uses_constants_section_when_only_constants_exist() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
