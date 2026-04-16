@@ -60,7 +60,7 @@ pub fn format_expr(
             let cond_chunk = format_expr(cond, source, config, comments);
             let true_chunk = format_expr(if_true, source, config, comments);
             let false_chunk = format_expr(if_false, source, config, comments);
-            let align_branches_with_condition = ternary_condition_prefers_aligned_branches(cond);
+            let align_branches_with_condition = span_text(source, cond.span).contains('\n');
 
             if span_text(source, expr.span).contains('\n') {
                 concat(vec![
@@ -91,7 +91,9 @@ pub fn format_expr(
             let lhs_chunk = format_expr(lhs, source, config, comments);
             let rhs_chunk = format_expr(rhs, source, config, comments);
 
-            if assignment_rhs_prefers_break_after_operator(rhs) {
+            if config.operator_line_break == OperatorLineBreak::Trailing
+                && assignment_rhs_prefers_break_after_operator(rhs)
+            {
                 group(vec![
                     lhs_chunk,
                     space(),
@@ -265,16 +267,6 @@ fn assignment_rhs_prefers_break_after_operator(expr: &Expr<'_>) -> bool {
         ExprKind::Binary(..) | ExprKind::Ternary(..) => true,
         ExprKind::Tuple(elements) => {
             matches!(elements.as_ref(), [SpannedOption::Some(inner)] if assignment_rhs_prefers_break_after_operator(inner))
-        }
-        _ => false,
-    }
-}
-
-fn ternary_condition_prefers_aligned_branches(expr: &Expr<'_>) -> bool {
-    match &expr.kind {
-        ExprKind::Binary(..) => true,
-        ExprKind::Tuple(elements) => {
-            matches!(elements.as_ref(), [SpannedOption::Some(inner)] if ternary_condition_prefers_aligned_branches(inner))
         }
         _ => false,
     }
