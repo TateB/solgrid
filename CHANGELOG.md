@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
 - Fixed overlapping ETH-send diagnostics to suppress broad `security/arbitrary-send-eth` findings when the semantic user-controlled transfer detector covers the same call site
+- Fixed VS Code diagnostics delivery so the security overview no longer intercepts `publishDiagnostics` in a way that prevents editor diagnostics and E2E code-action flows from working
 
 ## [0.0.12] - 2026-04-16
 

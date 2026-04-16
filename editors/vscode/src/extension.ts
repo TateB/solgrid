@@ -1,4 +1,4 @@
-import { commands, ExtensionContext, window, workspace } from "vscode";
+import { commands, ExtensionContext, languages, window, workspace } from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
@@ -106,13 +106,29 @@ export async function activate(context: ExtensionContext): Promise<void> {
     clientOptions
   );
 
-  client.onNotification("textDocument/publishDiagnostics", (params) => {
-    securityOverview.updateFromDiagnostics(params);
-  });
-
   client.outputChannel.appendLine(`Using solgrid binary: ${serverPath}`);
 
   context.subscriptions.push(
+    languages.onDidChangeDiagnostics((event) => {
+      for (const uri of event.uris) {
+        securityOverview.updateFromDiagnostics({
+          uri: uri.toString(),
+          diagnostics: languages.getDiagnostics(uri).map((diagnostic) => ({
+            range: diagnostic.range,
+            severity: diagnostic.severity,
+            code:
+              typeof diagnostic.code === "object" &&
+              diagnostic.code !== null &&
+              "value" in diagnostic.code
+                ? diagnostic.code.value
+                : diagnostic.code,
+            source: diagnostic.source,
+            message: diagnostic.message,
+            data: (diagnostic as typeof diagnostic & { data?: unknown }).data,
+          })),
+        });
+      }
+    }),
     commands.registerCommand("solgrid.securityOverview.refresh", async () => {
       await rerunSecurityAnalysis(securityOverview);
     }),
