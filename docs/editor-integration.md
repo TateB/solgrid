@@ -123,6 +123,15 @@ The VS Code extension also ingests LCOV and Cobertura coverage artifacts directl
 
 Current coverage support is intentionally focused on imported artifact ingestion plus lightweight provider invocation rather than a native runtime. Native execution ownership is still out of scope, but the current viewer and command surface cover the common Foundry, Hardhat, and custom-command workflows.
 
+### Native Semantic Detector Depth
+
+The current server-native interprocedural detector surface is intentionally conservative:
+
+- same-file helper propagation is supported for the native `delegatecall` and ETH-transfer detectors
+- inherited helper propagation is supported, including imported base contracts, when the helper target resolves uniquely
+- contract-typed helper-wrapper propagation is supported for member, indexed, and getter-returned helper bases when the helper target and callable resolve uniquely
+- broader arbitrary cross-file wrapper graphs and overload-ambiguous flows are still rejected instead of guessed
+
 ### Call Hierarchy
 
 Call hierarchy is intentionally conservative today:

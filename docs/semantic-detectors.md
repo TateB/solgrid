@@ -31,6 +31,7 @@ Current behavior:
 - Fires when the target expression resolves to a parameter such as `implementation.delegatecall(data);`
 - Also fires at same-file helper call sites when a caller argument is propagated into a helper parameter that reaches `delegatecall`
 - Also fires through inherited helper chains, including imported base contracts, when the helper target is uniquely resolved
+- Also fires through uniquely resolved contract-typed helper wrappers, including getter-returned and indexed helper bases, when a helper method propagates the caller argument into `delegatecall`
 - Does not fire for state variables or other non-parameter targets
 - Coexists with `security/unchecked-low-level-call` when both findings are true
 - Suppresses the broader `security/low-level-calls` heuristic when both overlap on the same site
@@ -48,12 +49,13 @@ Current behavior:
 - Covers `.call{value: ...}(...)`
 - Also fires at same-file helper call sites when a caller argument is propagated into a helper parameter that reaches an ETH transfer sink
 - Also fires through inherited helper chains, including imported base contracts, when the helper target is uniquely resolved
+- Also fires through uniquely resolved contract-typed helper wrappers, including getter-returned and indexed helper bases, when a helper method propagates the caller argument into an ETH transfer sink
 - Does not fire for non-parameter targets such as state variables
 - Suppresses the broader `security/arbitrary-send-eth` heuristic when both overlap on the same site
 
 ## Current Limitations
 
-- Interprocedural propagation currently covers uniquely resolved same-file helpers plus inherited helper chains, including imported base contracts. Arbitrary cross-file wrapper graphs and overload-ambiguous flows remain future work.
+- Interprocedural propagation currently covers uniquely resolved same-file helpers, inherited helper chains including imported base contracts, and uniquely resolved contract-typed helper wrappers including member, indexed, and getter-returned helper bases. Arbitrary cross-file wrapper graphs, overload-ambiguous flows, and non-unique wrapper targets remain future work.
 - Confidence is currently authored per detector rather than computed from deeper semantic evidence.
 - Native semantic detectors currently expose docs and suppression metadata, but not autofixes.
 - Ignored baselines in the VS Code security overview key off the current finding fingerprint, so large line shifts can require restoring and re-ignoring a finding.
