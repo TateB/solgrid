@@ -1,14 +1,22 @@
 //! Semantic analysis helpers shared by completion and signature help.
 
 use crate::builtins;
+use crate::convert;
 use crate::definition;
 use crate::resolve::ImportResolver;
 use crate::symbols::{self, SignatureData, SymbolDef, SymbolKind, SymbolTable, TypeSpec};
+use solgrid_ast::selectors::SelectorContext;
 use solgrid_linter::source_utils::{is_in_non_code_region, scan_source_regions};
-use solgrid_parser::solar_ast::{self, Expr, ExprKind, IndexKind, ItemKind, Stmt, StmtKind};
+use solgrid_parser::solar_ast::{
+    self, ContractKind, Expr, ExprKind, FunctionKind, IndexKind, ItemKind, Stmt, StmtKind,
+    Visibility,
+};
 use solgrid_parser::with_parsed_ast_sequential;
 use std::collections::HashSet;
 use std::path::Path;
+use tower_lsp_server::ls_types::{
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend,
+};
 
 const COMPLETION_MEMBER_PLACEHOLDER: &str = "__solgrid_member";
 const SIGNATURE_ARG_PLACEHOLDER: &str = "0";
@@ -23,6 +31,49 @@ pub(crate) struct ResolvedSignature {
 pub(crate) struct CallSignatureHelp {
     pub signatures: Vec<ResolvedSignature>,
     pub active_parameter: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParameterInlayHint {
+    pub offset: usize,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SelectorInlayHint {
+    pub offset: usize,
+    pub label: String,
+    pub tooltip: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticTokenKind {
+    Namespace,
+    Class,
+    Interface,
+    Enum,
+    Struct,
+    Type,
+    Event,
+    Function,
+    Modifier,
+    Parameter,
+    Variable,
+    Property,
+    EnumMember,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RawSemanticToken {
+    span: std::ops::Range<usize>,
+    kind: SemanticTokenKind,
+    modifiers: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SemanticTokenInfo {
+    kind: SemanticTokenKind,
+    readonly: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +108,121 @@ struct SemanticContext<'a> {
 }
 
 impl<'a> SemanticContext<'a> {
+    fn is_namespace_alias(&self, name: &str) -> bool {
+        self.table
+            .imports
+            .iter()
+            .any(|import| match &import.symbols {
+                symbols::ImportedSymbols::Plain(Some(alias))
+                | symbols::ImportedSymbols::Glob(alias) => alias == name,
+                symbols::ImportedSymbols::Plain(None) | symbols::ImportedSymbols::Named(_) => false,
+            })
+    }
+
+    fn resolve_ident_info(&self, ident: &solar_ast::Ident) -> Option<SemanticTokenInfo> {
+        let offset = solgrid_ast::span_to_range(ident.span).start;
+        if let Some(def) = self.table.resolve(ident.as_str(), offset) {
+            return semantic_token_info_for_symbol(def, Some(self.source));
+        }
+
+        if let Some(current_file) = self.current_file {
+            if let Some(cross) = definition::resolve_cross_file_symbol(
+                self.table,
+                ident.as_str(),
+                current_file,
+                self.get_source,
+                self.resolver,
+            ) {
+                return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
+            }
+        }
+
+        self.is_namespace_alias(ident.as_str())
+            .then_some(SemanticTokenInfo {
+                kind: SemanticTokenKind::Namespace,
+                readonly: false,
+            })
+    }
+
+    fn resolve_member_info(
+        &self,
+        base: &Expr<'_>,
+        member: &solar_ast::Ident,
+    ) -> Option<SemanticTokenInfo> {
+        if let ExprKind::Ident(namespace) = &base.kind {
+            if let Some(current_file) = self.current_file {
+                if let Some(cross) = definition::resolve_cross_file_member_symbol(
+                    self.table,
+                    namespace.as_str(),
+                    member.as_str(),
+                    current_file,
+                    self.get_source,
+                    self.resolver,
+                ) {
+                    return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
+                }
+            }
+        }
+
+        let defs = self.resolve_member_defs(base, member.as_str());
+        (defs.len() == 1)
+            .then(|| semantic_token_info_for_symbol(&defs[0].def, None))
+            .flatten()
+    }
+
+    fn resolve_path_info(
+        &self,
+        path: &solar_ast::AstPath<'_>,
+        resolve_offset: usize,
+    ) -> Option<SemanticTokenInfo> {
+        if let Some(ident) = path.get_ident() {
+            if let Some(def) = self.table.resolve(ident.as_str(), resolve_offset) {
+                return semantic_token_info_for_symbol(def, Some(self.source));
+            }
+            if let Some(current_file) = self.current_file {
+                if let Some(cross) = definition::resolve_cross_file_symbol(
+                    self.table,
+                    ident.as_str(),
+                    current_file,
+                    self.get_source,
+                    self.resolver,
+                ) {
+                    return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
+                }
+            }
+            return None;
+        }
+
+        let first = path.first();
+        let last = path.last();
+        if self.is_namespace_alias(first.as_str()) {
+            if let Some(current_file) = self.current_file {
+                if let Some(cross) = definition::resolve_cross_file_member_symbol(
+                    self.table,
+                    first.as_str(),
+                    last.as_str(),
+                    current_file,
+                    self.get_source,
+                    self.resolver,
+                ) {
+                    return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
+                }
+            }
+        }
+
+        let type_path = symbols::TypePath {
+            segments: path
+                .segments()
+                .iter()
+                .map(|segment| segment.as_str().to_string())
+                .collect(),
+        };
+        let resolved = self.resolve_type_path(&type_path, resolve_offset);
+        (resolved.len() == 1)
+            .then(|| semantic_token_info_for_symbol(&resolved[0].def, None))
+            .flatten()
+    }
+
     fn resolve_namespace_scope_symbols(&self, namespace: &str) -> Vec<SymbolDef> {
         let Some(current_file) = self.current_file else {
             return Vec::new();
@@ -438,6 +604,725 @@ impl<'a> SemanticContext<'a> {
     }
 }
 
+const SEMANTIC_TOKEN_MODIFIER_DECLARATION: u32 = 1 << 0;
+const SEMANTIC_TOKEN_MODIFIER_READONLY: u32 = 1 << 1;
+
+pub(crate) fn semantic_token_legend() -> SemanticTokensLegend {
+    SemanticTokensLegend {
+        token_types: vec![
+            SemanticTokenType::NAMESPACE,
+            SemanticTokenType::CLASS,
+            SemanticTokenType::INTERFACE,
+            SemanticTokenType::ENUM,
+            SemanticTokenType::STRUCT,
+            SemanticTokenType::TYPE,
+            SemanticTokenType::EVENT,
+            SemanticTokenType::FUNCTION,
+            SemanticTokenType::MODIFIER,
+            SemanticTokenType::PARAMETER,
+            SemanticTokenType::VARIABLE,
+            SemanticTokenType::PROPERTY,
+            SemanticTokenType::ENUM_MEMBER,
+        ],
+        token_modifiers: vec![
+            SemanticTokenModifier::DECLARATION,
+            SemanticTokenModifier::READONLY,
+        ],
+    }
+}
+
+pub(crate) fn semantic_tokens(
+    source: &str,
+    current_file: Option<&Path>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<SemanticToken> {
+    encode_semantic_tokens(
+        source,
+        collect_raw_semantic_tokens(source, current_file, get_source, resolver),
+    )
+}
+
+pub(crate) fn semantic_tokens_in_range(
+    source: &str,
+    range: std::ops::Range<usize>,
+    current_file: Option<&Path>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<SemanticToken> {
+    encode_semantic_tokens(
+        source,
+        collect_raw_semantic_tokens(source, current_file, get_source, resolver)
+            .into_iter()
+            .filter(|token| token.span.end > range.start && token.span.start < range.end)
+            .collect(),
+    )
+}
+
+fn collect_raw_semantic_tokens(
+    source: &str,
+    current_file: Option<&Path>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<RawSemanticToken> {
+    let filename = current_file
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "buffer.sol".to_string());
+    let Some(table) = symbols::build_symbol_table(source, &filename) else {
+        return Vec::new();
+    };
+    let semantic = SemanticContext {
+        table: &table,
+        source,
+        current_file,
+        get_source,
+        resolver,
+    };
+
+    let raw = with_parsed_ast_sequential(source, &filename, |source_unit| {
+        let mut tokens = Vec::new();
+        for item in source_unit.items.iter() {
+            collect_item_semantic_tokens(item, &semantic, &mut tokens);
+        }
+        tokens
+    })
+    .unwrap_or_default();
+
+    dedup_semantic_tokens(raw)
+}
+
+fn collect_item_semantic_tokens(
+    item: &solar_ast::Item<'_>,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    match &item.kind {
+        ItemKind::Pragma(_) => {}
+        ItemKind::Import(import) => collect_import_semantic_tokens(import, semantic, tokens),
+        ItemKind::Using(using_directive) => {
+            match &using_directive.list {
+                solar_ast::UsingList::Single(path) => {
+                    collect_path_semantic_tokens(
+                        path,
+                        path.span().lo().0 as usize,
+                        semantic,
+                        tokens,
+                    );
+                }
+                solar_ast::UsingList::Multiple(paths) => {
+                    for (path, _) in paths.iter() {
+                        collect_path_semantic_tokens(
+                            path,
+                            path.span().lo().0 as usize,
+                            semantic,
+                            tokens,
+                        );
+                    }
+                }
+            }
+            if let Some(ty) = &using_directive.ty {
+                collect_type_semantic_tokens(ty, semantic, tokens);
+            }
+        }
+        ItemKind::Contract(contract) => {
+            push_ident_semantic_token(
+                contract.name,
+                semantic_token_kind_for_contract(contract.kind),
+                true,
+                false,
+                tokens,
+            );
+            if let Some(layout) = &contract.layout {
+                collect_expr_semantic_tokens(layout.slot, semantic, tokens);
+            }
+            for base in contract.bases.iter() {
+                collect_path_semantic_tokens(
+                    &base.name,
+                    base.name.span().lo().0 as usize,
+                    semantic,
+                    tokens,
+                );
+                for argument in base.arguments.exprs() {
+                    collect_expr_semantic_tokens(argument, semantic, tokens);
+                }
+            }
+            for body_item in contract.body.iter() {
+                collect_item_semantic_tokens(body_item, semantic, tokens);
+            }
+        }
+        ItemKind::Function(function) => {
+            if let Some(name) = function.header.name {
+                push_ident_semantic_token(
+                    name,
+                    semantic_token_kind_for_function(function.kind),
+                    true,
+                    false,
+                    tokens,
+                );
+            }
+            for parameter in function.header.parameters.iter() {
+                collect_variable_declaration_tokens(
+                    parameter,
+                    SymbolKind::Parameter,
+                    semantic,
+                    tokens,
+                );
+            }
+            for return_param in function.header.returns() {
+                collect_variable_declaration_tokens(
+                    return_param,
+                    SymbolKind::ReturnParameter,
+                    semantic,
+                    tokens,
+                );
+            }
+            for modifier in function.header.modifiers.iter() {
+                collect_path_semantic_tokens(
+                    &modifier.name,
+                    modifier.name.span().lo().0 as usize,
+                    semantic,
+                    tokens,
+                );
+                for argument in modifier.arguments.exprs() {
+                    collect_expr_semantic_tokens(argument, semantic, tokens);
+                }
+            }
+            if let Some(override_) = &function.header.override_ {
+                for path in override_.paths.iter() {
+                    collect_path_semantic_tokens(
+                        path,
+                        path.span().lo().0 as usize,
+                        semantic,
+                        tokens,
+                    );
+                }
+            }
+            if let Some(body) = &function.body {
+                for stmt in body.stmts.iter() {
+                    collect_stmt_semantic_tokens(stmt, semantic, tokens);
+                }
+            }
+        }
+        ItemKind::Variable(variable) => {
+            collect_variable_declaration_tokens(
+                variable,
+                SymbolKind::StateVariable,
+                semantic,
+                tokens,
+            );
+        }
+        ItemKind::Struct(struct_) => {
+            push_ident_semantic_token(struct_.name, SemanticTokenKind::Struct, true, false, tokens);
+            for field in struct_.fields.iter() {
+                collect_variable_declaration_tokens(
+                    field,
+                    SymbolKind::StructField,
+                    semantic,
+                    tokens,
+                );
+            }
+        }
+        ItemKind::Enum(enum_) => {
+            push_ident_semantic_token(enum_.name, SemanticTokenKind::Enum, true, false, tokens);
+            for variant in enum_.variants.iter() {
+                push_ident_semantic_token(
+                    *variant,
+                    SemanticTokenKind::EnumMember,
+                    true,
+                    true,
+                    tokens,
+                );
+            }
+        }
+        ItemKind::Udvt(udvt) => {
+            push_ident_semantic_token(udvt.name, SemanticTokenKind::Type, true, false, tokens);
+            collect_type_semantic_tokens(&udvt.ty, semantic, tokens);
+        }
+        ItemKind::Error(error) => {
+            push_ident_semantic_token(error.name, SemanticTokenKind::Type, true, false, tokens);
+            for parameter in error.parameters.iter() {
+                collect_variable_declaration_tokens(
+                    parameter,
+                    SymbolKind::Parameter,
+                    semantic,
+                    tokens,
+                );
+            }
+        }
+        ItemKind::Event(event) => {
+            push_ident_semantic_token(event.name, SemanticTokenKind::Event, true, false, tokens);
+            for parameter in event.parameters.iter() {
+                collect_variable_declaration_tokens(
+                    parameter,
+                    SymbolKind::Parameter,
+                    semantic,
+                    tokens,
+                );
+            }
+        }
+    }
+}
+
+fn collect_import_semantic_tokens(
+    import: &solar_ast::ImportDirective<'_>,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    match &import.items {
+        solar_ast::ImportItems::Plain(Some(alias)) | solar_ast::ImportItems::Glob(alias) => {
+            push_ident_semantic_token(*alias, SemanticTokenKind::Namespace, true, false, tokens);
+        }
+        solar_ast::ImportItems::Aliases(items) => {
+            for (original, alias) in items.iter() {
+                let local_name = alias.unwrap_or(*original);
+                let token_info = semantic
+                    .current_file
+                    .and_then(|current_file| {
+                        definition::resolve_cross_file_symbol(
+                            semantic.table,
+                            local_name.as_str(),
+                            current_file,
+                            semantic.get_source,
+                            semantic.resolver,
+                        )
+                    })
+                    .and_then(|cross| {
+                        semantic_token_info_for_symbol(&cross.def, Some(&cross.source))
+                    })
+                    .unwrap_or(SemanticTokenInfo {
+                        kind: SemanticTokenKind::Type,
+                        readonly: false,
+                    });
+                push_ident_semantic_token(
+                    local_name,
+                    token_info.kind,
+                    true,
+                    token_info.readonly,
+                    tokens,
+                );
+            }
+        }
+        solar_ast::ImportItems::Plain(None) => {}
+    }
+}
+
+fn collect_variable_declaration_tokens(
+    variable: &solar_ast::VariableDefinition<'_>,
+    kind: SymbolKind,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    collect_type_semantic_tokens(&variable.ty, semantic, tokens);
+    if let Some(override_) = &variable.override_ {
+        for path in override_.paths.iter() {
+            collect_path_semantic_tokens(path, path.span().lo().0 as usize, semantic, tokens);
+        }
+    }
+    if let Some(name) = variable.name {
+        if let Some(token_kind) = semantic_token_kind_for_symbol(kind) {
+            push_ident_semantic_token(
+                name,
+                token_kind,
+                true,
+                variable.mutability.is_some(),
+                tokens,
+            );
+        }
+    }
+    if let Some(initializer) = &variable.initializer {
+        collect_expr_semantic_tokens(initializer, semantic, tokens);
+    }
+}
+
+fn collect_type_semantic_tokens(
+    ty: &solar_ast::Type<'_>,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    match &ty.kind {
+        solar_ast::TypeKind::Elementary(_) => {}
+        solar_ast::TypeKind::Custom(path) => {
+            collect_path_semantic_tokens(path, ty.span.lo().0 as usize, semantic, tokens);
+        }
+        solar_ast::TypeKind::Array(array) => {
+            collect_type_semantic_tokens(&array.element, semantic, tokens);
+            if let Some(size) = &array.size {
+                collect_expr_semantic_tokens(size, semantic, tokens);
+            }
+        }
+        solar_ast::TypeKind::Function(function_ty) => {
+            for parameter in function_ty.parameters.iter() {
+                collect_variable_declaration_tokens(
+                    parameter,
+                    SymbolKind::Parameter,
+                    semantic,
+                    tokens,
+                );
+            }
+            for return_param in function_ty.returns() {
+                collect_variable_declaration_tokens(
+                    return_param,
+                    SymbolKind::ReturnParameter,
+                    semantic,
+                    tokens,
+                );
+            }
+        }
+        solar_ast::TypeKind::Mapping(mapping) => {
+            collect_type_semantic_tokens(&mapping.key, semantic, tokens);
+            collect_type_semantic_tokens(&mapping.value, semantic, tokens);
+        }
+    }
+}
+
+fn collect_stmt_semantic_tokens(
+    stmt: &Stmt<'_>,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    match &stmt.kind {
+        StmtKind::Assembly(_) | StmtKind::Break | StmtKind::Continue | StmtKind::Placeholder => {}
+        StmtKind::DeclSingle(variable) => {
+            collect_variable_declaration_tokens(
+                variable,
+                SymbolKind::LocalVariable,
+                semantic,
+                tokens,
+            );
+        }
+        StmtKind::DeclMulti(vars, expr) => {
+            for variable in vars.iter() {
+                if let solgrid_parser::solar_interface::SpannedOption::Some(variable) = variable {
+                    collect_variable_declaration_tokens(
+                        variable,
+                        SymbolKind::LocalVariable,
+                        semantic,
+                        tokens,
+                    );
+                }
+            }
+            collect_expr_semantic_tokens(expr, semantic, tokens);
+        }
+        StmtKind::Block(block) | StmtKind::UncheckedBlock(block) => {
+            for stmt in block.stmts.iter() {
+                collect_stmt_semantic_tokens(stmt, semantic, tokens);
+            }
+        }
+        StmtKind::DoWhile(body, expr) | StmtKind::While(expr, body) => {
+            collect_expr_semantic_tokens(expr, semantic, tokens);
+            collect_stmt_semantic_tokens(body, semantic, tokens);
+        }
+        StmtKind::Emit(path, args) => {
+            collect_path_semantic_tokens(path, path.span().lo().0 as usize, semantic, tokens);
+            for arg in args.exprs() {
+                collect_expr_semantic_tokens(arg, semantic, tokens);
+            }
+        }
+        StmtKind::Revert(path, args) => {
+            collect_path_semantic_tokens(path, path.span().lo().0 as usize, semantic, tokens);
+            for arg in args.exprs() {
+                collect_expr_semantic_tokens(arg, semantic, tokens);
+            }
+        }
+        StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) => {
+            collect_expr_semantic_tokens(expr, semantic, tokens);
+        }
+        StmtKind::Return(None) => {}
+        StmtKind::For {
+            init,
+            cond,
+            next,
+            body,
+        } => {
+            if let Some(init) = init {
+                collect_stmt_semantic_tokens(init, semantic, tokens);
+            }
+            if let Some(cond) = cond {
+                collect_expr_semantic_tokens(cond, semantic, tokens);
+            }
+            if let Some(next) = next {
+                collect_expr_semantic_tokens(next, semantic, tokens);
+            }
+            collect_stmt_semantic_tokens(body, semantic, tokens);
+        }
+        StmtKind::If(cond, then_stmt, else_stmt) => {
+            collect_expr_semantic_tokens(cond, semantic, tokens);
+            collect_stmt_semantic_tokens(then_stmt, semantic, tokens);
+            if let Some(else_stmt) = else_stmt {
+                collect_stmt_semantic_tokens(else_stmt, semantic, tokens);
+            }
+        }
+        StmtKind::Try(try_stmt) => {
+            collect_expr_semantic_tokens(try_stmt.expr, semantic, tokens);
+            for clause in try_stmt.clauses.iter() {
+                for stmt in clause.block.stmts.iter() {
+                    collect_stmt_semantic_tokens(stmt, semantic, tokens);
+                }
+            }
+        }
+    }
+}
+
+fn collect_expr_semantic_tokens(
+    expr: &Expr<'_>,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    match &expr.kind {
+        ExprKind::Array(exprs) => {
+            for expr in exprs.iter() {
+                collect_expr_semantic_tokens(expr, semantic, tokens);
+            }
+        }
+        ExprKind::Assign(lhs, _, rhs) | ExprKind::Binary(lhs, _, rhs) => {
+            collect_expr_semantic_tokens(lhs, semantic, tokens);
+            collect_expr_semantic_tokens(rhs, semantic, tokens);
+        }
+        ExprKind::Call(callee, args) => {
+            collect_expr_semantic_tokens(callee, semantic, tokens);
+            for arg in args.exprs() {
+                collect_expr_semantic_tokens(arg, semantic, tokens);
+            }
+        }
+        ExprKind::CallOptions(callee, args) => {
+            collect_expr_semantic_tokens(callee, semantic, tokens);
+            for arg in args.iter() {
+                collect_expr_semantic_tokens(arg.value, semantic, tokens);
+            }
+        }
+        ExprKind::Delete(expr) | ExprKind::Unary(_, expr) => {
+            collect_expr_semantic_tokens(expr, semantic, tokens);
+        }
+        ExprKind::Ident(ident) => {
+            if let Some(info) = semantic.resolve_ident_info(ident) {
+                push_ident_semantic_token(*ident, info.kind, false, info.readonly, tokens);
+            }
+        }
+        ExprKind::Index(lhs, kind) => {
+            collect_expr_semantic_tokens(lhs, semantic, tokens);
+            match kind {
+                IndexKind::Index(Some(expr)) => {
+                    collect_expr_semantic_tokens(expr, semantic, tokens)
+                }
+                IndexKind::Range(start, end) => {
+                    if let Some(start) = start {
+                        collect_expr_semantic_tokens(start, semantic, tokens);
+                    }
+                    if let Some(end) = end {
+                        collect_expr_semantic_tokens(end, semantic, tokens);
+                    }
+                }
+                IndexKind::Index(None) => {}
+            }
+        }
+        ExprKind::Lit(_, _) => {}
+        ExprKind::Member(base, member) => {
+            collect_expr_semantic_tokens(base, semantic, tokens);
+            if let Some(info) = semantic.resolve_member_info(base, member) {
+                push_ident_semantic_token(*member, info.kind, false, info.readonly, tokens);
+            }
+        }
+        ExprKind::New(ty) | ExprKind::TypeCall(ty) | ExprKind::Type(ty) => {
+            collect_type_semantic_tokens(ty, semantic, tokens);
+        }
+        ExprKind::Payable(args) => {
+            for arg in args.exprs() {
+                collect_expr_semantic_tokens(arg, semantic, tokens);
+            }
+        }
+        ExprKind::Ternary(cond, if_true, if_false) => {
+            collect_expr_semantic_tokens(cond, semantic, tokens);
+            collect_expr_semantic_tokens(if_true, semantic, tokens);
+            collect_expr_semantic_tokens(if_false, semantic, tokens);
+        }
+        ExprKind::Tuple(exprs) => {
+            for expr in exprs.iter() {
+                if let solgrid_parser::solar_interface::SpannedOption::Some(expr) = expr {
+                    collect_expr_semantic_tokens(expr, semantic, tokens);
+                }
+            }
+        }
+    }
+}
+
+fn collect_path_semantic_tokens(
+    path: &solar_ast::AstPath<'_>,
+    resolve_offset: usize,
+    semantic: &SemanticContext<'_>,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    if path.segments().len() >= 2 && semantic.is_namespace_alias(path.first().as_str()) {
+        push_ident_semantic_token(
+            *path.first(),
+            SemanticTokenKind::Namespace,
+            false,
+            false,
+            tokens,
+        );
+    }
+    if let Some(info) = semantic.resolve_path_info(path, resolve_offset) {
+        push_ident_semantic_token(*path.last(), info.kind, false, info.readonly, tokens);
+    }
+}
+
+fn semantic_token_kind_for_contract(kind: ContractKind) -> SemanticTokenKind {
+    match kind {
+        ContractKind::Contract | ContractKind::AbstractContract | ContractKind::Library => {
+            SemanticTokenKind::Class
+        }
+        ContractKind::Interface => SemanticTokenKind::Interface,
+    }
+}
+
+fn semantic_token_kind_for_function(kind: FunctionKind) -> SemanticTokenKind {
+    match kind {
+        FunctionKind::Modifier => SemanticTokenKind::Modifier,
+        FunctionKind::Constructor | FunctionKind::Function => SemanticTokenKind::Function,
+        FunctionKind::Fallback | FunctionKind::Receive => SemanticTokenKind::Function,
+    }
+}
+
+fn semantic_token_kind_for_symbol(kind: SymbolKind) -> Option<SemanticTokenKind> {
+    Some(match kind {
+        SymbolKind::Contract => SemanticTokenKind::Class,
+        SymbolKind::Interface => SemanticTokenKind::Interface,
+        SymbolKind::Library => SemanticTokenKind::Class,
+        SymbolKind::Constructor | SymbolKind::Function => SemanticTokenKind::Function,
+        SymbolKind::Modifier => SemanticTokenKind::Modifier,
+        SymbolKind::Event => SemanticTokenKind::Event,
+        SymbolKind::Error | SymbolKind::Udvt => SemanticTokenKind::Type,
+        SymbolKind::Struct => SemanticTokenKind::Struct,
+        SymbolKind::StructField | SymbolKind::StateVariable => SemanticTokenKind::Property,
+        SymbolKind::Enum => SemanticTokenKind::Enum,
+        SymbolKind::LocalVariable => SemanticTokenKind::Variable,
+        SymbolKind::Parameter | SymbolKind::ReturnParameter => SemanticTokenKind::Parameter,
+        SymbolKind::EnumVariant => SemanticTokenKind::EnumMember,
+    })
+}
+
+fn semantic_token_info_for_symbol(
+    def: &SymbolDef,
+    source: Option<&str>,
+) -> Option<SemanticTokenInfo> {
+    Some(SemanticTokenInfo {
+        kind: semantic_token_kind_for_symbol(def.kind)?,
+        readonly: semantic_token_symbol_is_readonly(def, source),
+    })
+}
+
+fn semantic_token_symbol_is_readonly(def: &SymbolDef, source: Option<&str>) -> bool {
+    match def.kind {
+        SymbolKind::EnumVariant => true,
+        SymbolKind::StateVariable => source
+            .and_then(|source| source.get(def.def_span.clone()))
+            .is_some_and(|snippet| {
+                snippet.contains("constant")
+                    || snippet.contains("immutable")
+                    || snippet.contains("Constant")
+                    || snippet.contains("Immutable")
+            }),
+        _ => false,
+    }
+}
+
+fn push_ident_semantic_token(
+    ident: solar_ast::Ident,
+    kind: SemanticTokenKind,
+    declaration: bool,
+    readonly: bool,
+    tokens: &mut Vec<RawSemanticToken>,
+) {
+    let mut modifiers = 0;
+    if declaration {
+        modifiers |= SEMANTIC_TOKEN_MODIFIER_DECLARATION;
+    }
+    if readonly {
+        modifiers |= SEMANTIC_TOKEN_MODIFIER_READONLY;
+    }
+    tokens.push(RawSemanticToken {
+        span: solgrid_ast::span_to_range(ident.span),
+        kind,
+        modifiers,
+    });
+}
+
+fn dedup_semantic_tokens(mut tokens: Vec<RawSemanticToken>) -> Vec<RawSemanticToken> {
+    tokens.sort_by(|left, right| {
+        left.span
+            .start
+            .cmp(&right.span.start)
+            .then_with(|| left.span.end.cmp(&right.span.end))
+            .then_with(|| right.modifiers.cmp(&left.modifiers))
+    });
+
+    let mut deduped: Vec<RawSemanticToken> = Vec::new();
+    for token in tokens {
+        if let Some(previous) = deduped.last() {
+            if previous.span == token.span {
+                continue;
+            }
+        }
+        deduped.push(token);
+    }
+    deduped
+}
+
+fn encode_semantic_tokens(source: &str, tokens: Vec<RawSemanticToken>) -> Vec<SemanticToken> {
+    let mut encoded = Vec::new();
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    let mut first = true;
+
+    for token in tokens {
+        let start = convert::offset_to_position(source, token.span.start);
+        let end = convert::offset_to_position(source, token.span.end);
+        if start.line != end.line || start.character >= end.character {
+            continue;
+        }
+
+        let delta_line = if first {
+            start.line
+        } else {
+            start.line.saturating_sub(previous_line)
+        };
+        let delta_start = if first || delta_line > 0 {
+            start.character
+        } else {
+            start.character.saturating_sub(previous_start)
+        };
+        encoded.push(SemanticToken {
+            delta_line,
+            delta_start,
+            length: end.character - start.character,
+            token_type: semantic_token_type_index(token.kind),
+            token_modifiers_bitset: token.modifiers,
+        });
+        previous_line = start.line;
+        previous_start = start.character;
+        first = false;
+    }
+
+    encoded
+}
+
+fn semantic_token_type_index(kind: SemanticTokenKind) -> u32 {
+    match kind {
+        SemanticTokenKind::Namespace => 0,
+        SemanticTokenKind::Class => 1,
+        SemanticTokenKind::Interface => 2,
+        SemanticTokenKind::Enum => 3,
+        SemanticTokenKind::Struct => 4,
+        SemanticTokenKind::Type => 5,
+        SemanticTokenKind::Event => 6,
+        SemanticTokenKind::Function => 7,
+        SemanticTokenKind::Modifier => 8,
+        SemanticTokenKind::Parameter => 9,
+        SemanticTokenKind::Variable => 10,
+        SemanticTokenKind::Property => 11,
+        SemanticTokenKind::EnumMember => 12,
+    }
+}
+
 pub(crate) fn member_completion_symbols(
     source: &str,
     offset: usize,
@@ -569,6 +1454,184 @@ pub(crate) fn signature_help_at_offset(
     .flatten()
 }
 
+pub(crate) fn parameter_name_hints_in_range(
+    source: &str,
+    start_offset: usize,
+    end_offset: usize,
+    current_file: Option<&Path>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<ParameterInlayHint> {
+    let Some(table) = symbols::build_symbol_table(source, "buffer.sol") else {
+        return Vec::new();
+    };
+    let semantic = SemanticContext {
+        table: &table,
+        source,
+        current_file,
+        get_source,
+        resolver,
+    };
+
+    with_parsed_ast_sequential(source, "buffer.sol", |source_unit| {
+        let mut hints = Vec::new();
+        let mut seen = HashSet::new();
+
+        visit_source_unit_exprs(source_unit, &mut |expr| {
+            let ExprKind::Call(callee, args) = &expr.kind else {
+                return;
+            };
+            let expr_range = solgrid_ast::span_to_range(expr.span);
+            if expr_range.end < start_offset || expr_range.start > end_offset {
+                return;
+            }
+
+            let Some(parameter_names) = parameter_names_for_call(&semantic, callee, args.len())
+            else {
+                return;
+            };
+
+            for (index, argument) in args.exprs().enumerate() {
+                let Some(parameter_name) = parameter_names.get(index) else {
+                    continue;
+                };
+                let arg_range = solgrid_ast::span_to_range(argument.span);
+                if arg_range.start < start_offset || arg_range.start > end_offset {
+                    continue;
+                }
+                if argument_already_matches_parameter(argument, parameter_name) {
+                    continue;
+                }
+                if seen.insert((arg_range.start, parameter_name.clone())) {
+                    hints.push(ParameterInlayHint {
+                        offset: arg_range.start,
+                        label: format!("{parameter_name}:"),
+                    });
+                }
+            }
+        });
+
+        hints.sort_by(|left, right| left.offset.cmp(&right.offset));
+        hints
+    })
+    .unwrap_or_default()
+}
+
+pub(crate) fn selector_hints_in_range(
+    source: &str,
+    start_offset: usize,
+    end_offset: usize,
+    current_file: Option<&Path>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<SelectorInlayHint> {
+    let current_file = current_file.unwrap_or_else(|| Path::new("buffer.sol"));
+
+    with_parsed_ast_sequential(source, "buffer.sol", |source_unit| {
+        struct SelectorHintCollector<'a, 'ast> {
+            source: &'a str,
+            start_offset: usize,
+            end_offset: usize,
+            contract_stack: Vec<String>,
+            selectors: SelectorContext<'a>,
+            seen: HashSet<(usize, String)>,
+            hints: Vec<SelectorInlayHint>,
+            _marker: std::marker::PhantomData<&'ast ()>,
+        }
+
+        impl<'a, 'ast> SelectorHintCollector<'a, 'ast> {
+            fn visit_item(&mut self, item: &solar_ast::Item<'ast>) {
+                match &item.kind {
+                    ItemKind::Contract(contract) => {
+                        if contract.kind == ContractKind::Interface {
+                            if let Some(interface_id) = self
+                                .selectors
+                                .interface_id_info_for_items(contract.name.as_str(), contract.body)
+                            {
+                                let offset = declaration_hint_offset(
+                                    self.source,
+                                    solgrid_ast::span_to_range(item.span),
+                                );
+                                let label = format!("interface ID: {}", interface_id.hex);
+                                if offset >= self.start_offset
+                                    && offset <= self.end_offset
+                                    && self.seen.insert((offset, label.clone()))
+                                {
+                                    self.hints.push(SelectorInlayHint {
+                                        offset,
+                                        label,
+                                        tooltip: format!(
+                                            "ERC-165 interface ID for `{}`",
+                                            contract.name.as_str()
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+
+                        self.contract_stack.push(contract.name.as_str().to_string());
+                        for body_item in contract.body.iter() {
+                            self.visit_item(body_item);
+                        }
+                        self.contract_stack.pop();
+                    }
+                    ItemKind::Function(function)
+                        if is_selector_visible_function(function)
+                            || (self.contract_stack.is_empty()
+                                && function.kind == FunctionKind::Function) =>
+                    {
+                        if let Some(selector) = self.selectors.function_selector_info(
+                            self.contract_stack.last().map(String::as_str),
+                            function,
+                        ) {
+                            let offset = declaration_hint_offset(
+                                self.source,
+                                solgrid_ast::span_to_range(function.header.span),
+                            );
+                            let label = format!("selector: {}", selector.hex);
+                            if offset >= self.start_offset
+                                && offset <= self.end_offset
+                                && self.seen.insert((offset, label.clone()))
+                            {
+                                self.hints.push(SelectorInlayHint {
+                                    offset,
+                                    label,
+                                    tooltip: format!(
+                                        "Function selector for `{}`",
+                                        selector.signature
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut collector = SelectorHintCollector {
+            source,
+            start_offset,
+            end_offset,
+            contract_stack: Vec::new(),
+            selectors: SelectorContext::new(source, current_file, resolver, get_source),
+            seen: HashSet::new(),
+            hints: Vec::new(),
+            _marker: std::marker::PhantomData,
+        };
+
+        for item in source_unit.items.iter() {
+            collector.visit_item(item);
+        }
+
+        collector
+            .hints
+            .sort_by(|left, right| left.offset.cmp(&right.offset));
+        collector.hints
+    })
+    .unwrap_or_default()
+}
+
 fn signature_data_to_resolved(signature: SignatureData) -> ResolvedSignature {
     ResolvedSignature {
         label: signature.label,
@@ -578,6 +1641,130 @@ fn signature_data_to_resolved(signature: SignatureData) -> ResolvedSignature {
             .map(|param| (param.start, param.end))
             .collect(),
     }
+}
+
+fn parameter_names_for_call(
+    semantic: &SemanticContext<'_>,
+    callee: &Expr<'_>,
+    arg_count: usize,
+) -> Option<Vec<String>> {
+    let mut candidates = semantic
+        .resolve_user_call_signatures(callee)
+        .into_iter()
+        .map(parameter_names_from_signature_data)
+        .collect::<Vec<_>>();
+    candidates.extend(
+        semantic
+            .resolve_builtin_signatures(callee)
+            .into_iter()
+            .map(parameter_names_from_resolved_signature),
+    );
+    consistent_parameter_names(candidates, arg_count)
+}
+
+fn parameter_names_from_signature_data(signature: SignatureData) -> Vec<Option<String>> {
+    signature
+        .parameters
+        .into_iter()
+        .map(|parameter| extract_parameter_name(&parameter.label))
+        .collect()
+}
+
+fn parameter_names_from_resolved_signature(signature: ResolvedSignature) -> Vec<Option<String>> {
+    signature
+        .parameter_ranges
+        .into_iter()
+        .map(|(start, end)| extract_parameter_name(&signature.label[start as usize..end as usize]))
+        .collect()
+}
+
+fn consistent_parameter_names(
+    candidates: Vec<Vec<Option<String>>>,
+    arg_count: usize,
+) -> Option<Vec<String>> {
+    let candidates = candidates
+        .into_iter()
+        .filter(|candidate| candidate.len() >= arg_count)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let mut parameter_names = Vec::with_capacity(arg_count);
+    for index in 0..arg_count {
+        let mut agreed_name: Option<&str> = None;
+        for candidate in &candidates {
+            let name = candidate.get(index)?.as_deref()?;
+            if let Some(existing) = agreed_name {
+                if existing != name {
+                    return None;
+                }
+            } else {
+                agreed_name = Some(name);
+            }
+        }
+        parameter_names.push(agreed_name?.to_string());
+    }
+
+    Some(parameter_names)
+}
+
+fn declaration_hint_offset(source: &str, span: std::ops::Range<usize>) -> usize {
+    let mut offset = span.end;
+    while offset > span.start {
+        let ch = source[..offset].chars().next_back().unwrap_or_default();
+        if ch.is_whitespace() {
+            offset -= ch.len_utf8();
+            continue;
+        }
+        if matches!(ch, '{' | ';') {
+            offset -= ch.len_utf8();
+        }
+        break;
+    }
+    offset
+}
+
+fn is_selector_visible_function(function: &solar_ast::ItemFunction<'_>) -> bool {
+    matches!(
+        function.header.visibility(),
+        Some(Visibility::Public | Visibility::External)
+    ) && function.kind == FunctionKind::Function
+}
+
+fn extract_parameter_name(label: &str) -> Option<String> {
+    let parts = label.split_whitespace().collect::<Vec<_>>();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let candidate = parts.last().copied()?;
+    (is_hint_identifier(candidate) && !is_modifier_keyword(candidate))
+        .then(|| candidate.to_string())
+}
+
+fn argument_already_matches_parameter(argument: &Expr<'_>, parameter_name: &str) -> bool {
+    match &argument.peel_parens().kind {
+        ExprKind::Ident(ident) => ident.as_str() == parameter_name,
+        ExprKind::Member(_, member) => member.as_str() == parameter_name,
+        _ => false,
+    }
+}
+
+fn is_hint_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first == '$' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+}
+
+fn is_modifier_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "memory" | "storage" | "calldata" | "payable" | "indexed" | "virtual" | "override"
+    )
 }
 
 fn parse_builtin_signature(signature: &str) -> Option<ResolvedSignature> {
@@ -1108,6 +2295,15 @@ fn visit_expr_tree(expr: &Expr<'_>, visitor: &mut impl FnMut(&Expr<'_>)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolve::ImportResolver;
+
+    fn noop_source(_path: &Path) -> Option<String> {
+        None
+    }
+
+    fn noop_resolver() -> ImportResolver {
+        ImportResolver::new(None)
+    }
 
     #[test]
     fn test_parse_builtin_signature_with_nested_args() {
@@ -1151,5 +2347,90 @@ mod tests {
             find_active_call_context(source, source.len()).unwrap(),
         );
         assert_eq!(patched, "foo(bar(0));");
+    }
+
+    #[test]
+    fn test_parameter_name_hints_for_positional_arguments() {
+        let source = r#"contract Token {
+    function transfer(address recipient, uint256 amount) public {}
+
+    function run() public {
+        transfer(address(0), 1);
+    }
+}"#;
+
+        let hints = parameter_name_hints_in_range(
+            source,
+            source.find("transfer(address").unwrap(),
+            source.len(),
+            None,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        let labels = hints.into_iter().map(|hint| hint.label).collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec!["recipient:".to_string(), "amount:".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parameter_name_hints_skip_matching_identifier_names() {
+        let source = r#"contract Token {
+    function transfer(address recipient, uint256 amount) public {}
+
+    function run(address recipient, uint256 amount) public {
+        transfer(recipient, amount);
+    }
+}"#;
+
+        let hints = parameter_name_hints_in_range(
+            source,
+            source.find("transfer(recipient").unwrap(),
+            source.len(),
+            None,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn test_selector_hints_for_abi_declarations() {
+        let source = r#"interface IRouter {
+    function swap(address tokenIn, uint256 amountIn) external returns (uint256);
+}
+
+contract Router {
+    function swap(address tokenIn, uint256 amountIn) public returns (uint256) {
+        return amountIn;
+    }
+
+    function helper(uint256 amount) internal {}
+}"#;
+
+        let hints = selector_hints_in_range(
+            source,
+            0,
+            source.len(),
+            None,
+            &noop_source,
+            &noop_resolver(),
+        );
+        let labels = hints.into_iter().map(|hint| hint.label).collect::<Vec<_>>();
+
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label.starts_with("selector: "))
+                .count(),
+            2
+        );
+        assert!(labels
+            .iter()
+            .any(|label| label.starts_with("interface ID: ")));
+        assert_eq!(labels.len(), 3);
     }
 }

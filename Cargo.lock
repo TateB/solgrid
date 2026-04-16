@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "ariadne",
  "clap",
@@ -2432,6 +2432,7 @@ dependencies = [
  "solgrid_diagnostics",
  "solgrid_formatter",
  "solgrid_linter",
+ "solgrid_project",
  "solgrid_server",
  "tokio",
  "toml",
@@ -2439,8 +2440,9 @@ dependencies = [
 
 [[package]]
 name = "solgrid_ast"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
+ "sha3",
  "solar-ast",
  "solar-interface",
  "solgrid_config",
@@ -2450,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_config"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "serde",
  "solgrid_diagnostics",
@@ -2460,14 +2462,14 @@ dependencies = [
 
 [[package]]
 name = "solgrid_diagnostics"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "solgrid_formatter"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "criterion",
  "insta",
@@ -2481,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_linter"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "criterion",
  "insta",
@@ -2503,7 +2505,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_napi"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "napi",
  "napi-build",
@@ -2515,7 +2517,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_parser"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "solar-ast",
  "solar-data-structures",
@@ -2524,8 +2526,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "solgrid_project"
+version = "0.0.5"
+dependencies = [
+ "ignore",
+ "serde",
+ "solgrid_ast",
+ "solgrid_config",
+ "solgrid_parser",
+ "tempfile",
+ "tower-lsp-server",
+]
+
+[[package]]
 name = "solgrid_server"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "ignore",
  "serde",
@@ -2536,6 +2551,7 @@ dependencies = [
  "solgrid_formatter",
  "solgrid_linter",
  "solgrid_parser",
+ "solgrid_project",
  "tempfile",
  "tokio",
  "toml",
@@ -2544,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_wasm"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "serde",
  "serde_json",

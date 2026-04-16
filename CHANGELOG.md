@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added an IDE and security expansion roadmap covering a Solar-first semantic backend strategy, compiler-aware diagnostics, detector architecture, security overview UX, richer navigation, graph tooling, inlay hints, and coverage planning
+- Added a shared `solgrid_project` navigation layer plus VS Code/LSP references, document symbols, workspace symbols, import links, reference-count code lenses, and watched-file refresh for closed Solidity files
+- Added compiler-style unresolved-type/base/override/using/modifier diagnostics together with normalized finding metadata on published LSP diagnostics for upcoming security overview tooling
+- Added a VS Code security overview tree with grouping/filtering controls, finding counts, jump-to-code, and rule-help links backed directly by published solgrid diagnostics
+- Added AST-based `security/unchecked-low-level-call` and `security/user-controlled-delegatecall` semantic detectors with metadata-backed hover documentation for server-native security findings
+- Added an AST-based `security/user-controlled-eth-transfer` semantic detector for `.send`, ETH `.transfer`, and `.call{value: ...}` targets that resolve to function parameters
+- Added semantic-detector documentation plus security overview actions to rerun analysis, open native detector docs, apply available fixes, and insert `solgrid-disable-next-line` directives for suppressible findings
+- Added a real workspace rerun command for the security overview that republishes diagnostics for closed Solidity files and keeps saved-file findings visible after editors close
+- Added batch security-overview actions to suppress or apply fixes across an entire finding group from the VS Code tree
+- Added persisted ignored-baseline controls to the VS Code security overview, including single/group ignore and restore actions plus a toggle to inspect ignored findings
+- Added compiler-style unresolved-event and unresolved-error diagnostics, and covered automatic config/remapping-triggered workspace reruns in the LSP integration suite
+- Added first Milestone 4 editor tooling: import-graph and inheritance-graph generation, graph-entry code lenses with VS Code markdown preview rendering, and parameter-name inlay hints for positional call arguments
+- Added linearized inheritance graph generation, graph-entry code lenses, and ordered VS Code preview rendering on top of the Milestone 4 graph tooling
+- Added function-level control-flow graph generation with graph-entry code lenses and VS Code Markdown/Mermaid previews, while keeping cross-file modifier expansion and deeper Yul internals intentionally opaque for now
+- Added selector-oriented inlay hints for ABI-visible function declarations and interface IDs, backed by shared selector canonicalization for editor use
+- Added first inheritance-origin inlay hints for overriding declarations, showing the nearest overridden contract or implemented interface sources
+- Added same-file modifier expansion in control-flow graphs while keeping cross-file modifier applications and deeper Yul internals intentionally opaque
+- Added cross-file inherited modifier expansion in control-flow graphs by resolving modifier bodies through the linearized inheritance chain, while keeping richer node semantics and deeper Yul internals intentionally deferred
+- Added semantic node and edge kinds to graph payloads and VS Code CFG previews, including typed rendering for branches, loops, modifiers, calls, terminals, assembly, and structural flow
+- Added first-pass Yul control-flow expansion for inline assembly blocks, surfacing Yul declarations, calls, branches, switches, loops, and `leave` edges instead of collapsing assembly to a single opaque CFG node
+- Added a `solgrid graph` CLI subcommand that exports imports, inheritance, linearized inheritance, and control-flow graphs as shared JSON payloads or Mermaid diagrams using the same project graph model as the editor
+- Added contract-lineage inlay hints for derived contracts, surfacing linearized inheritance precedence directly on contract declarations alongside the existing inheritance-origin member hints
+- Added detector-aware declaration inlay hints that summarize metadata-backed findings on the nearest stable Solidity declaration instead of mirroring every detector span inline
+- Added Graphviz DOT export for `solgrid graph`, extending the shared CLI graph surface beyond JSON and Mermaid for downstream rendering pipelines
+- Added Yul function subgraphs, local call edges, and terminal builtin semantics to control-flow graphs so inline assembly no longer stops at declaration-only function nodes or generic terminal calls
+- Added inherited-member contract hints plus richer detector-aware declaration summaries with severity/confidence signal, closing the remaining Milestone 4 hint gaps
+- Added VS Code LCOV coverage ingestion with a dedicated coverage tree, actionable uncovered/partial line decorations, artifact watching, and configurable coverage artifact globs
+- Added conservative LSP/VS Code rename support for same-file and unaliased cross-file symbol graphs, while still rejecting unsafe alias-driven import scenarios
+- Added conservative LSP/VS Code call hierarchy for resolvable function and modifier declarations/call sites, plus Cobertura coverage artifact ingestion alongside the existing LCOV coverage UI
+- Added VS Code coverage run commands for Foundry LCOV/Cobertura flows plus a configurable custom coverage command with optional auto-refresh
+- Added a smart VS Code `Run Coverage` command that detects supported workspace providers and prefers the most relevant coverage flow automatically
+- Added same-file interprocedural propagation for native `delegatecall` and ETH-transfer detectors, surfacing medium-confidence helper-call findings when user-controlled arguments flow into those sinks
+- Added Hardhat coverage as a first-class VS Code provider alongside the existing Foundry and custom command flows
+- Added broader safe cross-file rename coverage for aliased declaration sites and namespace-import member references while continuing to reject ambiguous alias-usage rewrites
+- Added LSP semantic tokens for Solidity declarations and high-signal references, including namespace-import aliases and imported type sites
+- Added `textDocument/semanticTokens/range` support so editors can request visible-range Solidity semantic tokens without waiting on full-file tokenization
+- Added `textDocument/semanticTokens/full/delta` support with version-backed result IDs so editors can skip full-token refreshes when Solidity buffers are unchanged
+- Added deeper Solidity semantic-token coverage so named import aliases preserve common imported symbol kinds and readonly modifiers now propagate to constant/immutable state variables and enum members
+
+### Fixed
+- Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
+- Fixed overlapping ETH-send diagnostics to suppress broad `security/arbitrary-send-eth` findings when the semantic user-controlled transfer detector covers the same call site
 
 ## [0.0.5] - 2026-04-01
 

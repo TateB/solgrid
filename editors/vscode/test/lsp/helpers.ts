@@ -34,6 +34,7 @@ export interface Diagnostic {
   code?: string | number;
   source?: string;
   message: string;
+  data?: unknown;
 }
 
 export interface PublishDiagnosticsParams {
@@ -60,6 +61,11 @@ export interface Hover {
   range?: Range;
 }
 
+export interface Location {
+  uri: string;
+  range: Range;
+}
+
 export interface CompletionItem {
   label: string;
   kind?: number;
@@ -67,6 +73,70 @@ export interface CompletionItem {
   insertText?: string;
   sortText?: string;
   additionalTextEdits?: TextEdit[];
+}
+
+export interface DocumentSymbol {
+  name: string;
+  detail?: string;
+  kind: number;
+  range: Range;
+  selectionRange: Range;
+  children?: DocumentSymbol[];
+}
+
+export interface DocumentLink {
+  range: Range;
+  target?: string;
+  tooltip?: string;
+}
+
+export interface Command {
+  title: string;
+  command: string;
+  arguments?: unknown[];
+}
+
+export interface CodeLens {
+  range: Range;
+  command?: Command;
+  data?: unknown;
+}
+
+export interface SymbolInformation {
+  name: string;
+  kind: number;
+  location: Location;
+  containerName?: string;
+}
+
+export interface WorkspaceEdit {
+  changes?: Record<string, TextEdit[]>;
+}
+
+export interface PrepareRenameResponse {
+  range: Range;
+  placeholder?: string;
+  defaultBehavior?: boolean;
+}
+
+export interface CallHierarchyItem {
+  name: string;
+  kind: number;
+  detail?: string;
+  uri: string;
+  range: Range;
+  selectionRange: Range;
+  data?: unknown;
+}
+
+export interface CallHierarchyIncomingCall {
+  from: CallHierarchyItem;
+  fromRanges: Range[];
+}
+
+export interface CallHierarchyOutgoingCall {
+  to: CallHierarchyItem;
+  fromRanges: Range[];
 }
 
 export interface ParameterInformation {
@@ -87,6 +157,43 @@ export interface SignatureHelp {
   activeParameter?: number;
 }
 
+export interface InlayHint {
+  position: Position;
+  label: string | Array<{ value: string }>;
+  kind?: number;
+  paddingLeft?: boolean;
+  paddingRight?: boolean;
+}
+
+export interface SemanticTokensLegend {
+  tokenTypes: string[];
+  tokenModifiers: string[];
+}
+
+export interface SemanticTokens {
+  resultId?: string;
+  data: number[];
+}
+
+export interface SemanticTokensEdit {
+  start: number;
+  deleteCount: number;
+  data?: number[];
+}
+
+export interface SemanticTokensDelta {
+  resultId?: string;
+  edits: SemanticTokensEdit[];
+}
+
+export interface SemanticTokenEntry {
+  line: number;
+  startChar: number;
+  length: number;
+  tokenType: string;
+  tokenModifiers: string[];
+}
+
 export interface InitializeResult {
   capabilities: {
     textDocumentSync?: {
@@ -96,10 +203,27 @@ export interface InitializeResult {
       willSaveWaitUntil?: boolean;
     };
     codeActionProvider?: unknown;
+    definitionProvider?: boolean | unknown;
+    referencesProvider?: boolean | unknown;
+    documentSymbolProvider?: boolean | unknown;
+    workspaceSymbolProvider?: boolean | unknown;
+    documentLinkProvider?: {
+      resolveProvider?: boolean;
+    };
     documentFormattingProvider?: boolean | unknown;
     documentRangeFormattingProvider?: boolean | unknown;
     hoverProvider?: boolean | unknown;
+    renameProvider?: boolean | unknown;
+    callHierarchyProvider?: boolean | unknown;
+    codeLensProvider?: { resolveProvider?: boolean };
+    executeCommandProvider?: { commands?: string[] };
     completionProvider?: { triggerCharacters?: string[] };
+    inlayHintProvider?: unknown;
+    semanticTokensProvider?: {
+      legend?: SemanticTokensLegend;
+      full?: unknown;
+      range?: unknown;
+    };
     signatureHelpProvider?: {
       triggerCharacters?: string[];
       retriggerCharacters?: string[];
@@ -167,9 +291,19 @@ export async function initializeServer(
         },
         formatting: {},
         rangeFormatting: {},
+        definition: {},
+        references: {},
+        documentSymbol: {
+          hierarchicalDocumentSymbolSupport: true,
+        },
+        documentLink: {
+          tooltipSupport: true,
+        },
         hover: {
           contentFormat: ["markdown", "plaintext"],
         },
+        codeLens: {},
+        inlayHint: {},
         completion: {
           completionItem: {
             snippetSupport: false,
@@ -339,6 +473,192 @@ export async function requestCompletion(
   });
 }
 
+export async function requestReferences(
+  client: TestLspClient,
+  uri: string,
+  position: Position,
+  includeDeclaration = false
+): Promise<Location[] | null> {
+  return client.request("textDocument/references", {
+    textDocument: { uri },
+    position,
+    context: { includeDeclaration },
+  });
+}
+
+export async function requestPrepareRename(
+  client: TestLspClient,
+  uri: string,
+  position: Position
+): Promise<PrepareRenameResponse | null> {
+  return client.request("textDocument/prepareRename", {
+    textDocument: { uri },
+    position,
+  });
+}
+
+export async function requestRename(
+  client: TestLspClient,
+  uri: string,
+  position: Position,
+  newName: string
+): Promise<WorkspaceEdit | null> {
+  return client.request("textDocument/rename", {
+    textDocument: { uri },
+    position,
+    newName,
+  });
+}
+
+export async function requestPrepareCallHierarchy(
+  client: TestLspClient,
+  uri: string,
+  position: Position
+): Promise<CallHierarchyItem[] | null> {
+  return client.request("textDocument/prepareCallHierarchy", {
+    textDocument: { uri },
+    position,
+  });
+}
+
+export async function requestIncomingCalls(
+  client: TestLspClient,
+  item: CallHierarchyItem
+): Promise<CallHierarchyIncomingCall[] | null> {
+  return client.request("callHierarchy/incomingCalls", { item });
+}
+
+export async function requestOutgoingCalls(
+  client: TestLspClient,
+  item: CallHierarchyItem
+): Promise<CallHierarchyOutgoingCall[] | null> {
+  return client.request("callHierarchy/outgoingCalls", { item });
+}
+
+export async function requestDocumentSymbols(
+  client: TestLspClient,
+  uri: string
+): Promise<DocumentSymbol[] | SymbolInformation[] | null> {
+  return client.request("textDocument/documentSymbol", {
+    textDocument: { uri },
+  });
+}
+
+export async function requestWorkspaceSymbols(
+  client: TestLspClient,
+  query: string
+): Promise<SymbolInformation[] | null> {
+  const result = await client.request<
+    SymbolInformation[] | { Flat?: SymbolInformation[] } | { flat?: SymbolInformation[] } | null
+  >("workspace/symbol", { query });
+
+  if (Array.isArray(result) || result === null) {
+    return result;
+  }
+
+  if ("Flat" in result && Array.isArray(result.Flat)) {
+    return result.Flat;
+  }
+
+  if ("flat" in result && Array.isArray(result.flat)) {
+    return result.flat;
+  }
+
+  return null;
+}
+
+export async function requestDocumentLinks(
+  client: TestLspClient,
+  uri: string
+): Promise<DocumentLink[] | null> {
+  return client.request("textDocument/documentLink", {
+    textDocument: { uri },
+  });
+}
+
+export async function requestCodeLenses(
+  client: TestLspClient,
+  uri: string
+): Promise<CodeLens[] | null> {
+  return client.request("textDocument/codeLens", {
+    textDocument: { uri },
+  });
+}
+
+export async function requestInlayHints(
+  client: TestLspClient,
+  uri: string,
+  range: Range
+): Promise<InlayHint[] | null> {
+  return client.request("textDocument/inlayHint", {
+    textDocument: { uri },
+    range,
+  });
+}
+
+export async function requestSemanticTokens(
+  client: TestLspClient,
+  uri: string
+): Promise<SemanticTokens | null> {
+  return client.request("textDocument/semanticTokens/full", {
+    textDocument: { uri },
+  });
+}
+
+export async function requestSemanticTokensRange(
+  client: TestLspClient,
+  uri: string,
+  range: Range
+): Promise<SemanticTokens | null> {
+  return client.request("textDocument/semanticTokens/range", {
+    textDocument: { uri },
+    range,
+  });
+}
+
+export async function requestSemanticTokensFullDelta(
+  client: TestLspClient,
+  uri: string,
+  previousResultId: string
+): Promise<SemanticTokens | SemanticTokensDelta | null> {
+  return client.request("textDocument/semanticTokens/full/delta", {
+    textDocument: { uri },
+    previousResultId,
+  });
+}
+
+export function decodeSemanticTokens(
+  result: SemanticTokens,
+  legend: SemanticTokensLegend
+): SemanticTokenEntry[] {
+  const tokens: SemanticTokenEntry[] = [];
+  let line = 0;
+  let startChar = 0;
+
+  for (let index = 0; index < result.data.length; index += 5) {
+    const deltaLine = result.data[index];
+    const deltaStart = result.data[index + 1];
+    const length = result.data[index + 2];
+    const tokenTypeIndex = result.data[index + 3];
+    const modifierBitset = result.data[index + 4];
+
+    line += deltaLine;
+    startChar = deltaLine === 0 ? startChar + deltaStart : deltaStart;
+
+    tokens.push({
+      line,
+      startChar,
+      length,
+      tokenType: legend.tokenTypes[tokenTypeIndex] ?? `unknown:${tokenTypeIndex}`,
+      tokenModifiers: legend.tokenModifiers.filter(
+        (_modifier, modifierIndex) => (modifierBitset & (1 << modifierIndex)) !== 0
+      ),
+    });
+  }
+
+  return tokens;
+}
+
 export async function requestSignatureHelp(
   client: TestLspClient,
   uri: string,
@@ -350,6 +670,17 @@ export async function requestSignatureHelp(
   });
 }
 
+export async function requestExecuteCommand<T = unknown>(
+  client: TestLspClient,
+  command: string,
+  args: unknown[] = []
+): Promise<T | null> {
+  return client.request("workspace/executeCommand", {
+    command,
+    arguments: args,
+  });
+}
+
 export async function requestWillSaveWaitUntil(
   client: TestLspClient,
   uri: string
@@ -358,6 +689,13 @@ export async function requestWillSaveWaitUntil(
     textDocument: { uri },
     reason: 1, // Manual save
   });
+}
+
+export function notifyWatchedFilesChanged(
+  client: TestLspClient,
+  changes: Array<{ uri: string; type: 1 | 2 | 3 }>
+): void {
+  client.notify("workspace/didChangeWatchedFiles", { changes });
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ Planned improvements and future work for solgrid.
 
 ## Current Focus
 
-- [ ] Execute the IDE and security expansion roadmap in [docs/editor-security-roadmap.md](./docs/editor-security-roadmap.md)
+- [x] Execute the IDE and security expansion roadmap in [docs/editor-security-roadmap.md](./docs/editor-security-roadmap.md)
 
 ## IDE and Security Platform
 
@@ -12,12 +12,14 @@ Planned improvements and future work for solgrid.
 - [ ] Add compiler-aware diagnostics with a Rust-native semantic backend (`solar` / `solar-sema` first), plus version/import/type validation and LSP/CLI reporting
 - [ ] Add a detector platform with reusable metadata (severity, confidence, docs, suppression) and semantic/interprocedural analyses
 - [ ] Ship a VS Code security overview with grouped/filterable findings, rerun controls, docs links, and suppression flows
-- [ ] Close the navigation gap with find references, document links, document symbols, workspace symbols, and contract outline support
-- [ ] Add code lens for references, selectors, and graph actions
-- [ ] Add graph tooling for control flow, inheritance, linearized inheritance, and imports with CLI export plus VS Code previews
-- [ ] Add inlay hints for high-signal Solidity context (parameter names, selectors, inheritance metadata, detector annotations)
-- [ ] Add coverage ingestion and editor UI, starting from Foundry/Hardhat-produced artifacts before attempting a native runner
-- [ ] Add editor polish items that improve parity or surpass it: semantic tokens, rename, call hierarchy, ignore baselines, and richer commands
+- [ ] Decide whether any server-native semantic detector should expose an editor autofix, or keep native-detector remediation as documentation/suppression-only until a semantics-preserving rewrite is defensible
+- [ ] Extend the current navigation surface beyond the shipped references, document links, document symbols, workspace symbols, outline support, and first code lens
+- [ ] Extend code lens beyond the shipped reference counts and graph entry points
+- [x] Add coverage ingestion and editor UI, starting from imported workspace coverage artifacts before attempting a native runner
+- [ ] Extend semantic/interprocedural detector depth beyond the shipped same-file helper propagation, especially across inheritance and cross-file call edges
+- [ ] Decide whether coverage should grow beyond the shipped Foundry/Hardhat/custom command surface into provider-specific artifact management or stay intentionally thin
+- [ ] Deepen the shipped semantic-token surface beyond the current full/delta/range declarations, readonly markings, and high-signal references, especially for more ambiguous cross-file and member-heavy cases
+- [ ] Add editor polish items that improve parity or surpass it: broader rename/call-hierarchy support under ambiguous graphs and richer commands
 
 ## Performance
 

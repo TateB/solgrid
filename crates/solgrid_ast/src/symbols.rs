@@ -4,7 +4,7 @@
 use crate::span_to_range;
 use solgrid_parser::solar_ast::{
     DataLocation, FunctionKind, ImportItems, ItemFunction, ItemKind, Stmt, StmtKind, Type,
-    TypeKind, VariableDefinition,
+    TypeKind, VariableDefinition, Visibility,
 };
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
@@ -137,6 +137,8 @@ pub struct SymbolDef {
     pub type_info: Option<TypeSpec>,
     /// Callable signature metadata for functions and modifiers.
     pub signature: Option<SignatureData>,
+    /// Visibility for declarations that expose it in Solidity syntax.
+    pub visibility: Option<Visibility>,
 }
 
 /// An import statement with its path and imported symbols.
@@ -253,6 +255,28 @@ impl SymbolTable {
                     SymbolKind::Constructor | SymbolKind::Function | SymbolKind::Modifier
                 ) && sym.def_span.contains(&offset)
                 {
+                    match best {
+                        None => best = Some(sym),
+                        Some(prev) if sym.def_span.len() < prev.def_span.len() => {
+                            best = Some(sym);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// Find the narrowest declaration that contains `offset`.
+    ///
+    /// This excludes lexical symbols such as locals and parameters so editor
+    /// surfaces can anchor annotations to stable declaration lines.
+    pub fn find_enclosing_declaration(&self, offset: usize) -> Option<&SymbolDef> {
+        let mut best: Option<&SymbolDef> = None;
+        for scope in &self.scopes {
+            for sym in &scope.symbols {
+                if is_declaration_anchor_kind(sym.kind) && sym.def_span.contains(&offset) {
                     match best {
                         None => best = Some(sym),
                         Some(prev) if sym.def_span.len() < prev.def_span.len() => {
@@ -439,6 +463,24 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
+fn is_declaration_anchor_kind(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Contract
+            | SymbolKind::Interface
+            | SymbolKind::Library
+            | SymbolKind::Constructor
+            | SymbolKind::Function
+            | SymbolKind::Modifier
+            | SymbolKind::Event
+            | SymbolKind::Error
+            | SymbolKind::Struct
+            | SymbolKind::Enum
+            | SymbolKind::Udvt
+            | SymbolKind::StateVariable
+    )
+}
+
 pub(crate) fn normalize_whitespace(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut prev_was_ws = false;
@@ -613,6 +655,7 @@ fn collect_item(
                     scope: Some(contract_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
 
@@ -641,6 +684,7 @@ fn collect_item(
                         scope: Some(func_scope),
                         type_info: None,
                         signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
                     },
                 );
             } else if func.kind == FunctionKind::Constructor {
@@ -655,6 +699,7 @@ fn collect_item(
                         scope: Some(func_scope),
                         type_info: None,
                         signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
                     },
                 );
             }
@@ -679,6 +724,7 @@ fn collect_item(
                                 param_def_span.start,
                             )),
                             signature: None,
+                            visibility: None,
                         },
                     );
                 }
@@ -705,6 +751,7 @@ fn collect_item(
                                     param_def_span.start,
                                 )),
                                 signature: None,
+                                visibility: None,
                             },
                         );
                     }
@@ -735,6 +782,7 @@ fn collect_item(
                             span_to_range(item.span).start,
                         )),
                         signature: None,
+                        visibility: var.visibility,
                     },
                 );
             }
@@ -752,6 +800,7 @@ fn collect_item(
                     scope: None,
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
         }
@@ -768,6 +817,7 @@ fn collect_item(
                     scope: None,
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
         }
@@ -786,6 +836,7 @@ fn collect_item(
                     scope: Some(struct_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
             // Register struct fields.
@@ -808,6 +859,7 @@ fn collect_item(
                                 f_def_span.start,
                             )),
                             signature: None,
+                            visibility: None,
                         },
                     );
                 }
@@ -828,6 +880,7 @@ fn collect_item(
                     scope: Some(enum_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
 
@@ -844,6 +897,7 @@ fn collect_item(
                         scope: None,
                         type_info: None,
                         signature: None,
+                        visibility: None,
                     },
                 );
             }
@@ -866,6 +920,7 @@ fn collect_item(
                         span_to_range(item.span).start,
                     )),
                     signature: None,
+                    visibility: None,
                 },
             );
         }
@@ -928,6 +983,7 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                             span_to_range(stmt.span).start,
                         )),
                         signature: None,
+                        visibility: None,
                     },
                 );
             }
@@ -953,6 +1009,7 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                                     span_to_range(var.span).start,
                                 )),
                                 signature: None,
+                                visibility: None,
                             },
                         );
                     }
@@ -1117,6 +1174,42 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7; // on 'a'
         let def = table.resolve("a", offset).unwrap();
         assert_eq!(def.kind, SymbolKind::Parameter);
+    }
+
+    #[test]
+    fn test_find_enclosing_declaration_prefers_stable_declaration_symbols() {
+        let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 public threshold;
+    event Flagged(address indexed account);
+
+    function run(uint256 amount) public {
+        uint256 localValue = amount;
+        if (localValue > threshold) {
+            emit Flagged(msg.sender);
+        }
+    }
+}
+"#;
+        let table = table_for(source);
+
+        let local_offset = source.find("localValue >").unwrap();
+        let enclosing = table.find_enclosing_declaration(local_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::Function);
+        assert_eq!(enclosing.name, "run");
+
+        let state_offset = source.find("threshold;").unwrap();
+        let enclosing = table.find_enclosing_declaration(state_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::StateVariable);
+        assert_eq!(enclosing.name, "threshold");
+
+        let event_offset = source.find("Flagged(address").unwrap();
+        let enclosing = table.find_enclosing_declaration(event_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::Event);
+        assert_eq!(enclosing.name, "Flagged");
     }
 
     #[test]

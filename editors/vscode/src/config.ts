@@ -23,6 +23,13 @@ export interface EditorSaveConfig {
   defaultFormatter: string | null;
 }
 
+export interface CoverageExtensionConfig {
+  enable: boolean;
+  artifacts: string[];
+  autoRefreshAfterRun: boolean;
+  customCommand: string[];
+}
+
 /** Default configuration values. */
 export const DEFAULT_CONFIG: SolgridConfig = {
   enable: true,
@@ -36,6 +43,18 @@ export const DEFAULT_CONFIG: SolgridConfig = {
 export const DEFAULT_EDITOR_SAVE_CONFIG: EditorSaveConfig = {
   formatOnSave: false,
   defaultFormatter: null,
+};
+
+export const DEFAULT_COVERAGE_CONFIG: CoverageExtensionConfig = {
+  enable: true,
+  artifacts: [
+    "**/lcov.info",
+    "**/*.lcov",
+    "**/cobertura*.xml",
+    "**/coverage.xml",
+  ],
+  autoRefreshAfterRun: true,
+  customCommand: [],
 };
 
 /**

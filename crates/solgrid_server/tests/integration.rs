@@ -2,9 +2,8 @@
 
 use solgrid_config::Config;
 use solgrid_linter::LintEngine;
-use solgrid_server::{
-    actions, completion, convert, diagnostics, format, hover, resolve, workspace_index,
-};
+use solgrid_project::ProjectIndex;
+use solgrid_server::{actions, completion, convert, diagnostics, format, hover, resolve};
 use std::path::Path;
 use tower_lsp_server::ls_types;
 
@@ -309,7 +308,7 @@ fn test_completion_after_disable_directive() {
     let source = "// solgrid-disable-next-line \ncontract Test {}\n";
     let position = ls_types::Position::new(0, 29);
     let uri = noop_uri();
-    let index = workspace_index::WorkspaceIndex::new();
+    let index = ProjectIndex::new(None);
     let resolver = resolve::ImportResolver::new(None);
 
     let items = completion::completions(
@@ -335,7 +334,7 @@ fn test_completion_typing_solgrid_comment() {
     let source = "// sol\ncontract Test {}\n";
     let position = ls_types::Position::new(0, 6);
     let uri = noop_uri();
-    let index = workspace_index::WorkspaceIndex::new();
+    let index = ProjectIndex::new(None);
     let resolver = resolve::ImportResolver::new(None);
 
     let items = completion::completions(
@@ -364,7 +363,7 @@ fn test_completion_not_in_code() {
     let source = "contract Test { uint x; }\n";
     let position = ls_types::Position::new(0, 10);
     let uri = noop_uri();
-    let index = workspace_index::WorkspaceIndex::new();
+    let index = ProjectIndex::new(None);
     let resolver = resolve::ImportResolver::new(None);
 
     let items = completion::completions(

@@ -31,6 +31,128 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "solgrid.securityOverview.refresh",
+        "title": "solgrid: Rerun Security Analysis"
+      },
+      {
+        "command": "solgrid.securityOverview.groupByFile",
+        "title": "solgrid: Group Security Overview by File"
+      },
+      {
+        "command": "solgrid.securityOverview.groupBySeverity",
+        "title": "solgrid: Group Security Overview by Severity"
+      },
+      {
+        "command": "solgrid.securityOverview.groupByConfidence",
+        "title": "solgrid: Group Security Overview by Confidence"
+      },
+      {
+        "command": "solgrid.securityOverview.groupByFinding",
+        "title": "solgrid: Group Security Overview by Finding"
+      },
+      {
+        "command": "solgrid.securityOverview.showSecurity",
+        "title": "solgrid: Security Overview Filter Security Focus"
+      },
+      {
+        "command": "solgrid.securityOverview.showAll",
+        "title": "solgrid: Security Overview Show All"
+      },
+      {
+        "command": "solgrid.securityOverview.showCompiler",
+        "title": "solgrid: Security Overview Show Compiler"
+      },
+      {
+        "command": "solgrid.securityOverview.showDetectors",
+        "title": "solgrid: Security Overview Show Detectors"
+      },
+      {
+        "command": "solgrid.securityOverview.openFinding",
+        "title": "solgrid: Open Security Finding"
+      },
+      {
+        "command": "solgrid.securityOverview.openHelp",
+        "title": "solgrid: Open Finding Documentation"
+      },
+      {
+        "command": "solgrid.securityOverview.suppressNextLine",
+        "title": "solgrid: Suppress Finding on Next Line"
+      },
+      {
+        "command": "solgrid.securityOverview.applyFix",
+        "title": "solgrid: Apply Finding Fix"
+      },
+      {
+        "command": "solgrid.securityOverview.suppressGroupNextLine",
+        "title": "solgrid: Suppress Group Findings on Next Line"
+      },
+      {
+        "command": "solgrid.securityOverview.applyGroupFixes",
+        "title": "solgrid: Apply Group Fixes"
+      },
+      {
+        "command": "solgrid.securityOverview.ignoreFinding",
+        "title": "solgrid: Ignore Finding in Security Overview"
+      },
+      {
+        "command": "solgrid.securityOverview.restoreFinding",
+        "title": "solgrid: Restore Ignored Finding in Security Overview"
+      },
+      {
+        "command": "solgrid.securityOverview.ignoreGroup",
+        "title": "solgrid: Ignore Group in Security Overview"
+      },
+      {
+        "command": "solgrid.securityOverview.restoreGroup",
+        "title": "solgrid: Restore Ignored Group in Security Overview"
+      },
+      {
+        "command": "solgrid.securityOverview.toggleShowIgnored",
+        "title": "solgrid: Toggle Ignored Security Findings"
+      },
+      {
+        "command": "solgrid.securityOverview.clearIgnoredBaselines",
+        "title": "solgrid: Clear Ignored Security Baselines"
+      },
+      {
+        "command": "solgrid.graph.showImports",
+        "title": "solgrid: Show Imports Graph"
+      },
+      {
+        "command": "solgrid.coverage.refresh",
+        "title": "solgrid: Refresh Coverage"
+      },
+      {
+        "command": "solgrid.coverage.run",
+        "title": "solgrid: Run Coverage"
+      },
+      {
+        "command": "solgrid.coverage.runFoundryLcov",
+        "title": "solgrid: Run Foundry Coverage (LCOV)"
+      },
+      {
+        "command": "solgrid.coverage.runFoundryCobertura",
+        "title": "solgrid: Run Foundry Coverage (Cobertura)"
+      },
+      {
+        "command": "solgrid.coverage.runHardhatLcov",
+        "title": "solgrid: Run Hardhat Coverage (LCOV)"
+      },
+      {
+        "command": "solgrid.coverage.runCustom",
+        "title": "solgrid: Run Custom Coverage Command"
+      },
+      {
+        "command": "solgrid.coverage.showActionable",
+        "title": "solgrid: Coverage Show Actionable"
+      },
+      {
+        "command": "solgrid.coverage.showAll",
+        "title": "solgrid: Coverage Show All Files"
+      }
+    ],
     "configuration": {
       "title": "solgrid",
       "properties": {
@@ -69,6 +191,37 @@
           ],
           "default": null,
           "description": "Path to solgrid.toml. If null, auto-discovers from workspace root."
+        },
+        "solgrid.coverage.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LCOV/Cobertura coverage artifact ingestion, summary views, and editor decorations."
+        },
+        "solgrid.coverage.artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/lcov.info",
+            "**/*.lcov",
+            "**/cobertura*.xml",
+            "**/coverage.xml"
+          ],
+          "description": "Glob patterns used to discover LCOV and Cobertura coverage artifacts in the workspace."
+        },
+        "solgrid.coverage.autoRefreshAfterRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the coverage view automatically after a coverage command completes successfully."
+        },
+        "solgrid.coverage.customCommand": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Custom coverage command as an argv-style string array, for example [\"pnpm\", \"run\", \"coverage\"]."
         }
       }
     },
@@ -90,7 +243,135 @@
         "scopeName": "source.solidity",
         "path": "./syntaxes/solidity.tmLanguage.json"
       }
-    ]
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "solgridSecurityOverview",
+          "name": "solgrid Security"
+        },
+        {
+          "id": "solgridCoverageOverview",
+          "name": "solgrid Coverage"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "solgrid.securityOverview.refresh",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation"
+        },
+        {
+          "command": "solgrid.securityOverview.showSecurity",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation@1"
+        },
+        {
+          "command": "solgrid.securityOverview.showAll",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation@2"
+        },
+        {
+          "command": "solgrid.securityOverview.groupByFile",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation@3"
+        },
+        {
+          "command": "solgrid.securityOverview.toggleShowIgnored",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation@4"
+        },
+        {
+          "command": "solgrid.securityOverview.clearIgnoredBaselines",
+          "when": "view == solgridSecurityOverview",
+          "group": "navigation@5"
+        },
+        {
+          "command": "solgrid.coverage.refresh",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation"
+        },
+        {
+          "command": "solgrid.coverage.run",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@1"
+        },
+        {
+          "command": "solgrid.coverage.runFoundryLcov",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@2"
+        },
+        {
+          "command": "solgrid.coverage.runHardhatLcov",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@3"
+        },
+        {
+          "command": "solgrid.coverage.runCustom",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@4"
+        },
+        {
+          "command": "solgrid.coverage.showActionable",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@4"
+        },
+        {
+          "command": "solgrid.coverage.showAll",
+          "when": "view == solgridCoverageOverview",
+          "group": "navigation@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "solgrid.securityOverview.openHelp",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )help( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressNextLine",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.applyFix",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )fixable( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.ignoreFinding",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )ignorable( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.restoreFinding",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )restorable( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressGroupNextLine",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.applyGroupFixes",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )fixable( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.ignoreGroup",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )ignorable( |$)/",
+          "group": "inline"
+        },
+        {
+          "command": "solgrid.securityOverview.restoreGroup",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )restorable( |$)/",
+          "group": "inline"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run compile",

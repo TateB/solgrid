@@ -359,17 +359,12 @@ This is the point where `solgrid` starts to feel meaningfully closer to Wake in 
 
 ### Milestone 4: Graphs and Hints
 
-- imports, inheritance, and linearized inheritance graphs
-- control-flow graph
-- code lens for graph entry points
-- first inlay hints
+- complete: imports, inheritance, linearized inheritance, and control-flow graphs, graph-entry code lens, inline-assembly Yul expansion with local function subgraphs and terminal builtin semantics, CLI graph export surfaces in JSON, Mermaid, and DOT, and parameter-name plus selector/interface-ID, inheritance-origin, inherited-member, contract-lineage, and detector-aware declaration inlay hints
 
 ### Milestone 5: Coverage and Advanced Analysis
 
-- coverage artifact ingestion
-- coverage decorations and summary view
-- stronger semantic/interprocedural detectors
-- rename and call hierarchy if symbol stability is strong enough
+- complete: LCOV/Cobertura coverage artifact ingestion, VS Code coverage decorations and summary view, provider-aware Foundry, Hardhat, and custom coverage run commands, stronger same-file interprocedural semantic detectors for helper-mediated delegatecall and ETH-transfer flows, conservative rename for same-file plus safe cross-file symbol graphs, and conservative call hierarchy for resolvable function and modifier declarations/call sites
+- future depth work: cross-file or inheritance-aware interprocedural detectors, deeper semantic-token coverage beyond the shipped full/delta/range declaration, readonly, and high-signal reference slice, broader rename/call-hierarchy support under ambiguous overload or alias graphs, and any provider-specific coverage polish beyond the shipped command and artifact surface
 
 ## Testing and Verification Plan
 

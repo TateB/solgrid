@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  DEFAULT_COVERAGE_CONFIG,
   DEFAULT_EDITOR_SAVE_CONFIG,
   SolgridConfig,
   DEFAULT_CONFIG,
@@ -20,6 +21,20 @@ describe("DEFAULT_CONFIG", () => {
     expect(DEFAULT_CONFIG.fixOnSaveUnsafe).toBe(false);
     expect(DEFAULT_CONFIG.formatOnSave).toBe(true);
     expect(DEFAULT_CONFIG.configPath).toBeNull();
+  });
+});
+
+describe("DEFAULT_COVERAGE_CONFIG", () => {
+  it("discovers standard LCOV and Cobertura artifact locations by default", () => {
+    expect(DEFAULT_COVERAGE_CONFIG.enable).toBe(true);
+    expect(DEFAULT_COVERAGE_CONFIG.artifacts).toEqual([
+      "**/lcov.info",
+      "**/*.lcov",
+      "**/cobertura*.xml",
+      "**/coverage.xml",
+    ]);
+    expect(DEFAULT_COVERAGE_CONFIG.autoRefreshAfterRun).toBe(true);
+    expect(DEFAULT_COVERAGE_CONFIG.customCommand).toEqual([]);
   });
 });
 
