@@ -32,6 +32,8 @@ export interface FormatOptions {
   overrideSpacing?: boolean
   /** solgrid-specific: wrap comments to fit within line length. */
   wrapComments?: boolean
+  /** solgrid-specific: "leading" or "trailing" multiline binary operators. */
+  operatorLineBreak?: string
   /** solgrid-specific: sort import statements alphabetically. */
   sortImports?: boolean
   /** solgrid-specific: "attributes_first", "params_first", or "all". */

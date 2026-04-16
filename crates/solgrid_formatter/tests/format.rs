@@ -1,6 +1,6 @@
 //! Integration tests for the solgrid formatter.
 
-use solgrid_config::FormatConfig;
+use solgrid_config::{FormatConfig, OperatorLineBreak};
 use solgrid_formatter::{check_formatted, format_source, format_source_verified};
 
 fn default_config() -> FormatConfig {
@@ -107,6 +107,120 @@ fn test_format_constructor() {
     let source = "contract T {\n    constructor(uint256 x) {\n        value = x;\n    }\n}\n";
     let formatted = format_source(source, &default_config()).unwrap();
     assert!(formatted.contains("constructor("));
+}
+
+#[test]
+fn test_preserve_constructor_base_comment_in_header() {
+    let source = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    constructor(
+        INameWrapper nameWrapper,
+        VerifiableFactory verifiableFactory,
+        address ensV1Resolver,
+        IHCAFactoryBasic hcaFactory,
+        IRegistryMetadata metadataProvider
+    )
+        PermissionedRegistry(hcaFactory, metadataProvider, address(0), 0) // no roles are granted
+        LockedWrapperReceiver(nameWrapper, verifiableFactory, address(this))
+    {
+        V1_RESOLVER = ensV1Resolver;
+        _disableInitializers();
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_on_last_modifier_when_modifiers_share_a_line() {
+    let source = r#"contract T {
+    function f() public onlyOwner whenNotPaused // note
+    {
+        return;
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner\n        whenNotPaused // note"),
+        "expected comment to stay attached to the last modifier, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("onlyOwner // note"),
+        "comment moved onto the wrong modifier:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_preserve_comment_on_returns_instead_of_last_modifier() {
+    let source = r#"contract T {
+    function f() public onlyOwner returns (uint256) // note
+    {
+        return 1;
+    }
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner\n        returns (uint256) // note"),
+        "expected comment to stay attached to returns, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("onlyOwner // note"),
+        "comment moved onto the wrong modifier:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_keep_semicolon_outside_modifier_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external onlyOwner // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("onlyOwner // note\n    ;"),
+        "expected semicolon on its own line after modifier line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by modifier line comment:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_keep_semicolon_outside_returns_line_comment_in_bodyless_function() {
+    let source = r#"interface T {
+    function f() external returns (uint256) // note
+    ;
+}
+"#;
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains("returns (uint256) // note\n    ;"),
+        "expected semicolon on its own line after returns line comment, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("// note;"),
+        "semicolon was commented out by returns line comment:\n{formatted}"
+    );
 }
 
 #[test]
@@ -333,6 +447,61 @@ fn test_keep_ternary_continuation_indented() {
 "#;
 
     let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_align_ternary_branches_with_multiline_binary_condition() {
+    let source = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+                keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) ==
+                keccak256(name)
+                ? registry
+                : IRegistry(address(0));
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+            keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) == keccak256(name)
+            ? registry
+            : IRegistry(address(0));
+    }
+}
+"#;
+
+    let config = FormatConfig {
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_indented_ternary_branches_for_single_line_binary_condition() {
+    let source = r#"contract T {
+    function f(bool a, bool b, uint256 x, uint256 y) internal pure returns (uint256) {
+        return a == b ? veryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(x, y, x, y, x, y) : anotherVeryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(y, x, y, x, y, x);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bool a, bool b, uint256 x, uint256 y) internal pure returns (uint256) {
+        return
+            a == b
+                ? veryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(x, y, x, y, x, y)
+                : anotherVeryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(y, x, y, x, y, x);
+    }
+}
+"#;
+
+    let formatted = format_source_verified(source, &default_config()).unwrap();
     assert_eq!(formatted, expected);
 }
 
@@ -603,6 +772,29 @@ import "./B.sol";
     let c_pos = formatted.find("C.sol").unwrap();
     assert!(a_pos < b_pos, "A.sol should come before B.sol");
     assert!(b_pos < c_pos, "B.sol should come before C.sol");
+}
+
+#[test]
+fn test_sort_imports_respects_import_groups() {
+    let source = r#"import "./Local.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "forge-std/Test.sol";
+import "../Parent.sol";
+"#;
+    let config = FormatConfig {
+        sort_imports: true,
+        import_order: vec![
+            "^forge-std/".into(),
+            "^@?\\w".into(),
+            "^\\.\\./".into(),
+            "^\\./".into(),
+        ],
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert!(formatted.contains(
+        "import \"forge-std/Test.sol\";\n\nimport \"@openzeppelin/contracts/access/Ownable.sol\";\n\nimport \"../Parent.sol\";\n\nimport \"./Local.sol\";"
+    ));
 }
 
 // --- UDVT formatting ---
@@ -931,6 +1123,22 @@ fn test_no_blank_line_between_imports() {
 }
 
 #[test]
+fn test_insert_blank_lines_between_import_groups() {
+    let source = r#"import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "../utils/LibString.sol";
+import "./StandaloneReverseRegistrar.sol";
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(
+        formatted.contains(
+            "ERC165.sol\";\n\nimport \"../utils/LibString.sol\";\n\nimport \"./StandaloneReverseRegistrar.sol\";"
+        ),
+        "expected canonical blank lines between import groups, got:\n{formatted}"
+    );
+}
+
+#[test]
 fn test_one_blank_line_between_import_and_contract_with_doc_comment() {
     let source = r#"import "./Foo.sol";
 
@@ -994,6 +1202,23 @@ fn test_two_blank_lines_between_contracts_with_doc_comment() {
     assert!(
         !formatted.contains("}\n\n\n\n/// Doc for B."),
         "should NOT have 3 blank lines between contract and next doc comment, got:\n{formatted}"
+    );
+}
+
+#[test]
+fn test_one_blank_line_between_top_level_constants() {
+    let source = r#"uint16 constant A = 1;
+/// B doc.
+uint16 constant B = 2;
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(
+        formatted,
+        r#"uint16 constant A = 1;
+
+/// B doc.
+uint16 constant B = 2;
+"#
     );
 }
 
@@ -1931,13 +2156,215 @@ fn test_format_logical_or_chain_without_staircase_indent() {
 "#;
     let expected = r#"contract T {
     function supportsInterface(bytes4 interfaceId) public view returns (bool) {
-        return interfaceId == type(INameWrapper).interfaceId
-            || interfaceId == type(IERC721Receiver).interfaceId
-            || super.supportsInterface(interfaceId);
+        return
+            interfaceId == type(INameWrapper).interfaceId
+                || interfaceId == type(IERC721Receiver).interfaceId
+                || super.supportsInterface(interfaceId);
     }
 }
 "#;
     let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_binary_expr_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return calculateAvailableBalance() +
+            collectPendingRewards();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            calculateAvailableBalance() +
+            collectPendingRewards();
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_assignment_binary_rhs_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base = Math.mulDiv(baseUnits + premiumUnits, numeratorUnits, denominatorUnits, Math.Rounding.Ceil) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base =
+            Math.mulDiv(
+                baseUnits + premiumUnits,
+                numeratorUnits,
+                denominatorUnits,
+                Math.Rounding.Ceil
+            ) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_first_assignment_rhs_term_on_line_with_leading_operator_breaks() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e, uint256 f0) internal pure returns (uint256 value) {
+        value = veryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0) + anotherVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0) + thirdVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e, uint256 f0) internal pure returns (uint256 value) {
+        value = veryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0)
+            + anotherVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0)
+                + thirdVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0);
+    }
+}
+"#;
+
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_assignment_bitwise_chain_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles = (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles =
+            (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_logical_or_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+                super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function supportsInterface(bytes4 interfaceId) public view returns (bool) {
+        return
+            interfaceId == type(INameWrapper).interfaceId ||
+            interfaceId == type(IERC721Receiver).interfaceId ||
+            super.supportsInterface(interfaceId);
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_bitwise_chain_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return CANNOT_TRANSFER | CANNOT_SET_RESOLVER | CANNOT_SET_TTL;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public pure returns (uint256) {
+        return
+            CANNOT_TRANSFER |
+            CANNOT_SET_RESOLVER |
+            CANNOT_SET_TTL;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_if_condition_with_trailing_operator_line_break() {
+    let source = r#"contract T {
+    function f(address registrant) public view {
+        if (registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)) {
+            revert();
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(address registrant) public view {
+        if (
+            registrant != msg.sender &&
+            !registrar.isApprovedForAll(registrant, msg.sender)
+        ) {
+            revert();
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
     assert_eq!(formatted, expected);
 }
 
@@ -1994,10 +2421,11 @@ fn test_format_parenthesized_logical_chain_like_forge() {
         view
         returns (bool)
     {
-        return (owner == addr
-                || isApprovedForAll(owner, addr)
-                || getApproved(uint256(node)) == addr)
-            && !_isETH2LDInGracePeriod(fuses, expiry);
+        return
+            (owner == addr
+                    || isApprovedForAll(owner, addr)
+                    || getApproved(uint256(node)) == addr)
+                && !_isETH2LDInGracePeriod(fuses, expiry);
     }
 }
 "#;
@@ -2006,5 +2434,571 @@ fn test_format_parenthesized_logical_chain_like_forge() {
         ..default_config()
     };
     let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_ignored_parameter_comments_in_signature() {
+    let source = r#"contract T {
+    function onERC721Received(
+        address /*operator*/,
+        address /*from*/,
+        uint256 tokenId,
+        bytes calldata data
+    ) external returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function onERC721Received(
+        address /*operator*/,
+        address /*from*/,
+        uint256 tokenId,
+        bytes calldata data
+    )
+        external
+        returns (bytes4)
+    {
+        return this.onERC721Received.selector;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_argument_local_comment() {
+    let source = r#"contract T {
+    function f(Metadata memory md) public {
+        ETH_REGISTRY.register(
+            md.label,
+            md.owner,
+            md.subregistry,
+            md.resolver,
+            REGISTRATION_ROLE_BITMAP,
+            0 // use reserved expiry
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(Metadata memory md) public {
+        ETH_REGISTRY.register(
+            md.label,
+            md.owner,
+            md.subregistry,
+            md.resolver,
+            REGISTRATION_ROLE_BITMAP,
+            0 // use reserved expiry
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_statement_comment_after_call_is_not_attached_to_argument() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(a, b); // note
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_call_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_named_argument_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1, // first
+            b: 2
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_last_call_argument_line_comment() {
+    let source = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a) public {
+        foo(
+            a // note
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_last_named_argument_line_comment() {
+    let source = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        foo({
+            a: 1 // note
+        });
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_parameter_line_comment_after_comma() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_after_argument_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b) public {
+        foo(
+            a, // first
+            /* second */
+            b
+        );
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_comment_after_parameter_line_comment_on_separate_line() {
+    let source = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    ) public pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        uint256 a, // first
+        /* second */
+        uint256 b
+    )
+        public
+        pure
+    {}
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_tail_comments_inside_function_bodies_inside_library() {
+    let source = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    /// @dev A helper.
+    function a() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 1
+        }
+        // Equivalent: return 1;
+    }
+
+    /// @dev Another helper.
+    function b() internal pure returns (uint256 ret) {
+        assembly {
+            ret := 2
+        }
+        // Equivalent: return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_gap_comment_between_functions() {
+    let source = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+    let expected = r#"library T {
+    function a() internal pure returns (uint256) {
+        return 1;
+    }
+
+    // Shared helper note.
+    /// @dev B helper.
+    function b() internal pure returns (uint256) {
+        return 2;
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_preserve_tail_comment_after_last_struct_field() {
+    let source = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
+    }
+}
+"#;
+    let expected = r#"contract T {
+    struct S {
+        uint256 x;
+        // Field metadata.
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_single_spacing_keeps_block_doc_comment_with_next_item() {
+    let source = r#"contract T {
+    function a() internal pure {}
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let expected = r#"contract T {
+    function a() internal pure {}
+
+    /** @dev B helper. */
+
+    function b() internal pure {}
+}
+"#;
+    let config = FormatConfig {
+        contract_body_spacing: solgrid_config::ContractBodySpacing::Single,
+        ..default_config()
+    };
+
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_break_long_return_after_keyword() {
+    let source = r#"contract T {
+    function f(
+        mapping(address => uint256) storage roles,
+        uint256 resource,
+        address account,
+        uint256 roleBitmap
+    ) internal view returns (bool) {
+        return (roles[resource][account] | roles[0][account]) & roleBitmap == roleBitmap;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(
+        mapping(address => uint256) storage roles,
+        uint256 resource,
+        address account,
+        uint256 roleBitmap
+    )
+        internal
+        view
+        returns (bool)
+    {
+        return
+            (roles[resource][account] | roles[0][account]) & roleBitmap
+            == roleBitmap;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_bitwise_or_chain_without_staircase_indent() {
+    let source = r#"contract T {
+    uint256 constant REGISTRATION_ROLE_BITMAP = 0 |
+        RegistryRolesLib.ROLE_SET_SUBREGISTRY |
+        RegistryRolesLib.ROLE_SET_SUBREGISTRY_ADMIN |
+        RegistryRolesLib.ROLE_SET_RESOLVER |
+        RegistryRolesLib.ROLE_SET_RESOLVER_ADMIN |
+        RegistryRolesLib.ROLE_CAN_TRANSFER_ADMIN;
+}
+"#;
+    let expected = r#"contract T {
+    uint256 constant REGISTRATION_ROLE_BITMAP =
+        0
+        | RegistryRolesLib.ROLE_SET_SUBREGISTRY
+        | RegistryRolesLib.ROLE_SET_SUBREGISTRY_ADMIN
+        | RegistryRolesLib.ROLE_SET_RESOLVER
+        | RegistryRolesLib.ROLE_SET_RESOLVER_ADMIN
+        | RegistryRolesLib.ROLE_CAN_TRANSFER_ADMIN;
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_multiline_enum_keeps_one_member_per_line() {
+    let source = r#"contract T {
+    enum State {
+        START,
+        IGNORED_KEY,
+        IGNORED_KEY_ARG,
+        VALUE,
+        QUOTED_VALUE,
+        UNQUOTED_VALUE,
+        IGNORED_VALUE,
+        IGNORED_QUOTED_VALUE,
+        IGNORED_UNQUOTED_VALUE
+    }
+}
+"#;
+    let expected = r#"contract T {
+    enum State {
+        START,
+        IGNORED_KEY,
+        IGNORED_KEY_ARG,
+        VALUE,
+        QUOTED_VALUE,
+        UNQUOTED_VALUE,
+        IGNORED_VALUE,
+        IGNORED_QUOTED_VALUE,
+        IGNORED_UNQUOTED_VALUE
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_catch_with_typed_parameter_keeps_space() {
+    let source = r#"contract T {
+    function f(address to) public {
+        try Foo(to).bar() returns (uint256 value) {
+            consume(value);
+        } catch (bytes memory reason) {
+            consume(reason.length);
+        }
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("catch (bytes memory reason)"));
+}
+
+#[test]
+fn test_format_long_for_header_by_clause() {
+    let source = r#"contract T {
+    function f(bytes memory data) public {
+        for (RRUtils.RRIterator memory iter = RRUtils.iterateRRs(data, 0); !RRUtils.done(iter); RRUtils.next(iter)) {
+            consume(iter);
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bytes memory data) public {
+        for (
+            RRUtils.RRIterator memory iter = RRUtils.iterateRRs(data, 0);
+            !RRUtils.done(iter);
+            RRUtils.next(iter)
+        ) {
+            consume(iter);
+        }
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_infinite_loop_uses_canonical_spacing() {
+    let source = r#"contract T {
+    function f() public {
+        for (; ; ) {
+            break;
+        }
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        for (;;) {
+            break;
+        }
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_single_statement_if_body_over_multiple_lines() {
+    let source = r#"contract T {
+    function f(uint256 x) public pure {
+        if (x == 0) revert();
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 x) public pure {
+        if (x == 0)
+            revert();
+    }
+}
+"#;
+    let formatted = format_source(source, &default_config()).unwrap();
     assert_eq!(formatted, expected);
 }

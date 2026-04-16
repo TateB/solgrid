@@ -14,12 +14,17 @@ pub struct RuleRegistry {
 }
 
 impl RuleRegistry {
-    /// Create a new registry with all built-in rules.
-    pub fn new() -> Self {
-        let mut registry = Self {
+    /// Create an empty registry.
+    pub fn empty() -> Self {
+        Self {
             rules: Vec::new(),
             index: HashMap::new(),
-        };
+        }
+    }
+
+    /// Create a new registry with all built-in rules.
+    pub fn new() -> Self {
+        let mut registry = Self::empty();
         rules::register_all(&mut registry);
         registry
     }

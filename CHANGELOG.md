@@ -64,6 +64,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
 - Fixed overlapping ETH-send diagnostics to suppress broad `security/arbitrary-send-eth` findings when the semantic user-controlled transfer detector covers the same call site
 
+## [0.0.12] - 2026-04-16
+
+## [0.0.11] - 2026-04-16
+
+### Fixed
+- Fixed formatter wrapping so trailing-operator assignment RHS chains break after `=` and multiline ternary branches align with the full condition instead of the last condition line
+
+## [0.0.10] - 2026-04-15
+
+### Added
+- Added a formatter `operator_line_break` option, plus Prettier `solidityOperatorLineBreak`, so multiline binary and logical chains converge to either canonical leading-operator or trailing-operator layouts
+
+### Fixed
+- Fixed formatter header comment attachment so inline comments after constructor base calls stay on the header line instead of moving into the constructor body
+
+## [0.0.9] - 2026-04-15
+
+## [0.0.8] - 2026-04-14
+
+### Fixed
+- Fixed `fix` retaining imports referenced by NatSpec `@inheritdoc` tags so autofixes no longer leave compiler-broken documentation references behind
+- Fixed `naming/func-name-mixedcase` to allow public ABI-style uppercase function names by default while still supporting exact-name and regex exceptions
+- Fixed formatter output for long `for` headers, infinite `for (;;)` loops, single-statement control flow, and top-level file-scope declaration spacing to use stable canonical layouts
+- Fixed formatter comment preservation so standalone comments stay in their original gap by default and comments after the last child in a block or declaration stay inside the enclosing scope instead of drifting onto neighboring items or outside the closing brace
+
+## [0.0.7] - 2026-04-14
+
+### Added
+- Added exact-name and regex-based exceptions for `naming/func-name-mixedcase` so legacy public ABI names can be allowed without repeated inline suppressions
+
+### Fixed
+- Fixed VS Code save-time import ordering so `style/imports-ordering` fixes no longer get reverted by a follow-up `solgrid` formatting request
+- Fixed formatter import spacing to canonicalize blank lines between configured import groups instead of collapsing them on save
+- Fixed `fix` output to run through the formatter before the final lint pass so `fix` and `fmt` converge on one canonical steady state
+- Fixed formatter comment attachment for ignored parameters and call arguments so inline annotations stay attached to the parameter or argument they describe
+- Fixed formatter output for multiline bitwise chains, long `return` expressions, multiline enums, and typed `catch (...)` clauses to use stable readable canonical layouts
+
+## [0.0.6] - 2026-04-13
+
+### Fixed
+- Fixed VS Code save-time import ordering so `style/imports-ordering` fixes no longer get reverted by a follow-up `solgrid` formatting request
+- Fixed formatter import spacing to canonicalize blank lines between configured import groups instead of collapsing them on save
+
 ## [0.0.5] - 2026-04-01
 
 ### Added
@@ -196,8 +239,15 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.5...HEAD
-[0.0.5]: https://github.com/TateB/solgrid/compare/v0.0.4...v0.0.5
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/TateB/solgrid/compare/v0.0.11...v0.0.12
+[0.0.11]: https://github.com/TateB/solgrid/releases/tag/v0.0.11
+[0.0.10]: https://github.com/TateB/solgrid/releases/tag/v0.0.10
+[0.0.9]: https://github.com/TateB/solgrid/releases/tag/v0.0.9
+[0.0.8]: https://github.com/TateB/solgrid/releases/tag/v0.0.8
+[0.0.7]: https://github.com/TateB/solgrid/releases/tag/v0.0.7
+[0.0.6]: https://github.com/TateB/solgrid/releases/tag/v0.0.6
+[0.0.5]: https://github.com/TateB/solgrid/releases/tag/v0.0.5
 [0.0.4]: https://github.com/TateB/solgrid/releases/tag/v0.0.4
 [0.0.3]: https://github.com/TateB/solgrid/releases/tag/v0.0.3
 [0.0.2]: https://github.com/TateB/solgrid/releases/tag/v0.0.2

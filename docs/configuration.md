@@ -39,6 +39,7 @@ single_quote = false
 bracket_spacing = false
 number_underscore = "preserve"
 uint_type = "uint256"
+operator_line_break = "leading"
 sort_imports = false
 multiline_func_header = "attributes_first"
 
@@ -88,7 +89,7 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `docs/selector-tags` | none | n/a | No settings |
 | `style/category-headers` | `min_categories` | `2` | Minimum distinct declaration categories before headers are enforced |
 | `style/category-headers` | `initialization_functions` | built-in list | Function names treated as initialization sections |
-| `style/imports-ordering` | `import_order` | default external/relative grouping | Regex-defined import groups |
+| `style/imports-ordering` | `import_order` | default external / `../` / `./` grouping | Regex-defined import groups |
 
 ## Format Configuration
 
@@ -105,6 +106,7 @@ All formatter options live under `[format]`:
 | `uint_type` | `"uint256"` / `"uint"` / `"preserve"` | `"uint256"` | `int_types` | -- |
 | `override_spacing` | bool | true | `override_spacing` | -- |
 | `wrap_comments` | bool | false | `wrap_comments` | -- |
+| `operator_line_break` | `"leading"` / `"trailing"` | `"leading"` | -- | -- |
 | `sort_imports` | bool | false | `sort_imports` | -- |
 | `multiline_func_header` | `"attributes_first"` / `"params_first"` / `"all"` | `"attributes_first"` | `multiline_func_header` | -- |
 | `contract_body_spacing` | `"preserve"` / `"single"` / `"compact"` | `"preserve"` | `contract_new_lines`* | -- |

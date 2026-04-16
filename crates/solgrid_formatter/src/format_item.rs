@@ -3,8 +3,8 @@
 //! Handles pragma, imports, contracts, functions, structs, enums, events,
 //! errors, UDVTs, using-for, and variable declarations.
 
-use crate::comments::CommentStore;
-use crate::format_expr::{format_expr, format_grouped_items};
+use crate::comments::{Comment, CommentStore};
+use crate::format_expr::{attach_inline_comments, format_expr, format_grouped_items};
 use crate::format_stmt::{format_block, format_params};
 use crate::format_ty::{
     format_data_location, format_state_mutability, format_type, format_visibility,
@@ -28,8 +28,8 @@ pub fn format_item(
             format_contract(contract, item.span, source, config, comments)
         }
         ItemKind::Function(func) => format_function(func, source, config, comments),
-        ItemKind::Variable(var) => format_variable_def(var, source, config),
-        ItemKind::Struct(s) => format_struct(s, source, config, comments),
+        ItemKind::Variable(var) => format_variable_def(var, source, config, comments),
+        ItemKind::Struct(s) => format_struct(s, item.span, source, config, comments),
         ItemKind::Enum(e) => format_enum(e),
         ItemKind::Udvt(udvt) => format_udvt(udvt, source, config),
         ItemKind::Event(event) => format_event(event, source, config),
@@ -120,7 +120,7 @@ fn format_import(import: &ImportDirective<'_>, source: &str, config: &FormatConf
 /// Format a contract/interface/library definition.
 fn format_contract(
     contract: &ItemContract<'_>,
-    _span: solar_interface::Span,
+    span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -154,7 +154,7 @@ fn format_contract(
                     let args: Vec<FormatChunk> = base
                         .arguments
                         .exprs()
-                        .map(|a| format_expr(a, source, config))
+                        .map(|a| format_expr(a, source, config, comments))
                         .collect();
                     concat(vec![
                         path_chunk,
@@ -265,6 +265,16 @@ fn format_contract(
         prev_multiline = current_multiline;
     }
 
+    let contract_end = span_to_range(span).end;
+    let tail_comments = comments.take_within(prev_item_end..contract_end);
+    append_gap_comments(
+        &mut body_parts,
+        &tail_comments,
+        source,
+        prev_item_end,
+        contract_end,
+    );
+
     let mut result = header;
     result.push(indent(body_parts));
     result.push(hardline());
@@ -332,7 +342,7 @@ fn format_function(
     }
 
     // Parameters
-    let params = format_params(&func.header.parameters, source, config);
+    let params = format_params(&func.header.parameters, source, config, comments);
     header_parts.push(text("("));
     if !func.header.parameters.is_empty() {
         header_parts.push(params);
@@ -384,38 +394,52 @@ fn format_function(
         }
     }
 
+    let returns_start = func
+        .header
+        .returns
+        .as_ref()
+        .filter(|returns| !returns.is_empty())
+        .map(|returns| span_to_range(returns.span).start);
+
     // Modifiers
-    for modifier in func.header.modifiers.iter() {
-        let mod_path: Vec<String> = modifier
-            .name
-            .segments()
-            .iter()
-            .map(|s| s.as_str().to_string())
-            .collect();
-        let mod_name = mod_path.join(".");
-        if modifier.arguments.is_empty() {
-            attrs.push(text(mod_name));
-        } else {
-            let args: Vec<FormatChunk> = modifier
-                .arguments
-                .exprs()
-                .map(|a| format_expr(a, source, config))
-                .collect();
-            attrs.push(concat(vec![
-                text(mod_name),
-                text("("),
-                format_grouped_items(args),
-                text(")"),
-            ]));
-        }
+    let mut attrs_have_line_comments = false;
+    for (index, modifier) in func.header.modifiers.iter().enumerate() {
+        let next_modifier_start = func
+            .header
+            .modifiers
+            .get(index + 1)
+            .map(|next| span_to_range(next.name.span()).start);
+        let next_start = match (next_modifier_start, returns_start) {
+            (Some(next_modifier_start), Some(returns_start)) => {
+                Some(next_modifier_start.min(returns_start))
+            }
+            (Some(next_modifier_start), None) => Some(next_modifier_start),
+            (None, Some(returns_start)) => Some(returns_start),
+            (None, None) => None,
+        };
+        let (modifier_chunk, has_line_comment) =
+            format_modifier_invocation(modifier, next_start, source, config, comments);
+        attrs.push(modifier_chunk);
+        attrs_have_line_comments |= has_line_comment;
     }
 
     // Returns
     let mut returns_chunk = None;
     if let Some(returns) = &func.header.returns {
         if !returns.is_empty() {
-            let ret_params = format_params(returns, source, config);
-            returns_chunk = Some(concat(vec![text("returns ("), ret_params, text(")")]));
+            let ret_params = format_params(returns, source, config, comments);
+            let trailing = comments.take_trailing(source, span_to_range(returns.span).end);
+            let has_line_comment = trailing.iter().any(|comment| {
+                matches!(
+                    comment.kind,
+                    crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+                )
+            });
+            returns_chunk = Some(attach_inline_comments(
+                concat(vec![text("returns ("), ret_params, text(")")]),
+                trailing,
+            ));
+            attrs_have_line_comments |= has_line_comment;
         }
     }
 
@@ -444,14 +468,80 @@ fn format_function(
             // When the signature wraps, put { on its own line at the
             // function's indent level (Solidity style guide).
             // When it fits on one line, { stays on the same line.
-            signature.push(if_flat(space(), line()));
-            concat(vec![group(signature), block])
+            if attrs_have_line_comments {
+                signature.push(line());
+                concat(vec![concat(signature), block])
+            } else {
+                signature.push(if_flat(space(), line()));
+                concat(vec![group(signature), block])
+            }
         }
         None => {
-            signature.push(text(";"));
-            group(signature)
+            if attrs_have_line_comments {
+                signature.push(line());
+                signature.push(text(";"));
+                concat(signature)
+            } else {
+                signature.push(text(";"));
+                group(signature)
+            }
         }
     }
+}
+
+fn format_modifier_invocation(
+    modifier: &Modifier<'_>,
+    next_modifier_start: Option<usize>,
+    source: &str,
+    config: &FormatConfig,
+    comments: &mut CommentStore,
+) -> (FormatChunk, bool) {
+    let mod_path: Vec<String> = modifier
+        .name
+        .segments()
+        .iter()
+        .map(|s| s.as_str().to_string())
+        .collect();
+    let mod_name = mod_path.join(".");
+    let modifier_chunk = if modifier.arguments.is_empty() {
+        text(mod_name)
+    } else {
+        let args: Vec<FormatChunk> = modifier
+            .arguments
+            .exprs()
+            .map(|a| format_expr(a, source, config, comments))
+            .collect();
+        concat(vec![
+            text(mod_name),
+            text("("),
+            format_grouped_items(args),
+            text(")"),
+        ])
+    };
+
+    let modifier_end = if modifier.arguments.is_empty() {
+        span_to_range(modifier.name.span()).end
+    } else {
+        span_to_range(modifier.arguments.span).end
+    };
+    let line_end = source[modifier_end..]
+        .find('\n')
+        .map_or(source.len(), |offset| modifier_end + offset);
+    let trailing_end = next_modifier_start
+        .map(|next_start| next_start.min(line_end))
+        .unwrap_or(line_end);
+    let trailing = comments.take_within(modifier_end..trailing_end);
+    let has_line_comment = trailing.iter().any(|comment| {
+        matches!(
+            comment.kind,
+            crate::ir::CommentKind::Line | crate::ir::CommentKind::DocLine
+        )
+    });
+
+    (
+        attach_inline_comments(modifier_chunk, trailing),
+        has_line_comment,
+    )
 }
 
 /// Format a variable definition (state variable or local).
@@ -459,6 +549,7 @@ fn format_variable_def(
     var: &VariableDefinition<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
 ) -> FormatChunk {
     let mut parts = vec![format_type(&var.ty, source, config)];
 
@@ -510,7 +601,13 @@ fn format_variable_def(
     if let Some(init) = &var.initializer {
         let preserve_multiline =
             matches!(init.kind, ExprKind::Binary(..)) && span_text(source, var.span).contains('\n');
-        parts.push(format_initializer(init, source, config, preserve_multiline));
+        parts.push(format_initializer(
+            init,
+            source,
+            config,
+            comments,
+            preserve_multiline,
+        ));
     }
 
     parts.push(text(";"));
@@ -520,6 +617,7 @@ fn format_variable_def(
 /// Format a struct definition.
 fn format_struct(
     s: &ItemStruct<'_>,
+    span: solar_interface::Span,
     source: &str,
     config: &FormatConfig,
     comments: &mut CommentStore,
@@ -532,6 +630,7 @@ fn format_struct(
     }
 
     let mut body = Vec::new();
+    let mut last_field_end = None;
     for field in s.fields.iter() {
         let field_range = span_to_range(field.span);
         let leading = comments.take_leading(field_range.start);
@@ -554,6 +653,20 @@ fn format_struct(
             body.push(space());
             body.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
         }
+
+        last_field_end = Some(field_range.end);
+    }
+
+    let struct_end = span_to_range(span).end;
+    if let Some(last_field_end) = last_field_end {
+        let tail_comments = comments.take_within(last_field_end..struct_end);
+        append_gap_comments(
+            &mut body,
+            &tail_comments,
+            source,
+            last_field_end,
+            struct_end,
+        );
     }
 
     parts.push(indent(body));
@@ -566,9 +679,10 @@ fn format_initializer(
     expr: &Expr<'_>,
     source: &str,
     config: &FormatConfig,
+    comments: &mut CommentStore,
     preserve_multiline: bool,
 ) -> FormatChunk {
-    let value = format_expr(expr, source, config);
+    let value = format_expr(expr, source, config, comments);
     if preserve_multiline {
         concat(vec![text(" ="), indent(vec![hardline(), value])])
     } else if matches!(expr.kind, ExprKind::Ternary(..)) {
@@ -588,8 +702,7 @@ fn format_enum(e: &ItemEnum<'_>) -> FormatChunk {
     }
 
     let variants: Vec<FormatChunk> = e.variants.iter().map(|v| text(v.as_str())).collect();
-
-    let body = join(variants, text(","));
+    let body = join(variants, concat(vec![text(","), hardline()]));
     parts.push(indent(vec![hardline(), body]));
     parts.push(hardline());
     parts.push(text("}"));
@@ -696,6 +809,37 @@ pub(crate) fn has_blank_line_between(source: &str, start: usize, end: usize) -> 
         }
     }
     false
+}
+
+pub(crate) fn append_gap_comments(
+    parts: &mut Vec<FormatChunk>,
+    comments: &[Comment],
+    source: &str,
+    gap_start: usize,
+    gap_end: usize,
+) {
+    if comments.is_empty() {
+        return;
+    }
+
+    for (index, comment) in comments.iter().enumerate() {
+        parts.push(hardline());
+        let prev_end = if index == 0 {
+            gap_start
+        } else {
+            comments[index - 1].range.end
+        };
+        if has_blank_line_between(source, prev_end, comment.range.start) {
+            parts.push(hardline());
+        }
+        parts.push(FormatChunk::Comment(comment.kind, comment.content.clone()));
+    }
+
+    if let Some(last) = comments.last() {
+        if has_blank_line_between(source, last.range.end, gap_end) {
+            parts.push(hardline());
+        }
+    }
 }
 
 /// Sort import items if sort_imports is enabled.

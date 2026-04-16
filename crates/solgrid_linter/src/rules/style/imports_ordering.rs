@@ -168,7 +168,13 @@ fn import_rewrite_fix(
 
 fn group_index(path: &str, patterns: &[Regex]) -> usize {
     if patterns.is_empty() {
-        return if path.starts_with('.') { 1 } else { 0 };
+        return if path.starts_with("./") {
+            2
+        } else if path.starts_with("../") || path.starts_with('.') {
+            1
+        } else {
+            0
+        };
     }
 
     patterns

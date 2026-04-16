@@ -146,6 +146,10 @@ impl LintEngine {
             current_source = next_source;
         }
 
+        if let Ok(formatted) = solgrid_formatter::format_source(&current_source, &config.format) {
+            current_source = formatted;
+        }
+
         let remaining = self.lint_source_with_remappings(&current_source, path, config, remappings);
         (current_source, remaining)
     }
@@ -258,5 +262,80 @@ fn same_edit(a: &TextEdit, b: &TextEdit) -> bool {
 impl Default for LintEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::RuleRegistry;
+    use crate::rule::Rule;
+    use solgrid_diagnostics::{
+        Diagnostic, Fix, FixAvailability, FixSafety, RuleCategory, RuleMeta, Severity, TextEdit,
+    };
+    use std::path::Path;
+
+    static META: RuleMeta = RuleMeta {
+        id: "style/test-fix-formatting",
+        name: "test-fix-formatting",
+        category: RuleCategory::Style,
+        default_severity: Severity::Info,
+        description: "test-only rule",
+        fix_availability: FixAvailability::Available(FixSafety::Safe),
+    };
+
+    struct NeedsFormattingFixRule;
+
+    impl Rule for NeedsFormattingFixRule {
+        fn meta(&self) -> &RuleMeta {
+            &META
+        }
+
+        fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic> {
+            let Some(start) = ctx.source.find("return 1;") else {
+                return Vec::new();
+            };
+            let end = start + "return 1;".len();
+            vec![Diagnostic::new(
+                META.id,
+                "replace return value",
+                META.default_severity,
+                start..end,
+            )
+            .with_fix(Fix::safe(
+                "replace return value",
+                vec![TextEdit::replace(start..end, "return 1    + 2;")],
+            ))]
+        }
+    }
+
+    #[test]
+    fn fix_source_formats_final_output() {
+        let mut registry = RuleRegistry::empty();
+        registry.register(Box::new(NeedsFormattingFixRule));
+
+        let engine = LintEngine::with_registry(registry);
+        let mut config = Config::default();
+        config.lint.preset = solgrid_config::RulePreset::All;
+
+        let source = r#"contract T {
+    function f() public pure returns (uint256) {
+        return 1;
+    }
+}
+"#;
+
+        let (fixed, remaining) = engine.fix_source(source, Path::new("test.sol"), &config, false);
+
+        assert_eq!(
+            fixed,
+            r#"contract T {
+    function f() public pure returns (uint256) {
+        return 1 + 2;
+    }
+}
+"#
+        );
+        assert!(remaining.diagnostics.is_empty());
     }
 }

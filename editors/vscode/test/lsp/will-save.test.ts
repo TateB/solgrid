@@ -12,6 +12,7 @@ import {
   fixturePath,
   initializeServer,
   openDocument,
+  requestFormatting,
   waitForDiagnostics,
   requestWillSaveWaitUntil,
   readFixture,
@@ -103,6 +104,110 @@ contract Test {
 `;
 
     expect(applyEdits(content, edits ?? [])).toBe(expected);
+  });
+
+  it("inserts canonical blank lines between import groups during save formatting", async () => {
+    const uri = "file:///tmp/import-group-spacing-on-save.sol";
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.25;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import {LibString} from "../utils/LibString.sol";
+import {StandaloneReverseRegistrar} from "./StandaloneReverseRegistrar.sol";
+
+contract Test is ERC165 {
+    using LibString for uint256;
+
+    function ownerOf(address addr) external view returns (address) {
+        return Ownable(addr).owner();
+    }
+
+    function passthrough(StandaloneReverseRegistrar registrar) external pure returns (StandaloneReverseRegistrar) {
+        return registrar;
+    }
+}
+`;
+
+    openDocument(client, uri, content);
+    await waitForDiagnostics(client, uri);
+
+    const edits = await requestWillSaveWaitUntil(client, uri);
+    expect(edits).not.toBeNull();
+    expect(edits).toHaveLength(1);
+
+    const expected = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.25;
+
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ERC165} from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+
+import {LibString} from "../utils/LibString.sol";
+
+import {StandaloneReverseRegistrar} from "./StandaloneReverseRegistrar.sol";
+
+contract Test is ERC165 {
+    using LibString for uint256;
+
+    function ownerOf(address addr) external view returns (address) {
+        return Ownable(addr).owner();
+    }
+
+    function passthrough(StandaloneReverseRegistrar registrar) external pure returns (StandaloneReverseRegistrar) {
+        return registrar;
+    }
+}
+`;
+
+    expect(applyEdits(content, edits ?? [])).toBe(expected);
+  });
+
+  it("returns no extra formatting edits after save fixes already produce canonical text", async () => {
+    client.notify("workspace/didChangeConfiguration", {
+      settings: {
+        fixOnSave: true,
+        fixOnSaveUnsafe: false,
+        formatOnSave: false,
+        configPath: fixturePath("solgrid-all.toml"),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const uri = "file:///tmp/import-order-format-after-fix.sol";
+    const content = `// SPDX-License-Identifier: MIT
+pragma solidity ~0.8.17;
+
+import {Zebra} from "./Zebra.sol";
+import {Alpha} from "./Alpha.sol";
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+`;
+
+    openDocument(client, uri, content);
+    await waitForDiagnostics(client, uri);
+
+    const saveEdits = await requestWillSaveWaitUntil(client, uri);
+    expect(saveEdits).not.toBeNull();
+
+    const fixed = applyEdits(content, saveEdits ?? []);
+    const formatEdits = await requestFormatting(client, uri);
+
+    const expected = `// SPDX-License-Identifier: MIT
+pragma solidity ~0.8.17;
+
+import {Alpha} from "./Alpha.sol";
+import {Zebra} from "./Zebra.sol";
+
+contract Test {
+    Zebra zebra;
+    Alpha alpha;
+}
+`;
+
+    expect(fixed).toBe(expected);
+    expect(formatEdits).toBeNull();
   });
 
   it("returns null for non-solidity file", async () => {

@@ -1,6 +1,6 @@
 //! Type formatting — converts Solar AST `Type` nodes to FormatChunk IR.
 
-use crate::format_expr::format_expr;
+use crate::format_expr::format_expr_detached;
 use crate::ir::*;
 use solar_ast::*;
 use solgrid_config::{FormatConfig, UintType};
@@ -23,7 +23,7 @@ pub fn format_type(ty: &Type<'_>, source: &str, config: &FormatConfig) -> Format
                 Some(size_expr) => concat(vec![
                     base,
                     text("["),
-                    format_expr(size_expr, source, config),
+                    format_expr_detached(size_expr, source, config),
                     text("]"),
                 ]),
                 None => concat(vec![base, text("[]")]),

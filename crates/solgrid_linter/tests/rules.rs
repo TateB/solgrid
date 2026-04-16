@@ -247,6 +247,99 @@ contract Test {
 }
 
 #[test]
+fn test_func_name_mixedcase_allowlist_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface Test {
+    function ROOT_RESOURCE() external view returns (uint256);
+}
+"#;
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    config.lint.settings.insert(
+        "naming/func-name-mixedcase".into(),
+        toml::toml! {
+            allow = ["ROOT_RESOURCE"]
+        }
+        .into(),
+    );
+
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "naming/func-name-mixedcase", &config);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+#[test]
+fn test_func_name_mixedcase_allow_regex_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface Test {
+    function ABI(bytes32 node, uint256 contentTypes) external view returns (bytes memory);
+}
+"#;
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    config.lint.settings.insert(
+        "naming/func-name-mixedcase".into(),
+        toml::toml! {
+            allow_regex = "^[A-Z][A-Z0-9_]*$"
+        }
+        .into(),
+    );
+
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "naming/func-name-mixedcase", &config);
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
+
+#[test]
+fn test_func_name_mixedcase_public_abi_names_clean_by_default() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function ROOT_RESOURCE() external view returns (uint256);
+}
+contract Test {
+    function ABI(bytes32 node, uint256 contentTypes)
+        external
+        pure
+        returns (uint256, bytes memory)
+    {
+        return (0, "");
+    }
+}
+"#;
+    assert_no_diagnostics(source, "naming/func-name-mixedcase");
+}
+
+#[test]
+fn test_func_name_mixedcase_public_abi_names_can_be_disabled() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+interface ITest {
+    function ROOT_RESOURCE() external view returns (uint256);
+}
+"#;
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    config.lint.settings.insert(
+        "naming/func-name-mixedcase".into(),
+        toml::toml! {
+            allow_public_abi = false
+        }
+        .into(),
+    );
+
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "naming/func-name-mixedcase", &config);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+}
+
+#[test]
 fn test_const_name_snakecase_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -2591,6 +2684,18 @@ contract Test {}
 }
 
 #[test]
+fn test_imports_ordering_separates_parent_and_current_dir_groups_by_default() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "../Parent.sol";
+import "./Local.sol";
+contract Test {}
+"#;
+    let fixed = fix_source(source);
+    assert!(fixed.contains("import \"../Parent.sol\";\n\nimport \"./Local.sol\";"));
+}
+
+#[test]
 fn test_imports_ordering_respects_regex_group_config() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -2651,6 +2756,42 @@ fn test_fix_no_unused_imports_partial() {
 }
 
 #[test]
+fn test_no_unused_imports_inheritdoc_reference_is_used() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC165} from "some.sol";
+contract Test {
+    /// @inheritdoc IERC165
+    function supportsInterface(bytes4 interfaceId) public pure returns (bool) {
+        interfaceId;
+        return true;
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-unused-imports");
+}
+
+#[test]
+fn test_fix_no_unused_imports_preserves_inheritdoc_reference() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {IERC165} from "some.sol";
+contract Test {
+    /// @inheritdoc IERC165
+    function supportsInterface(bytes4 interfaceId) public pure returns (bool) {
+        interfaceId;
+        return true;
+    }
+}
+"#;
+    let fixed = fix_source(source);
+    assert!(
+        fixed.contains(r#"import {IERC165} from "some.sol";"#),
+        "Expected import referenced by @inheritdoc to remain"
+    );
+}
+
+#[test]
 fn test_fix_use_constant() {
     let source = "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\ncontract Test {\n    uint256 public MAX_SUPPLY = 1000000;\n    function get() public view returns (uint256) {\n        return MAX_SUPPLY;\n    }\n}\n";
     let fixed = fix_source_unsafe(source);
@@ -2688,7 +2829,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {B} from "some.sol";
+
 contract Test {
     B public x;
 }
@@ -2725,6 +2868,7 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {}
 "#;
     let fixed = fix_source(source);
@@ -2741,6 +2885,7 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {}
 "#;
     let fixed = fix_source(source);
@@ -2761,7 +2906,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {Used} from "some.sol";
+
 contract Test {
     Used public x;
 }
@@ -2786,6 +2933,7 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 contract Test {
     modifier onlyOwner(address who) {
         _;
@@ -3027,7 +3175,9 @@ contract Test {}
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import "@src/utils/Helper.sol";
+
 contract Test {}
 "#;
     let remappings = vec![("@src/".to_string(), PathBuf::from("/project/src/"))];
@@ -3092,7 +3242,9 @@ contract Test {
 "#;
     let expected = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+
 import {IERC20} from "@src/interfaces/IERC20.sol";
+
 contract Test {
     IERC20 public token;
 }

@@ -46,6 +46,13 @@ impl DocumentStore {
         }
     }
 
+    /// Replace a document's content without changing its version.
+    pub fn set_content(&mut self, uri: &Uri, content: String) {
+        if let Some(doc) = self.documents.get_mut(uri) {
+            doc.content = content;
+        }
+    }
+
     /// Close a document.
     pub fn close(&mut self, uri: &Uri) {
         self.documents.remove(uri);
@@ -91,5 +98,18 @@ mod tests {
         let doc = store.get(&uri).unwrap();
         assert_eq!(doc.content, "v2");
         assert_eq!(doc.version, 2);
+    }
+
+    #[test]
+    fn test_document_store_set_content_preserves_version() {
+        let mut store = DocumentStore::new();
+        let uri: Uri = "file:///test.sol".parse().unwrap();
+
+        store.open(uri.clone(), "v1".into(), 3);
+        store.set_content(&uri, "v2".into());
+
+        let doc = store.get(&uri).unwrap();
+        assert_eq!(doc.content, "v2");
+        assert_eq!(doc.version, 3);
     }
 }

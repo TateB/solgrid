@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Chunk-based Solidity code formatter for solgrid"
 
 [dependencies]
+regex = { workspace = true }
 solgrid_ast = { workspace = true }
 solgrid_config = { workspace = true }
 solgrid_parser = { workspace = true }

@@ -5,7 +5,8 @@
 
 use napi_derive::napi;
 use solgrid_config::{
-    ContractBodySpacing, FormatConfig, MultilineFuncHeader, NumberUnderscore, UintType,
+    ContractBodySpacing, FormatConfig, MultilineFuncHeader, NumberUnderscore, OperatorLineBreak,
+    UintType,
 };
 
 /// JavaScript-friendly formatting options.
@@ -36,6 +37,8 @@ pub struct FormatOptions {
     pub override_spacing: Option<bool>,
     /// solgrid-specific: wrap comments to fit within line length.
     pub wrap_comments: Option<bool>,
+    /// solgrid-specific: "leading" or "trailing" multiline binary operators.
+    pub operator_line_break: Option<String>,
     /// solgrid-specific: sort import statements alphabetically.
     pub sort_imports: Option<bool>,
     /// solgrid-specific: "attributes_first", "params_first", or "all".
@@ -89,6 +92,12 @@ pub fn map_options(options: Option<FormatOptions>) -> FormatConfig {
     }
     if let Some(wc) = opts.wrap_comments {
         config.wrap_comments = wc;
+    }
+    if let Some(ref olb) = opts.operator_line_break {
+        config.operator_line_break = match olb.as_str() {
+            "trailing" => OperatorLineBreak::Trailing,
+            _ => OperatorLineBreak::Leading,
+        };
     }
     if let Some(si) = opts.sort_imports {
         config.sort_imports = si;
@@ -157,6 +166,7 @@ mod tests {
         assert!(!config.use_tabs);
         assert!(!config.single_quote);
         assert!(!config.bracket_spacing);
+        assert_eq!(config.operator_line_break, OperatorLineBreak::Leading);
     }
 
     #[test]
@@ -171,6 +181,7 @@ mod tests {
             uint_type: Some("uint256".into()),
             override_spacing: None,
             wrap_comments: None,
+            operator_line_break: Some("trailing".into()),
             sort_imports: None,
             multiline_func_header: None,
             contract_body_spacing: None,
@@ -184,6 +195,7 @@ mod tests {
         assert!(config.bracket_spacing);
         assert_eq!(config.number_underscore, NumberUnderscore::Thousands);
         assert_eq!(config.uint_type, UintType::Long);
+        assert_eq!(config.operator_line_break, OperatorLineBreak::Trailing);
     }
 
     #[test]
@@ -198,6 +210,7 @@ mod tests {
             uint_type: Some("short".into()),
             override_spacing: None,
             wrap_comments: None,
+            operator_line_break: None,
             sort_imports: Some(true),
             multiline_func_header: Some("params_first".into()),
             contract_body_spacing: None,
@@ -233,6 +246,7 @@ mod tests {
                 uint_type: None,
                 override_spacing: None,
                 wrap_comments: None,
+                operator_line_break: None,
                 sort_imports: None,
                 multiline_func_header: None,
                 contract_body_spacing: None,
@@ -263,6 +277,7 @@ mod tests {
                 uint_type: Some(input.into()),
                 override_spacing: None,
                 wrap_comments: None,
+                operator_line_break: None,
                 sort_imports: None,
                 multiline_func_header: None,
                 contract_body_spacing: None,

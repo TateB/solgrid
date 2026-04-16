@@ -350,6 +350,8 @@ pub struct FormatConfig {
     pub override_spacing: bool,
     /// Wrap comments to fit within line length.
     pub wrap_comments: bool,
+    /// Position operators at the start or end of broken binary lines.
+    pub operator_line_break: OperatorLineBreak,
     /// Sort import statements alphabetically.
     pub sort_imports: bool,
     /// Style for multiline function headers.
@@ -358,6 +360,9 @@ pub struct FormatConfig {
     pub contract_body_spacing: ContractBodySpacing,
     /// Put opening brace on new line when inheritance list wraps (default: true).
     pub inheritance_brace_new_line: bool,
+    /// Import grouping patterns propagated from `style/imports-ordering`.
+    #[serde(skip)]
+    pub import_order: Vec<String>,
 }
 
 impl Default for FormatConfig {
@@ -372,10 +377,12 @@ impl Default for FormatConfig {
             uint_type: UintType::Long,
             override_spacing: true,
             wrap_comments: false,
+            operator_line_break: OperatorLineBreak::Leading,
             sort_imports: false,
             multiline_func_header: MultilineFuncHeader::AttributesFirst,
             contract_body_spacing: ContractBodySpacing::Preserve,
             inheritance_brace_new_line: true,
+            import_order: Vec::new(),
         }
     }
 }
@@ -400,6 +407,16 @@ pub enum UintType {
     Short,
     /// Don't change.
     Preserve,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatorLineBreak {
+    /// Place operators at the start of continued lines.
+    #[default]
+    Leading,
+    /// Place operators at the end of continued lines.
+    Trailing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,6 +558,21 @@ fn warn_for_invalid_settings(config: &Config, path: &Path) {
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct ImportsOrderingSettings {
+    import_order: Vec<String>,
+}
+
+fn populate_derived_format_settings(config: &mut Config) {
+    if config.format.import_order.is_empty() {
+        config.format.import_order = config
+            .lint
+            .rule_settings::<ImportsOrderingSettings>("style/imports-ordering")
+            .import_order;
+    }
+}
+
 /// Load configuration from a TOML file.
 pub fn load_config(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
@@ -548,6 +580,7 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
     let mut config: Config =
         toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     normalize_rule_aliases(&mut config);
+    populate_derived_format_settings(&mut config);
     warn_for_invalid_settings(&config, path);
     Ok(config)
 }
@@ -693,6 +726,12 @@ fn load_foundry_fmt_config(path: &Path) -> Result<Config, String> {
         if let Some(v) = fmt.get("wrap_comments").and_then(|v| v.as_bool()) {
             config.format.wrap_comments = v;
         }
+        if let Some(v) = fmt.get("operator_line_break").and_then(|v| v.as_str()) {
+            config.format.operator_line_break = match v {
+                "trailing" => OperatorLineBreak::Trailing,
+                _ => OperatorLineBreak::Leading,
+            };
+        }
     }
 
     Ok(config)
@@ -832,6 +871,7 @@ tab_width = 2
 use_tabs = true
 single_quote = true
 bracket_spacing = true
+operator_line_break = "trailing"
 
 [global]
 exclude = ["lib/**"]
@@ -853,6 +893,10 @@ threads = 4
         assert!(config.format.use_tabs);
         assert!(config.format.single_quote);
         assert!(config.format.bracket_spacing);
+        assert_eq!(
+            config.format.operator_line_break,
+            OperatorLineBreak::Trailing
+        );
         assert!(!config.global.respect_gitignore);
         assert_eq!(config.global.threads, 4);
     }
@@ -982,6 +1026,7 @@ threads = 4
         assert_eq!(config.uint_type, UintType::Long);
         assert!(config.override_spacing);
         assert!(!config.wrap_comments);
+        assert_eq!(config.operator_line_break, OperatorLineBreak::Leading);
         assert!(!config.sort_imports);
         assert_eq!(
             config.multiline_func_header,
@@ -989,6 +1034,7 @@ threads = 4
         );
         assert_eq!(config.contract_body_spacing, ContractBodySpacing::Preserve);
         assert!(config.inheritance_brace_new_line);
+        assert!(config.import_order.is_empty());
     }
 
     #[test]
@@ -1101,6 +1147,38 @@ threads = 4
         let config = load_config(&config_path).unwrap();
         assert_eq!(config.lint.rules.get("docs/natspec"), Some(&RuleLevel::Off));
         assert!(!config.lint.rules.contains_key("best-practices/use-natspec"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_propagates_import_order_to_formatter() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_import_order_{}_{}",
+            std::process::id(),
+            4
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."style/imports-ordering"]
+import_order = ["^forge-std/", "^@?\\w", "^\\.\\./", "^\\./"]
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert_eq!(
+            config.format.import_order,
+            vec![
+                "^forge-std/".to_string(),
+                "^@?\\w".to_string(),
+                "^\\.\\./".to_string(),
+                "^\\./".to_string(),
+            ]
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1258,6 +1336,22 @@ remappings = [
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, "@oz/");
         assert_eq!(result[1].0, "forge-std/");
+    }
+
+    #[test]
+    fn test_resolve_config_reads_operator_line_break_from_foundry_fmt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("foundry.toml"),
+            "[fmt]\noperator_line_break = \"trailing\"\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(dir.path());
+        assert_eq!(
+            config.format.operator_line_break,
+            OperatorLineBreak::Trailing
+        );
     }
 
     #[test]
