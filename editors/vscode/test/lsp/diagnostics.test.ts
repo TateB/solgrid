@@ -573,6 +573,52 @@ contract DelegatecallWrapper {
     });
   });
 
+  it("publishes propagated delegatecall diagnostics through inherited helpers", async () => {
+    const dir = tempWorkspace();
+    const filePath = path.join(dir, "DelegatecallInheritance.sol");
+    const uri = toUri(filePath);
+    const content = `pragma solidity ^0.8.0;
+
+contract BaseDelegatecall {
+    function _delegate(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+}
+
+contract DerivedDelegatecall is BaseDelegatecall {
+    function run(address implementation, bytes memory payload) external {
+        _delegate(implementation, payload);
+    }
+}
+`;
+
+    fs.writeFileSync(filePath, content, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, uri, content);
+    const result = await waitForDiagnostics(client, uri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-delegatecall" &&
+        diagnostic.message.includes("flows into delegatecall via `_delegate`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.severity).toBe(1);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-delegatecall",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
   it("publishes semantic detector diagnostics for parameter-driven ETH transfers", async () => {
     const dir = tempWorkspace();
     const filePath = path.join(dir, "EthTransfer.sol");
@@ -660,6 +706,61 @@ contract EthTransferWrapper {
 
     openDocument(client, uri, content);
     const result = await waitForDiagnostics(client, uri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-eth-transfer" &&
+        diagnostic.message.includes("flows into an ETH transfer via `_pay`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.severity).toBe(2);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-eth-transfer",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
+  it("publishes propagated ETH transfer diagnostics through imported base helpers", async () => {
+    const dir = tempWorkspace();
+    const basePath = path.join(dir, "BasePay.sol");
+    const derivedPath = path.join(dir, "DerivedPay.sol");
+    const baseUri = toUri(basePath);
+    const derivedUri = toUri(derivedPath);
+    const baseSource = `pragma solidity ^0.8.0;
+
+contract BasePay {
+    function _pay(address target, uint256 amount) internal {
+        payable(target).call{value: amount}("");
+    }
+}
+`;
+    const derivedSource = `pragma solidity ^0.8.0;
+import "./BasePay.sol";
+
+contract DerivedPay is BasePay {
+    function pay(address recipient, uint256 amount) external payable {
+        _pay(recipient, amount);
+    }
+}
+`;
+
+    fs.writeFileSync(basePath, baseSource, "utf8");
+    fs.writeFileSync(derivedPath, derivedSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, baseUri, baseSource);
+    await waitForDiagnostics(client, baseUri);
+
+    openDocument(client, derivedUri, derivedSource);
+    const result = await waitForDiagnostics(client, derivedUri);
 
     const propagated = result.diagnostics.find(
       (diagnostic) =>

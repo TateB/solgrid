@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added semantic-token fallback handling for duplicate cross-file member and path resolutions when every candidate agrees on the same token kind and readonly state
 - Added semantic-token coverage for multi-segment Solidity paths so contract/type/error roots are colored beyond just the last segment
 - Added semantic-token resolution for transitive namespace-qualified re-exports so `import "..." as Alias` paths preserve token kinds and readonly metadata across re-export chains
+- Added inherited-helper interprocedural propagation for native delegatecall and ETH-transfer detectors, including imported base-contract helper chains when the target stays uniquely resolved
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

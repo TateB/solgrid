@@ -10,7 +10,10 @@ use solgrid_linter::LintEngine;
 use solgrid_parser::solar_ast::{self, Expr, ExprKind, IndexKind, ItemKind, Stmt, StmtKind, Type};
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
-use solgrid_project::{resolve_cross_file_symbol, NavBackend, ProjectIndex, ProjectSnapshot};
+use solgrid_project::{
+    resolve_cross_file_member_symbol, resolve_cross_file_symbol, NavBackend, ProjectIndex,
+    ProjectSnapshot,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
@@ -187,7 +190,8 @@ struct CompilerDiagnosticContext<'a> {
     get_source: &'a dyn Fn(&Path) -> Option<String>,
     diagnostics: Vec<ls_types::Diagnostic>,
     seen: HashSet<(String, usize, usize)>,
-    function_summaries: HashMap<usize, FunctionSinkSummary>,
+    semantic_files: HashMap<PathBuf, FileSemanticInfo>,
+    function_summaries: HashMap<CallableTargetKey, FunctionSinkSummary>,
 }
 
 impl<'a> CompilerDiagnosticContext<'a> {
@@ -196,13 +200,16 @@ impl<'a> CompilerDiagnosticContext<'a> {
         resolver: &'a SharedImportResolver,
         get_source: &'a dyn Fn(&Path) -> Option<String>,
     ) -> Self {
+        let (semantic_files, function_summaries) =
+            build_function_sink_summaries(snapshot, resolver, get_source);
         Self {
             snapshot,
             resolver,
             get_source,
             diagnostics: Vec::new(),
             seen: HashSet::new(),
-            function_summaries: build_function_sink_summaries(snapshot),
+            semantic_files,
+            function_summaries,
         }
     }
 
@@ -753,9 +760,17 @@ impl<'a> CompilerDiagnosticContext<'a> {
     }
 
     fn visit_interprocedural_sink_calls(&mut self, expr: &Expr<'_>) {
-        let Some((call_span, call_name, propagated)) =
-            propagated_sink_summary(self.snapshot, expr, &self.function_summaries)
-        else {
+        let Some(current_file) = self.semantic_files.get(&self.snapshot.path) else {
+            return;
+        };
+        let Some((call_span, call_name, propagated)) = propagated_sink_summary(
+            current_file,
+            expr,
+            &self.function_summaries,
+            &self.semantic_files,
+            self.resolver,
+            self.get_source,
+        ) else {
             return;
         };
 
@@ -910,9 +925,36 @@ enum SinkKind {
     EthTransfer,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CallableTargetKey {
+    path: PathBuf,
+    offset: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CallableSignatureRef {
+    target: CallableTargetKey,
+    arg_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ContractSemanticInfo {
+    bases: Vec<TypePath>,
+    callables: HashMap<String, Vec<CallableSignatureRef>>,
+}
+
+#[derive(Debug, Clone)]
+struct FileSemanticInfo {
+    path: PathBuf,
+    source: String,
+    table: SymbolTable,
+    contracts: HashMap<String, ContractSemanticInfo>,
+    callable_contracts: HashMap<usize, Option<String>>,
+}
+
 #[derive(Debug, Clone)]
 struct FunctionCallEdge {
-    callee_offset: usize,
+    callee: CallableTargetKey,
     argument_parameters: Vec<Option<String>>,
 }
 
@@ -926,47 +968,46 @@ struct FunctionSinkSummary {
 
 type PropagatedSinkFinding = (std::ops::Range<usize>, String, Vec<(String, SinkKind)>);
 
+struct SinkSummaryContext<'a> {
+    semantic_files: &'a HashMap<PathBuf, FileSemanticInfo>,
+    resolver: &'a SharedImportResolver,
+    get_source: &'a dyn Fn(&Path) -> Option<String>,
+}
+
 fn build_function_sink_summaries(
     snapshot: &ProjectSnapshot,
-) -> HashMap<usize, FunctionSinkSummary> {
-    let filename = snapshot.path.to_string_lossy().to_string();
-    let Ok(mut summaries) =
-        with_parsed_ast_sequential(&snapshot.source, &filename, |source_unit| {
-            let mut summaries = HashMap::<usize, FunctionSinkSummary>::new();
+    resolver: &SharedImportResolver,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+) -> (
+    HashMap<PathBuf, FileSemanticInfo>,
+    HashMap<CallableTargetKey, FunctionSinkSummary>,
+) {
+    let mut semantic_files = HashMap::new();
+    if !load_semantic_file(
+        &snapshot.path,
+        Some(&snapshot.source),
+        resolver,
+        get_source,
+        &mut semantic_files,
+    ) {
+        return (HashMap::new(), HashMap::new());
+    }
 
-            fn visit_item(
-                snapshot: &ProjectSnapshot,
-                item: &solar_ast::Item<'_>,
-                summaries: &mut HashMap<usize, FunctionSinkSummary>,
-            ) {
-                match &item.kind {
-                    ItemKind::Contract(contract) => {
-                        for body_item in contract.body.iter() {
-                            visit_item(snapshot, body_item, summaries);
-                        }
-                    }
-                    ItemKind::Function(function) => {
-                        if !function.is_implemented() {
-                            return;
-                        }
-                        let Some(target_offset) = function_target_offset(function) else {
-                            return;
-                        };
-                        summaries
-                            .insert(target_offset, summarize_function_sinks(snapshot, function));
-                    }
-                    _ => {}
-                }
-            }
-
-            for item in source_unit.items.iter() {
-                visit_item(snapshot, item, &mut summaries);
-            }
-            summaries
-        })
-    else {
-        return HashMap::new();
-    };
+    let mut summaries = HashMap::<CallableTargetKey, FunctionSinkSummary>::new();
+    let mut file_paths = semantic_files.keys().cloned().collect::<Vec<_>>();
+    file_paths.sort();
+    for path in file_paths {
+        let Some(file) = semantic_files.get(&path) else {
+            continue;
+        };
+        summarize_semantic_file_functions(
+            file,
+            &semantic_files,
+            resolver,
+            get_source,
+            &mut summaries,
+        );
+    }
 
     loop {
         let previous = summaries.clone();
@@ -974,7 +1015,7 @@ fn build_function_sink_summaries(
 
         for summary in summaries.values_mut() {
             for edge in &summary.call_edges {
-                let Some(callee) = previous.get(&edge.callee_offset) else {
+                let Some(callee) = previous.get(&edge.callee) else {
                     continue;
                 };
 
@@ -1000,12 +1041,207 @@ fn build_function_sink_summaries(
         }
     }
 
-    summaries
+    (semantic_files, summaries)
+}
+
+fn load_semantic_file(
+    path: &Path,
+    source_override: Option<&str>,
+    resolver: &SharedImportResolver,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    semantic_files: &mut HashMap<PathBuf, FileSemanticInfo>,
+) -> bool {
+    let path = path.to_path_buf();
+    if semantic_files.contains_key(&path) {
+        return true;
+    }
+
+    let Some(source) = source_override
+        .map(str::to_string)
+        .or_else(|| get_source(&path))
+    else {
+        return false;
+    };
+
+    let filename = path.to_string_lossy().to_string();
+    let Some(table) = symbols::build_symbol_table(&source, &filename) else {
+        return false;
+    };
+
+    let Ok((contracts, callable_contracts)) =
+        with_parsed_ast_sequential(&source, &filename, |source_unit| {
+            let mut contracts = HashMap::<String, ContractSemanticInfo>::new();
+            let mut callable_contracts = HashMap::<usize, Option<String>>::new();
+
+            for item in source_unit.items.iter() {
+                match &item.kind {
+                    ItemKind::Contract(contract) => {
+                        let bases = contract
+                            .bases
+                            .iter()
+                            .map(|base| TypePath {
+                                segments: base
+                                    .name
+                                    .segments()
+                                    .iter()
+                                    .map(|segment| segment.as_str().to_string())
+                                    .collect(),
+                            })
+                            .collect::<Vec<_>>();
+                        let contract_info = contracts
+                            .entry(contract.name.as_str().to_string())
+                            .or_default();
+                        contract_info.bases = bases;
+                        for body_item in contract.body.iter() {
+                            let ItemKind::Function(function) = &body_item.kind else {
+                                continue;
+                            };
+                            if !function.is_implemented() {
+                                continue;
+                            }
+                            let Some(target_offset) = function_target_offset(function) else {
+                                continue;
+                            };
+                            let Some(name) =
+                                function.header.name.map(|ident| ident.as_str().to_string())
+                            else {
+                                continue;
+                            };
+                            let target = CallableTargetKey {
+                                path: path.clone(),
+                                offset: target_offset,
+                            };
+                            record_callable_signature(
+                                &mut contract_info.callables,
+                                &name,
+                                target,
+                                function.header.parameters.len(),
+                            );
+                            callable_contracts
+                                .insert(target_offset, Some(contract.name.as_str().to_string()));
+                        }
+                    }
+                    ItemKind::Function(function) => {
+                        if !function.is_implemented() {
+                            continue;
+                        }
+                        let Some(target_offset) = function_target_offset(function) else {
+                            continue;
+                        };
+                        if function.header.name.is_none() {
+                            continue;
+                        }
+                        callable_contracts.insert(target_offset, None);
+                    }
+                    _ => {}
+                }
+            }
+
+            (contracts, callable_contracts)
+        })
+    else {
+        return false;
+    };
+
+    let import_paths = table
+        .imports
+        .iter()
+        .filter_map(|import| resolver.resolve(&import.path, &path))
+        .collect::<Vec<_>>();
+
+    semantic_files.insert(
+        path.clone(),
+        FileSemanticInfo {
+            path: path.clone(),
+            source,
+            table,
+            contracts,
+            callable_contracts,
+        },
+    );
+
+    for import_path in import_paths {
+        let _ = load_semantic_file(&import_path, None, resolver, get_source, semantic_files);
+    }
+
+    true
+}
+
+fn record_callable_signature(
+    map: &mut HashMap<String, Vec<CallableSignatureRef>>,
+    name: &str,
+    target: CallableTargetKey,
+    arg_count: usize,
+) {
+    map.entry(name.to_string())
+        .or_default()
+        .push(CallableSignatureRef { target, arg_count });
+}
+
+fn summarize_semantic_file_functions(
+    file: &FileSemanticInfo,
+    semantic_files: &HashMap<PathBuf, FileSemanticInfo>,
+    resolver: &SharedImportResolver,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    summaries: &mut HashMap<CallableTargetKey, FunctionSinkSummary>,
+) {
+    let context = SinkSummaryContext {
+        semantic_files,
+        resolver,
+        get_source,
+    };
+    let filename = file.path.to_string_lossy().to_string();
+    let _ = with_parsed_ast_sequential(&file.source, &filename, |source_unit| {
+        fn visit_item(
+            file: &FileSemanticInfo,
+            current_contract: Option<&str>,
+            item: &solar_ast::Item<'_>,
+            context: &SinkSummaryContext<'_>,
+            summaries: &mut HashMap<CallableTargetKey, FunctionSinkSummary>,
+        ) {
+            match &item.kind {
+                ItemKind::Contract(contract) => {
+                    let contract_name = contract.name.as_str().to_string();
+                    for body_item in contract.body.iter() {
+                        visit_item(
+                            file,
+                            Some(contract_name.as_str()),
+                            body_item,
+                            context,
+                            summaries,
+                        );
+                    }
+                }
+                ItemKind::Function(function) => {
+                    if !function.is_implemented() {
+                        return;
+                    }
+                    let Some(target_offset) = function_target_offset(function) else {
+                        return;
+                    };
+                    summaries.insert(
+                        CallableTargetKey {
+                            path: file.path.clone(),
+                            offset: target_offset,
+                        },
+                        summarize_function_sinks(file, current_contract, function, context),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for item in source_unit.items.iter() {
+            visit_item(file, None, item, &context, summaries);
+        }
+    });
 }
 
 fn summarize_function_sinks(
-    snapshot: &ProjectSnapshot,
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
     function: &solar_ast::ItemFunction<'_>,
+    context: &SinkSummaryContext<'_>,
 ) -> FunctionSinkSummary {
     let parameter_names = function
         .header
@@ -1024,16 +1260,25 @@ fn summarize_function_sinks(
         .collect::<HashMap<_, _>>();
 
     if let Some(body) = &function.body {
-        collect_function_sink_stmts(snapshot, body.stmts, &parameter_indexes, &mut summary);
+        collect_function_sink_stmts(
+            file,
+            current_contract,
+            body.stmts,
+            &parameter_indexes,
+            context,
+            &mut summary,
+        );
     }
 
     summary
 }
 
 fn collect_function_sink_stmts(
-    snapshot: &ProjectSnapshot,
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
     stmts: &[Stmt<'_>],
     parameter_indexes: &HashMap<String, usize>,
+    context: &SinkSummaryContext<'_>,
     summary: &mut FunctionSinkSummary,
 ) {
     for stmt in stmts {
@@ -1045,27 +1290,64 @@ fn collect_function_sink_stmts(
             | StmtKind::Return(None) => {}
             StmtKind::DeclSingle(variable) => {
                 if let Some(initializer) = &variable.initializer {
-                    collect_function_sink_expr(snapshot, initializer, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        initializer,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
             }
             StmtKind::DeclMulti(_, expr) | StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) => {
-                collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    expr,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
             StmtKind::Block(block) | StmtKind::UncheckedBlock(block) => {
-                collect_function_sink_stmts(snapshot, block.stmts, parameter_indexes, summary);
+                collect_function_sink_stmts(
+                    file,
+                    current_contract,
+                    block.stmts,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
             StmtKind::DoWhile(body, expr) | StmtKind::While(expr, body) => {
-                collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    expr,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
                 collect_function_sink_stmts(
-                    snapshot,
+                    file,
+                    current_contract,
                     std::slice::from_ref(&**body),
                     parameter_indexes,
+                    context,
                     summary,
                 );
             }
             StmtKind::Emit(_, args) | StmtKind::Revert(_, args) => {
                 for argument in args.exprs() {
-                    collect_function_sink_expr(snapshot, argument, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        argument,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
             }
             StmtKind::For {
@@ -1076,49 +1358,87 @@ fn collect_function_sink_stmts(
             } => {
                 if let Some(init) = init {
                     collect_function_sink_stmts(
-                        snapshot,
+                        file,
+                        current_contract,
                         std::slice::from_ref(&**init),
                         parameter_indexes,
+                        context,
                         summary,
                     );
                 }
                 if let Some(cond) = cond {
-                    collect_function_sink_expr(snapshot, cond, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        cond,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
                 if let Some(next) = next {
-                    collect_function_sink_expr(snapshot, next, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        next,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
                 collect_function_sink_stmts(
-                    snapshot,
+                    file,
+                    current_contract,
                     std::slice::from_ref(&**body),
                     parameter_indexes,
+                    context,
                     summary,
                 );
             }
             StmtKind::If(cond, then_stmt, else_stmt) => {
-                collect_function_sink_expr(snapshot, cond, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    cond,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
                 collect_function_sink_stmts(
-                    snapshot,
+                    file,
+                    current_contract,
                     std::slice::from_ref(&**then_stmt),
                     parameter_indexes,
+                    context,
                     summary,
                 );
                 if let Some(else_stmt) = else_stmt {
                     collect_function_sink_stmts(
-                        snapshot,
+                        file,
+                        current_contract,
                         std::slice::from_ref(&**else_stmt),
                         parameter_indexes,
+                        context,
                         summary,
                     );
                 }
             }
             StmtKind::Try(try_stmt) => {
-                collect_function_sink_expr(snapshot, try_stmt.expr, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    try_stmt.expr,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
                 for clause in try_stmt.clauses.iter() {
                     collect_function_sink_stmts(
-                        snapshot,
+                        file,
+                        current_contract,
                         clause.block.stmts,
                         parameter_indexes,
+                        context,
                         summary,
                     );
                 }
@@ -1128,21 +1448,44 @@ fn collect_function_sink_stmts(
 }
 
 fn collect_function_sink_expr(
-    snapshot: &ProjectSnapshot,
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
     expr: &Expr<'_>,
     parameter_indexes: &HashMap<String, usize>,
+    context: &SinkSummaryContext<'_>,
     summary: &mut FunctionSinkSummary,
 ) {
     let expr = expr.peel_parens();
     match &expr.kind {
         ExprKind::Array(exprs) => {
             for expr in exprs.iter() {
-                collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    expr,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
         }
         ExprKind::Assign(lhs, _, rhs) | ExprKind::Binary(lhs, _, rhs) => {
-            collect_function_sink_expr(snapshot, lhs, parameter_indexes, summary);
-            collect_function_sink_expr(snapshot, rhs, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                lhs,
+                parameter_indexes,
+                context,
+                summary,
+            );
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                rhs,
+                parameter_indexes,
+                context,
+                summary,
+            );
         }
         ExprKind::Call(callee, args) => {
             if let Some((parameter_name, _)) = delegatecall_target_identifier_from_sink_expr(expr) {
@@ -1157,68 +1500,463 @@ fn collect_function_sink_expr(
                     summary.eth_transfer_parameters.insert(*index);
                 }
             }
-            if let Some(callee_offset) =
-                resolved_same_file_callable_target(snapshot, callee, args.len())
+            if let Some(callee) =
+                resolved_callable_target(file, current_contract, callee, args.len(), context)
             {
                 summary.call_edges.push(FunctionCallEdge {
-                    callee_offset,
+                    callee,
                     argument_parameters: args.exprs().map(parameter_name_for_expr).collect(),
                 });
             }
-            collect_function_sink_expr(snapshot, callee, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                callee,
+                parameter_indexes,
+                context,
+                summary,
+            );
             for argument in args.exprs() {
-                collect_function_sink_expr(snapshot, argument, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    argument,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
         }
         ExprKind::CallOptions(callee, options) => {
-            collect_function_sink_expr(snapshot, callee, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                callee,
+                parameter_indexes,
+                context,
+                summary,
+            );
             for argument in options.iter() {
-                collect_function_sink_expr(snapshot, argument.value, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    argument.value,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
         }
         ExprKind::Delete(expr) | ExprKind::Unary(_, expr) => {
-            collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                expr,
+                parameter_indexes,
+                context,
+                summary,
+            );
         }
         ExprKind::Index(lhs, kind) => {
-            collect_function_sink_expr(snapshot, lhs, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                lhs,
+                parameter_indexes,
+                context,
+                summary,
+            );
             match kind {
                 IndexKind::Index(Some(expr)) => {
-                    collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        expr,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
                 IndexKind::Range(start, end) => {
                     if let Some(start) = start {
-                        collect_function_sink_expr(snapshot, start, parameter_indexes, summary);
+                        collect_function_sink_expr(
+                            file,
+                            current_contract,
+                            start,
+                            parameter_indexes,
+                            context,
+                            summary,
+                        );
                     }
                     if let Some(end) = end {
-                        collect_function_sink_expr(snapshot, end, parameter_indexes, summary);
+                        collect_function_sink_expr(
+                            file,
+                            current_contract,
+                            end,
+                            parameter_indexes,
+                            context,
+                            summary,
+                        );
                     }
                 }
                 IndexKind::Index(None) => {}
             }
         }
         ExprKind::Member(expr, _) => {
-            collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                expr,
+                parameter_indexes,
+                context,
+                summary,
+            );
         }
         ExprKind::Payable(args) => {
             for argument in args.exprs() {
-                collect_function_sink_expr(snapshot, argument, parameter_indexes, summary);
+                collect_function_sink_expr(
+                    file,
+                    current_contract,
+                    argument,
+                    parameter_indexes,
+                    context,
+                    summary,
+                );
             }
         }
         ExprKind::Ternary(cond, if_true, if_false) => {
-            collect_function_sink_expr(snapshot, cond, parameter_indexes, summary);
-            collect_function_sink_expr(snapshot, if_true, parameter_indexes, summary);
-            collect_function_sink_expr(snapshot, if_false, parameter_indexes, summary);
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                cond,
+                parameter_indexes,
+                context,
+                summary,
+            );
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                if_true,
+                parameter_indexes,
+                context,
+                summary,
+            );
+            collect_function_sink_expr(
+                file,
+                current_contract,
+                if_false,
+                parameter_indexes,
+                context,
+                summary,
+            );
         }
         ExprKind::Tuple(exprs) => {
             for expr in exprs.iter() {
                 if let SpannedOption::Some(expr) = expr {
-                    collect_function_sink_expr(snapshot, expr, parameter_indexes, summary);
+                    collect_function_sink_expr(
+                        file,
+                        current_contract,
+                        expr,
+                        parameter_indexes,
+                        context,
+                        summary,
+                    );
                 }
             }
         }
         ExprKind::New(_ty) => {}
         ExprKind::Ident(_) | ExprKind::Lit(_, _) | ExprKind::Type(_) | ExprKind::TypeCall(_) => {}
     }
+}
+
+fn resolved_callable_target(
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
+    callee: &Expr<'_>,
+    arg_count: usize,
+    context: &SinkSummaryContext<'_>,
+) -> Option<CallableTargetKey> {
+    let callee = callee.peel_parens();
+    match &callee.kind {
+        ExprKind::Ident(ident) => {
+            let offset = solgrid_ast::span_to_range(ident.span).start;
+            let defs = file
+                .table
+                .resolve_all(ident.as_str(), offset)
+                .into_iter()
+                .filter(|def| is_callable_symbol(def, arg_count))
+                .map(|def| CallableTargetKey {
+                    path: file.path.clone(),
+                    offset: def.name_span.start,
+                })
+                .collect::<Vec<_>>();
+            if let Some(target) = unique_callable_target(defs) {
+                return Some(target);
+            }
+
+            if let Some(contract_name) = current_contract {
+                if let Some(target) = resolve_named_contract_callable_target(
+                    file,
+                    contract_name,
+                    ident.as_str(),
+                    arg_count,
+                    context,
+                    false,
+                ) {
+                    return Some(target);
+                }
+            }
+
+            let cached_source = |candidate: &Path| {
+                cached_source(candidate, context.semantic_files, context.get_source)
+            };
+            let cross = resolve_cross_file_symbol(
+                &file.table,
+                ident.as_str(),
+                &file.path,
+                &cached_source,
+                context.resolver,
+            )?;
+            is_callable_symbol(&cross.def, arg_count).then_some(CallableTargetKey {
+                path: cross.resolved_path,
+                offset: cross.def.name_span.start,
+            })
+        }
+        ExprKind::Member(base, member) => {
+            let base = base.peel_parens();
+            if let ExprKind::Ident(container) = &base.kind {
+                let container_name = container.as_str();
+                if container_name == "super" {
+                    let contract_name = current_contract?;
+                    return resolve_named_contract_callable_target(
+                        file,
+                        contract_name,
+                        member.as_str(),
+                        arg_count,
+                        context,
+                        true,
+                    );
+                }
+                if container_name == "this" {
+                    let contract_name = current_contract?;
+                    return resolve_named_contract_callable_target(
+                        file,
+                        contract_name,
+                        member.as_str(),
+                        arg_count,
+                        context,
+                        false,
+                    );
+                }
+                if file.contracts.contains_key(container_name) {
+                    return resolve_contract_callable_target(
+                        file,
+                        container_name,
+                        member.as_str(),
+                        arg_count,
+                        context,
+                    );
+                }
+
+                let offset = solgrid_ast::span_to_range(container.span).start;
+                let defs = file
+                    .table
+                    .resolve(container_name, offset)
+                    .map(|container_def| {
+                        file.table
+                            .resolve_member_all(container_def, member.as_str())
+                            .into_iter()
+                            .filter(|def| is_callable_symbol(def, arg_count))
+                            .map(|def| CallableTargetKey {
+                                path: file.path.clone(),
+                                offset: def.name_span.start,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(target) = unique_callable_target(defs) {
+                    return Some(target);
+                }
+
+                let cached_source = |candidate: &Path| {
+                    cached_source(candidate, context.semantic_files, context.get_source)
+                };
+                let cross = resolve_cross_file_member_symbol(
+                    &file.table,
+                    container_name,
+                    member.as_str(),
+                    &file.path,
+                    &cached_source,
+                    context.resolver,
+                )?;
+                is_callable_symbol(&cross.def, arg_count).then_some(CallableTargetKey {
+                    path: cross.resolved_path,
+                    offset: cross.def.name_span.start,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn resolve_named_contract_callable_target(
+    file: &FileSemanticInfo,
+    contract_name: &str,
+    callable_name: &str,
+    arg_count: usize,
+    context: &SinkSummaryContext<'_>,
+    super_only: bool,
+) -> Option<CallableTargetKey> {
+    let mut visited = HashSet::new();
+    let candidates = resolve_contract_callable_targets(
+        file,
+        contract_name,
+        callable_name,
+        arg_count,
+        context,
+        !super_only,
+        &mut visited,
+    );
+    unique_callable_target(candidates)
+}
+
+fn resolve_contract_callable_target(
+    file: &FileSemanticInfo,
+    contract_name: &str,
+    callable_name: &str,
+    arg_count: usize,
+    context: &SinkSummaryContext<'_>,
+) -> Option<CallableTargetKey> {
+    let mut visited = HashSet::new();
+    let candidates = resolve_contract_callable_targets(
+        file,
+        contract_name,
+        callable_name,
+        arg_count,
+        context,
+        true,
+        &mut visited,
+    );
+    unique_callable_target(candidates)
+}
+
+fn resolve_contract_callable_targets(
+    file: &FileSemanticInfo,
+    contract_name: &str,
+    callable_name: &str,
+    arg_count: usize,
+    context: &SinkSummaryContext<'_>,
+    include_current: bool,
+    visited: &mut HashSet<(PathBuf, String)>,
+) -> Vec<CallableTargetKey> {
+    if !visited.insert((file.path.clone(), contract_name.to_string())) {
+        return Vec::new();
+    }
+
+    let Some(contract) = file.contracts.get(contract_name) else {
+        return Vec::new();
+    };
+
+    let mut candidates = Vec::new();
+    if include_current {
+        if let Some(callables) = contract.callables.get(callable_name) {
+            candidates.extend(
+                callables
+                    .iter()
+                    .filter(|callable| callable.arg_count == arg_count)
+                    .map(|callable| callable.target.clone()),
+            );
+        }
+    }
+
+    for base in &contract.bases {
+        let Some((base_path, base_name)) = resolve_contract_path_target(file, base, context) else {
+            continue;
+        };
+        let Some(base_file) = context.semantic_files.get(&base_path) else {
+            continue;
+        };
+        candidates.extend(resolve_contract_callable_targets(
+            base_file,
+            &base_name,
+            callable_name,
+            arg_count,
+            context,
+            true,
+            visited,
+        ));
+    }
+
+    candidates
+}
+
+fn resolve_contract_path_target(
+    file: &FileSemanticInfo,
+    path: &TypePath,
+    context: &SinkSummaryContext<'_>,
+) -> Option<(PathBuf, String)> {
+    let cached_source =
+        |candidate: &Path| cached_source(candidate, context.semantic_files, context.get_source);
+
+    match path.segments.as_slice() {
+        [] => None,
+        [name] => {
+            if file.contracts.contains_key(name) {
+                return Some((file.path.clone(), name.clone()));
+            }
+            let cross = resolve_cross_file_symbol(
+                &file.table,
+                name,
+                &file.path,
+                &cached_source,
+                context.resolver,
+            )?;
+            matches!(
+                cross.def.kind,
+                SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+            )
+            .then_some((cross.resolved_path, cross.def.name))
+        }
+        [namespace, member, ..] => {
+            let cross = resolve_cross_file_member_symbol(
+                &file.table,
+                namespace,
+                member,
+                &file.path,
+                &cached_source,
+                context.resolver,
+            )?;
+            matches!(
+                cross.def.kind,
+                SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+            )
+            .then_some((cross.resolved_path, cross.def.name))
+        }
+    }
+}
+
+fn unique_callable_target(candidates: Vec<CallableTargetKey>) -> Option<CallableTargetKey> {
+    let mut unique = candidates;
+    unique.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.offset.cmp(&right.offset))
+    });
+    unique.dedup();
+    (unique.len() == 1).then(|| unique.remove(0))
+}
+
+fn cached_source(
+    path: &Path,
+    semantic_files: &HashMap<PathBuf, FileSemanticInfo>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+) -> Option<String> {
+    semantic_files
+        .get(path)
+        .map(|file| file.source.clone())
+        .or_else(|| get_source(path))
 }
 
 fn propagate_sink_indices(
@@ -1253,25 +1991,40 @@ fn propagate_sink_indices(
 }
 
 fn propagated_sink_summary(
-    snapshot: &ProjectSnapshot,
+    file: &FileSemanticInfo,
     expr: &Expr<'_>,
-    summaries: &HashMap<usize, FunctionSinkSummary>,
+    summaries: &HashMap<CallableTargetKey, FunctionSinkSummary>,
+    semantic_files: &HashMap<PathBuf, FileSemanticInfo>,
+    resolver: &SharedImportResolver,
+    get_source: &dyn Fn(&Path) -> Option<String>,
 ) -> Option<PropagatedSinkFinding> {
-    let ExprKind::Call(callee, args) = &expr.kind else {
+    let ExprKind::Call(callee_expr, args) = &expr.kind else {
         return None;
     };
-    let callee_offset = resolved_same_file_callable_target(snapshot, callee, args.len())?;
-    let summary = summaries.get(&callee_offset)?;
+    let context = SinkSummaryContext {
+        semantic_files,
+        resolver,
+        get_source,
+    };
+    let call_offset = solgrid_ast::span_to_range(expr.span).start;
+    let current_contract = file
+        .table
+        .find_enclosing_function(call_offset)
+        .and_then(|function| file.callable_contracts.get(&function.name_span.start))
+        .and_then(|contract| contract.as_deref());
+    let callee =
+        resolved_callable_target(file, current_contract, callee_expr, args.len(), &context)?;
+    let summary = summaries.get(&callee)?;
     if summary.delegatecall_parameters.is_empty() && summary.eth_transfer_parameters.is_empty() {
         return None;
     }
-    let (call_name, call_span) = call_site_label_and_span(callee)?;
+    let (call_name, call_span) = call_site_label_and_span(callee_expr)?;
     let mut propagated = Vec::new();
     for index in &summary.delegatecall_parameters {
         let Some(argument) = args.exprs().nth(*index) else {
             continue;
         };
-        if let Some(parameter_name) = resolved_parameter_name(snapshot, argument) {
+        if let Some(parameter_name) = resolved_parameter_name(file, argument) {
             propagated.push((parameter_name, SinkKind::Delegatecall));
         }
     }
@@ -1279,16 +2032,16 @@ fn propagated_sink_summary(
         let Some(argument) = args.exprs().nth(*index) else {
             continue;
         };
-        if let Some(parameter_name) = resolved_parameter_name(snapshot, argument) {
+        if let Some(parameter_name) = resolved_parameter_name(file, argument) {
             propagated.push((parameter_name, SinkKind::EthTransfer));
         }
     }
     (!propagated.is_empty()).then_some((call_span, call_name, propagated))
 }
 
-fn resolved_parameter_name(snapshot: &ProjectSnapshot, expr: &Expr<'_>) -> Option<String> {
+fn resolved_parameter_name(file: &FileSemanticInfo, expr: &Expr<'_>) -> Option<String> {
     let (name, span) = parameter_name_and_span_for_expr(expr)?;
-    let resolved = snapshot.table.resolve(&name, span.start)?;
+    let resolved = file.table.resolve(&name, span.start)?;
     (resolved.kind == SymbolKind::Parameter).then_some(name)
 }
 
@@ -1365,50 +2118,6 @@ fn eth_transfer_target_identifier_from_sink_expr(
     };
     let (target_name, span) = delegatecall_target_identifier(base)?;
     Some((target_name, method_label, span))
-}
-
-fn resolved_same_file_callable_target(
-    snapshot: &ProjectSnapshot,
-    callee: &Expr<'_>,
-    arg_count: usize,
-) -> Option<usize> {
-    let callee = callee.peel_parens();
-    match &callee.kind {
-        ExprKind::Ident(ident) => {
-            let defs = snapshot
-                .table
-                .resolve_all(ident.as_str(), solgrid_ast::span_to_range(ident.span).start)
-                .into_iter()
-                .filter(|def| is_callable_symbol(def, arg_count))
-                .collect::<Vec<_>>();
-            if defs.len() == 1 {
-                Some(defs[0].name_span.start)
-            } else {
-                None
-            }
-        }
-        ExprKind::Member(base, member) => {
-            let ExprKind::Ident(container) = &base.peel_parens().kind else {
-                return None;
-            };
-            let container_def = snapshot.table.resolve(
-                container.as_str(),
-                solgrid_ast::span_to_range(container.span).start,
-            )?;
-            let defs = snapshot
-                .table
-                .resolve_member_all(container_def, member.as_str())
-                .into_iter()
-                .filter(|def| is_callable_symbol(def, arg_count))
-                .collect::<Vec<_>>();
-            if defs.len() == 1 {
-                Some(defs[0].name_span.start)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 fn is_callable_symbol(def: &SymbolDef, arg_count: usize) -> bool {
@@ -2050,6 +2759,52 @@ contract DelegatecallWrapper {
     }
 
     #[test]
+    fn test_compiler_diagnostics_report_inherited_delegatecall_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DelegatecallInheritance.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract BaseDelegatecall {
+    function _delegate(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+}
+
+contract DerivedDelegatecall is BaseDelegatecall {
+    function run(address implementation, bytes memory payload) external {
+        _delegate(implementation, payload);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `_delegate`")
+            })
+            .expect("expected inherited delegatecall finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_user_controlled_eth_transfer() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("EthTransfer.sol");
@@ -2157,6 +2912,58 @@ contract EthTransferWrapper {
                         .contains("flows into an ETH transfer via `_pay`")
             })
             .expect("expected propagated ETH transfer finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_cross_file_inherited_eth_transfer_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("BasePay.sol");
+        let derived_path = dir.path().join("DerivedPay.sol");
+        let base_source = r#"pragma solidity ^0.8.0;
+contract BasePay {
+    function _pay(address target, uint256 amount) internal {
+        payable(target).call{value: amount}("");
+    }
+}
+"#;
+        let derived_source = r#"pragma solidity ^0.8.0;
+import "./BasePay.sol";
+
+contract DerivedPay is BasePay {
+    function pay(address recipient, uint256 amount) external payable {
+        _pay(recipient, amount);
+    }
+}
+"#;
+        fs::write(&base_path, base_source).unwrap();
+        fs::write(&derived_path, derived_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics =
+            compiler_to_lsp_diagnostics(&index, derived_source, &derived_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `_pay`")
+            })
+            .expect("expected inherited ETH transfer finding");
 
         let meta: FindingMeta = serde_json::from_value(
             propagated
