@@ -2139,6 +2139,75 @@ fn test_format_binary_expr_with_trailing_operator_line_break() {
 }
 
 #[test]
+fn test_format_assignment_binary_rhs_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base = Math.mulDiv(baseUnits + premiumUnits, numeratorUnits, denominatorUnits, Math.Rounding.Ceil) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base =
+            Math.mulDiv(
+                baseUnits + premiumUnits,
+                numeratorUnits,
+                denominatorUnits,
+                Math.Rounding.Ceil
+            ) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_assignment_bitwise_chain_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles = (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles =
+            (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_format_logical_or_chain_with_trailing_operator_line_break() {
     let source = r#"contract T {
     function supportsInterface(bytes4 interfaceId) public view returns (bool) {

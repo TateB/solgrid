@@ -88,17 +88,23 @@ pub fn format_expr(
             }
         }
         ExprKind::Assign(lhs, op, rhs) => {
-            let op_str = if let Some(binop) = op {
-                format!("{} ", span_text(source, binop.span))
+            let op_str = op
+                .map(|binop| span_text(source, binop.span).to_string())
+                .unwrap_or_else(|| "=".to_string());
+            let lhs_chunk = format_expr(lhs, source, config, comments);
+            let rhs_chunk = format_expr(rhs, source, config, comments);
+
+            if assignment_rhs_prefers_break_after_operator(rhs) {
+                group(vec![
+                    lhs_chunk,
+                    space(),
+                    text(op_str),
+                    if_flat(space(), concat(vec![])),
+                    indent(vec![if_flat(concat(vec![]), line()), rhs_chunk]),
+                ])
             } else {
-                "= ".to_string()
-            };
-            group(vec![
-                format_expr(lhs, source, config, comments),
-                space(),
-                text(op_str),
-                format_expr(rhs, source, config, comments),
-            ])
+                group(vec![lhs_chunk, space(), text(op_str), space(), rhs_chunk])
+            }
         }
         ExprKind::Call(callee, args) => {
             let callee_chunk = format_expr(callee, source, config, comments);
@@ -254,6 +260,16 @@ fn format_binary_break(
     match operator_line_break {
         OperatorLineBreak::Leading => vec![line(), text(op_str), space(), rhs],
         OperatorLineBreak::Trailing => vec![space(), text(op_str), line(), rhs],
+    }
+}
+
+fn assignment_rhs_prefers_break_after_operator(expr: &Expr<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::Binary(..) | ExprKind::Ternary(..) => true,
+        ExprKind::Tuple(elements) => {
+            matches!(elements.as_ref(), [SpannedOption::Some(inner)] if assignment_rhs_prefers_break_after_operator(inner))
+        }
+        _ => false,
     }
 }
 
