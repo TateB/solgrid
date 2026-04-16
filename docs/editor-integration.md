@@ -101,7 +101,7 @@ The semantic-token surface currently includes:
 
 - contract, interface, library, struct, enum, UDVT, event, function, modifier, variable, property, parameter, and enum-member declarations
 - high-signal resolved references for local symbols and imported namespace-qualified types or members
-- readonly modifiers for enum members plus constant and immutable state variables at both declaration and reference sites
+- readonly modifiers for enum members plus constant and immutable state variables at declaration, direct reference, and member-resolved reference sites
 - named import aliases preserve the imported symbol kind for common cases such as contracts and custom errors instead of collapsing to a generic type token
 - full-document, full-delta, and visible-range token requests through standard LSP semantic-token providers
 - conservative declaration-vs-reference coloring for namespace imports and common Solidity symbol sites without relying on extension-specific UI

@@ -418,6 +418,10 @@ error Unauthorized(address caller);
     const mainSource = `pragma solidity ^0.8.0;
 import { Vault as ImportedVault, Unauthorized as ImportedUnauthorized } from "./Lib.sol";
 
+library Limits {
+    uint256 internal constant MAX = 2;
+}
+
 contract Main {
     uint256 private constant LOCAL_MAX = 1;
     address private immutable owner;
@@ -439,6 +443,9 @@ contract Main {
             revert ImportedUnauthorized(msg.sender);
         }
         if (mode == Mode.Running) {
+            return Limits.MAX;
+        }
+        if (mode == Mode.Idle) {
             return LOCAL_MAX;
         }
         return 0;
@@ -531,6 +538,20 @@ contract Main {
         expect.objectContaining({
           text: "Running",
           tokenType: "enumMember",
+          tokenModifiers: ["readonly"],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "MAX",
+          tokenType: "property",
+          tokenModifiers: ["declaration", "readonly"],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "MAX",
+          tokenType: "property",
           tokenModifiers: ["readonly"],
         })
       );

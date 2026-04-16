@@ -96,6 +96,8 @@ struct CallContext {
 struct ResolvedDef {
     table: SymbolTable,
     def: SymbolDef,
+    source: Option<String>,
+    origin_key: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -166,7 +168,12 @@ impl<'a> SemanticContext<'a> {
 
         let defs = self.resolve_member_defs(base, member.as_str());
         (defs.len() == 1)
-            .then(|| semantic_token_info_for_symbol(&defs[0].def, None))
+            .then(|| {
+                semantic_token_info_for_symbol(
+                    &defs[0].def,
+                    defs[0].source.as_deref().or(Some(self.source)),
+                )
+            })
             .flatten()
     }
 
@@ -219,7 +226,12 @@ impl<'a> SemanticContext<'a> {
         };
         let resolved = self.resolve_type_path(&type_path, resolve_offset);
         (resolved.len() == 1)
-            .then(|| semantic_token_info_for_symbol(&resolved[0].def, None))
+            .then(|| {
+                semantic_token_info_for_symbol(
+                    &resolved[0].def,
+                    resolved[0].source.as_deref().or(Some(self.source)),
+                )
+            })
             .flatten()
     }
 
@@ -276,6 +288,10 @@ impl<'a> SemanticContext<'a> {
                         results.push(ResolvedDef {
                             table: self.table.clone(),
                             def: def.clone(),
+                            source: None,
+                            origin_key: self
+                                .current_file
+                                .map(|path| path.to_string_lossy().to_string()),
                         });
                     }
                     if let Some(type_info) = &def.type_info {
@@ -385,6 +401,8 @@ impl<'a> SemanticContext<'a> {
                 resolved.push(ResolvedDef {
                     table: container.table.clone(),
                     def: member.clone(),
+                    source: container.source.clone(),
+                    origin_key: container.origin_key.clone(),
                 });
             }
         }
@@ -428,6 +446,8 @@ impl<'a> SemanticContext<'a> {
                 resolved.push(ResolvedDef {
                     table: imported_table.clone(),
                     def: def.clone(),
+                    source: Some(imported_source.clone()),
+                    origin_key: Some(path.to_string_lossy().to_string()),
                 });
             }
         }
@@ -472,6 +492,8 @@ impl<'a> SemanticContext<'a> {
                                 .map(|member| ResolvedDef {
                                     table: container.table.clone(),
                                     def: (*member).clone(),
+                                    source: container.source.clone(),
+                                    origin_key: container.origin_key.clone(),
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -487,6 +509,10 @@ impl<'a> SemanticContext<'a> {
                 current.push(ResolvedDef {
                     table: self.table.clone(),
                     def: def.clone(),
+                    source: None,
+                    origin_key: self
+                        .current_file
+                        .map(|path| path.to_string_lossy().to_string()),
                 });
             }
         }
@@ -504,6 +530,8 @@ impl<'a> SemanticContext<'a> {
                         current.push(ResolvedDef {
                             table: cross.table.clone(),
                             def: def.clone(),
+                            source: Some(cross.source.clone()),
+                            origin_key: Some(cross.resolved_path.to_string_lossy().to_string()),
                         });
                     }
                 }
@@ -522,6 +550,8 @@ impl<'a> SemanticContext<'a> {
                         .map(|member| ResolvedDef {
                             table: container.table.clone(),
                             def: (*member).clone(),
+                            source: container.source.clone(),
+                            origin_key: container.origin_key.clone(),
                         })
                         .collect::<Vec<_>>()
                 })
@@ -2109,6 +2139,7 @@ fn dedup_resolved_defs(defs: Vec<ResolvedDef>) -> Vec<ResolvedDef> {
             resolved.def.kind,
             resolved.def.name_span.start,
             resolved.def.name_span.end,
+            resolved.origin_key.clone(),
         );
         if seen.insert(key) {
             unique.push(resolved);
