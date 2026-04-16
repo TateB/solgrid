@@ -130,7 +130,8 @@ The current server-native interprocedural detector surface is intentionally cons
 - same-file helper propagation is supported for the native `delegatecall` and ETH-transfer detectors
 - inherited helper propagation is supported, including imported base contracts, when the helper target resolves uniquely
 - contract-typed helper-wrapper propagation is supported for member, indexed, and getter-returned helper bases when the helper target and callable resolve uniquely
-- broader arbitrary cross-file wrapper graphs and overload-ambiguous flows are still rejected instead of guessed
+- imported overloaded helper wrappers are supported when the callable target is uniquely identified by arity
+- broader arbitrary cross-file wrapper graphs and same-arity overload-ambiguous flows are still rejected instead of guessed
 
 ### Call Hierarchy
 

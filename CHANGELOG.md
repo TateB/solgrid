@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added inherited-helper interprocedural propagation for native delegatecall and ETH-transfer detectors, including imported base-contract helper chains when the target stays uniquely resolved
 - Added contract-typed helper-wrapper interprocedural propagation for native delegatecall and ETH-transfer detectors when the helper target resolves uniquely
 - Added detector propagation through uniquely resolved getter-returned and indexed contract-typed helper wrappers for native delegatecall and ETH-transfer flows
+- Added detector propagation through imported overloaded helper wrappers when the wrapper target is uniquely identified by call arity
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

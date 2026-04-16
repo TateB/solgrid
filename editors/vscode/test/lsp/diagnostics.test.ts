@@ -745,6 +745,63 @@ contract Main {
     });
   });
 
+  it("publishes propagated delegatecall diagnostics through imported overloaded helper wrappers", async () => {
+    const dir = tempWorkspace();
+    const helperPath = path.join(dir, "BridgeHelper.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperUri = toUri(helperPath);
+    const mainUri = toUri(mainPath);
+    const helperSource = `pragma solidity ^0.8.0;
+
+function bridge(address target) {
+    target.code.length;
+}
+
+function bridge(address target, bytes memory payload) {
+    target.delegatecall(payload);
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+contract Main {
+    function run(address implementation, bytes memory payload) external {
+        bridge(implementation, payload);
+    }
+}
+`;
+
+    fs.writeFileSync(helperPath, helperSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperUri, helperSource);
+    await waitForDiagnostics(client, helperUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-delegatecall" &&
+        diagnostic.message.includes("flows into delegatecall via `bridge`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.severity).toBe(1);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-delegatecall",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
   it("publishes semantic detector diagnostics for parameter-driven ETH transfers", async () => {
     const dir = tempWorkspace();
     const filePath = path.join(dir, "EthTransfer.sol");
@@ -985,6 +1042,65 @@ contract Main {
 
     function pay(uint256 helperId, address recipient, uint256 amount) external payable {
         helpers[helperId].pay(recipient, amount);
+    }
+}
+`;
+
+    fs.writeFileSync(helperPath, helperSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperUri, helperSource);
+    await waitForDiagnostics(client, helperUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-eth-transfer" &&
+        diagnostic.message.includes("flows into an ETH transfer via `pay`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.severity).toBe(2);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-eth-transfer",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
+  it("publishes propagated ETH transfer diagnostics through imported overloaded helper members", async () => {
+    const dir = tempWorkspace();
+    const helperPath = path.join(dir, "PayLib.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperUri = toUri(helperPath);
+    const mainUri = toUri(mainPath);
+    const helperSource = `pragma solidity ^0.8.0;
+
+library PayLib {
+    function pay(address target) internal {
+        target.code.length;
+    }
+
+    function pay(address target, uint256 amount) internal {
+        payable(target).call{value: amount}("");
+    }
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./PayLib.sol";
+
+contract Main {
+    function pay(address recipient, uint256 amount) external payable {
+        PayLib.pay(recipient, amount);
     }
 }
 `;

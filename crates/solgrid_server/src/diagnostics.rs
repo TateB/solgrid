@@ -981,6 +981,12 @@ struct ResolvedExprType {
     ty: TypeSpec,
 }
 
+#[derive(Clone, Copy)]
+struct CrossFileMemberQuery<'a> {
+    container_name: &'a str,
+    member_name: &'a str,
+}
+
 type PropagatedSinkFinding = (std::ops::Range<usize>, String, Vec<(String, SinkKind)>);
 
 struct SinkSummaryContext<'a> {
@@ -2100,17 +2106,21 @@ fn resolved_callable_target(
             let cached_source = |candidate: &Path| {
                 cached_source(candidate, context.semantic_files, context.get_source)
             };
-            let cross = resolve_cross_file_symbol(
+            let candidates = resolve_cross_file_symbol_defs(
                 &file.table,
                 ident.as_str(),
                 &file.path,
                 &cached_source,
                 context.resolver,
-            )?;
-            is_callable_symbol(&cross.def, arg_count).then_some(CallableTargetKey {
-                path: cross.resolved_path,
-                offset: cross.def.name_span.start,
+            )
+            .into_iter()
+            .filter(|(_, def)| is_callable_symbol(def, arg_count))
+            .map(|(path, def)| CallableTargetKey {
+                path,
+                offset: def.name_span.start,
             })
+            .collect::<Vec<_>>();
+            unique_callable_target(candidates)
         }
         ExprKind::Member(base, member) => {
             let base = base.peel_parens();
@@ -2196,18 +2206,22 @@ fn resolved_callable_target(
                 let cached_source = |candidate: &Path| {
                     cached_source(candidate, context.semantic_files, context.get_source)
                 };
-                let cross = resolve_cross_file_member_symbol(
+                let candidates = resolve_cross_file_member_defs(
                     &file.table,
                     container_name,
                     member.as_str(),
                     &file.path,
                     &cached_source,
                     context.resolver,
-                )?;
-                is_callable_symbol(&cross.def, arg_count).then_some(CallableTargetKey {
-                    path: cross.resolved_path,
-                    offset: cross.def.name_span.start,
+                )
+                .into_iter()
+                .filter(|(_, def)| is_callable_symbol(def, arg_count))
+                .map(|(path, def)| CallableTargetKey {
+                    path,
+                    offset: def.name_span.start,
                 })
+                .collect::<Vec<_>>();
+                unique_callable_target(candidates)
             } else {
                 let candidates =
                     resolve_contract_targets_from_expr(file, current_contract, base, context)
@@ -2364,6 +2378,211 @@ fn resolve_contract_path_target(
             .then_some((cross.resolved_path, cross.def.name))
         }
     }
+}
+
+fn resolve_cross_file_symbol_defs(
+    current_table: &SymbolTable,
+    name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &SharedImportResolver,
+) -> Vec<(PathBuf, SymbolDef)> {
+    let mut visited = HashSet::new();
+    let mut resolved = Vec::new();
+    resolve_cross_file_symbol_defs_inner(
+        current_table,
+        name,
+        importing_file,
+        get_source,
+        resolver,
+        &mut visited,
+        &mut resolved,
+    );
+    dedup_cross_file_symbol_defs(resolved)
+}
+
+fn resolve_cross_file_symbol_defs_inner(
+    current_table: &SymbolTable,
+    name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &SharedImportResolver,
+    visited: &mut HashSet<PathBuf>,
+    resolved_defs: &mut Vec<(PathBuf, SymbolDef)>,
+) {
+    for import in &current_table.imports {
+        let target_name = match &import.symbols {
+            ImportedSymbols::Named(names) => names
+                .iter()
+                .find_map(|(original, alias)| {
+                    let local_name = alias.as_deref().unwrap_or(original.as_str());
+                    (local_name == name).then_some(original.as_str())
+                })
+                .unwrap_or_default(),
+            ImportedSymbols::Plain(None) => name,
+            ImportedSymbols::Plain(Some(_)) | ImportedSymbols::Glob(_) => "",
+        };
+        if target_name.is_empty() {
+            continue;
+        }
+
+        let Some(resolved_path) = resolver.resolve(&import.path, importing_file) else {
+            continue;
+        };
+        if !visited.insert(resolved_path.clone()) {
+            continue;
+        }
+
+        let Some(imported_source) = get_source(&resolved_path) else {
+            continue;
+        };
+        let filename = resolved_path.to_string_lossy().to_string();
+        let Some(imported_table) = symbols::build_symbol_table(&imported_source, &filename) else {
+            continue;
+        };
+
+        let direct_defs = imported_table.resolve_all(target_name, 0);
+        if !direct_defs.is_empty() {
+            resolved_defs.extend(
+                direct_defs
+                    .into_iter()
+                    .map(|def| (resolved_path.clone(), def.clone())),
+            );
+        } else {
+            resolve_cross_file_symbol_defs_inner(
+                &imported_table,
+                target_name,
+                &resolved_path,
+                get_source,
+                resolver,
+                visited,
+                resolved_defs,
+            );
+        }
+    }
+}
+
+fn resolve_cross_file_member_defs(
+    current_table: &SymbolTable,
+    container_name: &str,
+    member_name: &str,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &SharedImportResolver,
+) -> Vec<(PathBuf, SymbolDef)> {
+    let mut visited = HashSet::new();
+    let mut resolved = Vec::new();
+    resolve_cross_file_member_defs_inner(
+        current_table,
+        CrossFileMemberQuery {
+            container_name,
+            member_name,
+        },
+        importing_file,
+        get_source,
+        resolver,
+        &mut visited,
+        &mut resolved,
+    );
+    dedup_cross_file_symbol_defs(resolved)
+}
+
+fn resolve_cross_file_member_defs_inner(
+    current_table: &SymbolTable,
+    query: CrossFileMemberQuery<'_>,
+    importing_file: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &SharedImportResolver,
+    visited: &mut HashSet<PathBuf>,
+    resolved_defs: &mut Vec<(PathBuf, SymbolDef)>,
+) {
+    for import in &current_table.imports {
+        let target = match &import.symbols {
+            ImportedSymbols::Named(names) => names.iter().find_map(|(original, alias)| {
+                let local_name = alias.as_deref().unwrap_or(original.as_str());
+                (local_name == query.container_name).then_some((original.as_str(), false))
+            }),
+            ImportedSymbols::Plain(None) => Some((query.container_name, false)),
+            ImportedSymbols::Plain(Some(alias)) if alias == query.container_name => {
+                Some((query.member_name, true))
+            }
+            ImportedSymbols::Glob(alias) if alias == query.container_name => {
+                Some((query.member_name, true))
+            }
+            _ => None,
+        };
+        let Some((target_name, is_namespace_import)) = target else {
+            continue;
+        };
+
+        let Some(resolved_path) = resolver.resolve(&import.path, importing_file) else {
+            continue;
+        };
+        if !visited.insert(resolved_path.clone()) {
+            continue;
+        }
+
+        let Some(imported_source) = get_source(&resolved_path) else {
+            continue;
+        };
+        let filename = resolved_path.to_string_lossy().to_string();
+        let Some(imported_table) = symbols::build_symbol_table(&imported_source, &filename) else {
+            continue;
+        };
+
+        if is_namespace_import {
+            let direct_defs = imported_table.resolve_all(target_name, 0);
+            if !direct_defs.is_empty() {
+                resolved_defs.extend(
+                    direct_defs
+                        .into_iter()
+                        .map(|def| (resolved_path.clone(), def.clone())),
+                );
+                continue;
+            }
+        }
+
+        if let Some(container_def) = imported_table.resolve(target_name, 0) {
+            let members = imported_table.resolve_member_all(container_def, query.member_name);
+            if !members.is_empty() {
+                resolved_defs.extend(
+                    members
+                        .into_iter()
+                        .map(|member_def| (resolved_path.clone(), member_def.clone())),
+                );
+                continue;
+            }
+        }
+
+        resolve_cross_file_member_defs_inner(
+            &imported_table,
+            CrossFileMemberQuery {
+                container_name: target_name,
+                member_name: query.member_name,
+            },
+            &resolved_path,
+            get_source,
+            resolver,
+            visited,
+            resolved_defs,
+        );
+    }
+}
+
+fn dedup_cross_file_symbol_defs(defs: Vec<(PathBuf, SymbolDef)>) -> Vec<(PathBuf, SymbolDef)> {
+    let mut unique = defs;
+    unique.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.name_span.start.cmp(&right.1.name_span.start))
+            .then_with(|| left.1.name.cmp(&right.1.name))
+    });
+    unique.dedup_by(|left, right| {
+        left.0 == right.0
+            && left.1.name_span.start == right.1.name_span.start
+            && left.1.name == right.1.name
+    });
+    unique
 }
 
 fn unique_callable_target(candidates: Vec<CallableTargetKey>) -> Option<CallableTargetKey> {
@@ -3621,6 +3840,114 @@ contract Main {
                         .contains("flows into an ETH transfer via `pay`")
             })
             .expect("expected indexed ETH transfer wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_imported_overloaded_delegatecall_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("BridgeHelper.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+function bridge(address target) {
+    target.code.length;
+}
+
+function bridge(address target, bytes memory payload) {
+    target.delegatecall(payload);
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+contract Main {
+    function run(address implementation, bytes memory payload) external {
+        bridge(implementation, payload);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `bridge`")
+            })
+            .expect("expected imported overloaded delegatecall wrapper finding");
+
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_imported_overloaded_eth_transfer_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("PayLib.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+library PayLib {
+    function pay(address target) internal {
+        target.code.length;
+    }
+
+    function pay(address target, uint256 amount) internal {
+        payable(target).call{value: amount}("");
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./PayLib.sol";
+
+contract Main {
+    function pay(address recipient, uint256 amount) external payable {
+        PayLib.pay(recipient, amount);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `pay`")
+            })
+            .expect("expected imported overloaded ETH transfer wrapper finding");
 
         let meta: FindingMeta = serde_json::from_value(
             propagated
