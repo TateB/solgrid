@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.11] - 2026-04-16
 
 ### Fixed
-- Fixed trailing-operator formatter output so wrapped binary and logical expressions align flat instead of adding an extra continuation indent
+- Fixed formatter wrapping so trailing-operator assignment RHS chains break after `=` and multiline ternary branches align with the full condition instead of the last condition line
 
 ## [0.0.10] - 2026-04-15
 

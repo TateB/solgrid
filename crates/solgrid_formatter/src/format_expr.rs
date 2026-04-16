@@ -60,45 +60,50 @@ pub fn format_expr(
             let cond_chunk = format_expr(cond, source, config, comments);
             let true_chunk = format_expr(if_true, source, config, comments);
             let false_chunk = format_expr(if_false, source, config, comments);
+            let align_branches_with_condition = span_text(source, cond.span).contains('\n');
 
             if span_text(source, expr.span).contains('\n') {
                 concat(vec![
                     cond_chunk,
-                    indent(vec![
-                        hardline(),
-                        text("? "),
+                    format_ternary_branches(
                         true_chunk,
-                        hardline(),
-                        text(": "),
                         false_chunk,
-                    ]),
+                        align_branches_with_condition,
+                        true,
+                    ),
                 ])
             } else {
                 group(vec![
                     cond_chunk,
-                    indent(vec![
-                        line(),
-                        text("? "),
+                    format_ternary_branches(
                         true_chunk,
-                        line(),
-                        text(": "),
                         false_chunk,
-                    ]),
+                        align_branches_with_condition,
+                        false,
+                    ),
                 ])
             }
         }
         ExprKind::Assign(lhs, op, rhs) => {
-            let op_str = if let Some(binop) = op {
-                format!("{} ", span_text(source, binop.span))
+            let op_str = op
+                .map(|binop| span_text(source, binop.span).to_string())
+                .unwrap_or_else(|| "=".to_string());
+            let lhs_chunk = format_expr(lhs, source, config, comments);
+            let rhs_chunk = format_expr(rhs, source, config, comments);
+
+            if config.operator_line_break == OperatorLineBreak::Trailing
+                && assignment_rhs_prefers_break_after_operator(rhs)
+            {
+                group(vec![
+                    lhs_chunk,
+                    space(),
+                    text(op_str),
+                    if_flat(space(), concat(vec![])),
+                    indent(vec![if_flat(concat(vec![]), line()), rhs_chunk]),
+                ])
             } else {
-                "= ".to_string()
-            };
-            group(vec![
-                format_expr(lhs, source, config, comments),
-                space(),
-                text(op_str),
-                format_expr(rhs, source, config, comments),
-            ])
+                group(vec![lhs_chunk, space(), text(op_str), space(), rhs_chunk])
+            }
         }
         ExprKind::Call(callee, args) => {
             let callee_chunk = format_expr(callee, source, config, comments);
@@ -254,6 +259,42 @@ fn format_binary_break(
     match operator_line_break {
         OperatorLineBreak::Leading => vec![line(), text(op_str), space(), rhs],
         OperatorLineBreak::Trailing => vec![space(), text(op_str), line(), rhs],
+    }
+}
+
+fn assignment_rhs_prefers_break_after_operator(expr: &Expr<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::Binary(..) | ExprKind::Ternary(..) => true,
+        ExprKind::Tuple(elements) => {
+            matches!(elements.as_ref(), [SpannedOption::Some(inner)] if assignment_rhs_prefers_break_after_operator(inner))
+        }
+        _ => false,
+    }
+}
+
+fn format_ternary_branches(
+    if_true: FormatChunk,
+    if_false: FormatChunk,
+    align_with_condition: bool,
+    preserve_multiline: bool,
+) -> FormatChunk {
+    let lines = if preserve_multiline {
+        vec![
+            hardline(),
+            text("? "),
+            if_true,
+            hardline(),
+            text(": "),
+            if_false,
+        ]
+    } else {
+        vec![line(), text("? "), if_true, line(), text(": "), if_false]
+    };
+
+    if align_with_condition {
+        concat(lines)
+    } else {
+        indent(lines)
     }
 }
 

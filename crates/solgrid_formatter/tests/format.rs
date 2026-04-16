@@ -451,6 +451,61 @@ fn test_keep_ternary_continuation_indented() {
 }
 
 #[test]
+fn test_align_ternary_branches_with_multiline_binary_condition() {
+    let source = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+                keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) ==
+                keccak256(name)
+                ? registry
+                : IRegistry(address(0));
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+            keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) == keccak256(name)
+            ? registry
+            : IRegistry(address(0));
+    }
+}
+"#;
+
+    let config = FormatConfig {
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_indented_ternary_branches_for_single_line_binary_condition() {
+    let source = r#"contract T {
+    function f(bool a, bool b, uint256 x, uint256 y) internal pure returns (uint256) {
+        return a == b ? veryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(x, y, x, y, x, y) : anotherVeryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(y, x, y, x, y, x);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(bool a, bool b, uint256 x, uint256 y) internal pure returns (uint256) {
+        return
+            a == b
+                ? veryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(x, y, x, y, x, y)
+                : anotherVeryLongFunctionNameThatWillSurelyForceTheFormatterToBreakOntoMultipleLines(y, x, y, x, y, x);
+    }
+}
+"#;
+
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_preserve_comments_inside_empty_if_block() {
     let source = r#"contract T {
     function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {
@@ -2131,6 +2186,96 @@ fn test_format_binary_expr_with_trailing_operator_line_break() {
 "#;
     let config = FormatConfig {
         line_length: 50,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_assignment_binary_rhs_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base = Math.mulDiv(baseUnits + premiumUnits, numeratorUnits, denominatorUnits, Math.Rounding.Ceil) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 base, uint256 baseUnits, uint256 premiumUnits, uint256 premium)
+        public
+        pure
+        returns (uint256)
+    {
+        base =
+            Math.mulDiv(
+                baseUnits + premiumUnits,
+                numeratorUnits,
+                denominatorUnits,
+                Math.Rounding.Ceil
+            ) -
+            premium; // ensure: f(a+b) - f(a) == f(b)
+        return base;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_keep_first_assignment_rhs_term_on_line_with_leading_operator_breaks() {
+    let source = r#"contract T {
+    function f(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e, uint256 f0) internal pure returns (uint256 value) {
+        value = veryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0) + anotherVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0) + thirdVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0);
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 a, uint256 b, uint256 c, uint256 d, uint256 e, uint256 f0) internal pure returns (uint256 value) {
+        value = veryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0)
+            + anotherVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0)
+                + thirdVeryLongFunctionNameThatWillSurelyForceLineBreaking(a, b, c, d, e, f0);
+    }
+}
+"#;
+
+    let formatted = format_source_verified(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn test_format_assignment_bitwise_chain_with_trailing_operator_line_break_breaks_after_equals() {
+    let source = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles = (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(uint256 value) public pure returns (uint256 hasZeroNybbles) {
+        hasZeroNybbles =
+            (value - 0x1111111111111111111111111111111111111111111111111111111111111111) &
+            ~value &
+            0x8888888888888888888888888888888888888888888888888888888888888888;
+    }
+}
+"#;
+    let config = FormatConfig {
+        line_length: 100,
         operator_line_break: OperatorLineBreak::Trailing,
         ..default_config()
     };
