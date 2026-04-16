@@ -864,6 +864,141 @@ contract Main {
     });
   });
 
+  it("publishes propagated delegatecall diagnostics for the common subset of conflicting imported overloads", async () => {
+    const dir = tempWorkspace();
+    const helperPath = path.join(dir, "BridgeHelper.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperUri = toUri(helperPath);
+    const mainUri = toUri(mainPath);
+    const helperSource = `pragma solidity ^0.8.0;
+
+function bridge(address target, address admin, bytes memory payload) {
+    target.delegatecall(payload);
+    admin.delegatecall(payload);
+}
+
+function bridge(address target, address admin, string memory payload) {
+    admin;
+    target.delegatecall(bytes(payload));
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+contract Main {
+    function run(address implementation, address admin, bytes memory payload) external {
+        bridge(implementation, admin, payload);
+    }
+}
+`;
+
+    fs.writeFileSync(helperPath, helperSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperUri, helperSource);
+    await waitForDiagnostics(client, helperUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-delegatecall" &&
+        diagnostic.message.includes("flows into delegatecall via `bridge`") &&
+        diagnostic.message.includes("`implementation`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.message.includes("`admin`")).toBe(false);
+    expect(propagated?.severity).toBe(1);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-delegatecall",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
+  it("publishes propagated delegatecall diagnostics through transitive conflicting wrapper chains when the common subset survives", async () => {
+    const dir = tempWorkspace();
+    const helperPath = path.join(dir, "BridgeHelper.sol");
+    const forwarderPath = path.join(dir, "Forwarder.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperUri = toUri(helperPath);
+    const forwarderUri = toUri(forwarderPath);
+    const mainUri = toUri(mainPath);
+    const helperSource = `pragma solidity ^0.8.0;
+
+function bridge(address target, address admin, bytes memory payload) {
+    target.delegatecall(payload);
+    admin.delegatecall(payload);
+}
+
+function bridge(address target, address admin, string memory payload) {
+    admin;
+    target.delegatecall(bytes(payload));
+}
+`;
+    const forwarderSource = `pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+function forward(address implementation, address admin, bytes memory payload) {
+    bridge(implementation, admin, payload);
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./Forwarder.sol";
+
+contract Main {
+    function run(address implementation, address admin, bytes memory payload) external {
+        forward(implementation, admin, payload);
+    }
+}
+`;
+
+    fs.writeFileSync(helperPath, helperSource, "utf8");
+    fs.writeFileSync(forwarderPath, forwarderSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperUri, helperSource);
+    await waitForDiagnostics(client, helperUri);
+
+    openDocument(client, forwarderUri, forwarderSource);
+    await waitForDiagnostics(client, forwarderUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-delegatecall" &&
+        diagnostic.message.includes("flows into delegatecall via `forward`") &&
+        diagnostic.message.includes("`implementation`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.message.includes("`admin`")).toBe(false);
+    expect(propagated?.severity).toBe(1);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-delegatecall",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
   it("publishes propagated delegatecall diagnostics through transitive imported wrapper chains", async () => {
     const dir = tempWorkspace();
     const helperPath = path.join(dir, "BridgeHelper.sol");
@@ -1223,6 +1358,98 @@ contract Main {
     });
   });
 
+  it("publishes propagated ETH transfer diagnostics through non-unique helper contracts when the common subset survives", async () => {
+    const dir = tempWorkspace();
+    const helperAPath = path.join(dir, "PayHelperA.sol");
+    const helperBPath = path.join(dir, "PayHelperB.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperAUri = toUri(helperAPath);
+    const helperBUri = toUri(helperBPath);
+    const mainUri = toUri(mainPath);
+    const helperASource = `pragma solidity ^0.8.0;
+
+contract PayHelperA {
+    function pay(address target, address refund, uint256 amount) public payable {
+        payable(target).call{value: amount}("");
+        payable(refund).call{value: amount}("");
+    }
+}
+`;
+    const helperBSource = `pragma solidity ^0.8.0;
+
+contract PayHelperB {
+    function pay(address target, address refund, uint256 amount) public payable {
+        refund;
+        payable(target).call{value: amount}("");
+    }
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./PayHelperA.sol";
+import "./PayHelperB.sol";
+
+contract Main {
+    PayHelperA private helperA;
+    PayHelperB private helperB;
+
+    constructor(PayHelperA initialHelperA, PayHelperB initialHelperB) {
+        helperA = initialHelperA;
+        helperB = initialHelperB;
+    }
+
+    function getHelper(bytes memory route) internal view returns (PayHelperA) {
+        route;
+        return helperA;
+    }
+
+    function getHelper(string memory route) internal view returns (PayHelperB) {
+        route;
+        return helperB;
+    }
+
+    function pay(address recipient, address refund, uint256 amount, bytes memory route) external payable {
+        getHelper(route).pay(recipient, refund, amount);
+    }
+}
+`;
+
+    fs.writeFileSync(helperAPath, helperASource, "utf8");
+    fs.writeFileSync(helperBPath, helperBSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperAUri, helperASource);
+    await waitForDiagnostics(client, helperAUri);
+
+    openDocument(client, helperBUri, helperBSource);
+    await waitForDiagnostics(client, helperBUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-eth-transfer" &&
+        diagnostic.message.includes("flows into an ETH transfer via `pay`") &&
+        diagnostic.message.includes("`recipient`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.message.includes("`refund`")).toBe(false);
+    expect(propagated?.severity).toBe(2);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-eth-transfer",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
   it("publishes propagated ETH transfer diagnostics through indexed helper wrappers", async () => {
     const dir = tempWorkspace();
     const helperPath = path.join(dir, "PayHelper.sol");
@@ -1391,6 +1618,71 @@ contract Main {
         diagnostic.message.includes("flows into an ETH transfer via `pay`")
     );
     expect(propagated).toBeDefined();
+    expect(propagated?.severity).toBe(2);
+    expect(propagated?.data).toMatchObject({
+      id: "security/user-controlled-eth-transfer",
+      confidence: "medium",
+      kind: "detector",
+    });
+  });
+
+  it("publishes propagated ETH transfer diagnostics for the common subset of conflicting imported overloads", async () => {
+    const dir = tempWorkspace();
+    const helperPath = path.join(dir, "PayLib.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const helperUri = toUri(helperPath);
+    const mainUri = toUri(mainPath);
+    const helperSource = `pragma solidity ^0.8.0;
+
+library PayLib {
+    function pay(address target, address refund, uint256 amount, bytes memory note) internal {
+        note;
+        payable(target).call{value: amount}("");
+        payable(refund).call{value: amount}("");
+    }
+
+    function pay(address target, address refund, uint256 amount, string memory note) internal {
+        refund;
+        note;
+        payable(target).call{value: amount}("");
+    }
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./PayLib.sol";
+
+contract Main {
+    function pay(address recipient, address refund, uint256 amount, bytes memory note) external payable {
+        PayLib.pay(recipient, refund, amount, note);
+    }
+}
+`;
+
+    fs.writeFileSync(helperPath, helperSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    await client.shutdown().catch(() => {
+      client.kill();
+    });
+    client = new TestLspClient();
+    client.start();
+    resetDocumentVersions();
+    await initializeServer(client, toUri(dir));
+
+    openDocument(client, helperUri, helperSource);
+    await waitForDiagnostics(client, helperUri);
+
+    openDocument(client, mainUri, mainSource);
+    const result = await waitForDiagnostics(client, mainUri);
+
+    const propagated = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "security/user-controlled-eth-transfer" &&
+        diagnostic.message.includes("flows into an ETH transfer via `pay`") &&
+        diagnostic.message.includes("`recipient`")
+    );
+    expect(propagated).toBeDefined();
+    expect(propagated?.message.includes("`refund`")).toBe(false);
     expect(propagated?.severity).toBe(2);
     expect(propagated?.data).toMatchObject({
       id: "security/user-controlled-eth-transfer",

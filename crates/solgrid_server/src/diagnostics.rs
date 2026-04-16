@@ -16,7 +16,7 @@ use solgrid_project::{
     resolve_cross_file_member_symbol, resolve_cross_file_symbol, NavBackend, ProjectIndex,
     ProjectSnapshot,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
 
@@ -2643,14 +2643,17 @@ fn propagate_sink_indices_through_edge(
             continue;
         }
         propagated_candidates.push(propagated);
-        if propagated_candidates.len() > 1 {
+    }
+
+    let Some(mut propagated) = propagated_candidates.pop() else {
+        return false;
+    };
+    for candidate in propagated_candidates {
+        propagated.retain(|index| candidate.contains(index));
+        if propagated.is_empty() {
             return false;
         }
     }
-
-    let Some(propagated) = propagated_candidates.pop() else {
-        return false;
-    };
     let previous_len = destinations.len();
     destinations.extend(propagated);
     destinations.len() != previous_len
@@ -2662,6 +2665,25 @@ fn normalized_propagated_parameters(
     propagated.sort();
     propagated.dedup();
     propagated
+}
+
+fn common_propagated_parameters(
+    candidates: Vec<Vec<(String, SinkKind)>>,
+) -> Vec<(String, SinkKind)> {
+    let mut sets = candidates
+        .into_iter()
+        .map(|candidate| candidate.into_iter().collect::<BTreeSet<_>>())
+        .filter(|candidate| !candidate.is_empty());
+    let Some(mut common) = sets.next() else {
+        return Vec::new();
+    };
+    for candidate in sets {
+        common = common.intersection(&candidate).cloned().collect();
+        if common.is_empty() {
+            break;
+        }
+    }
+    common.into_iter().collect()
 }
 
 fn propagated_sink_summary(
@@ -2696,15 +2718,12 @@ fn propagated_sink_summary(
             let propagated = normalized_propagated_parameters(propagated_parameters_for_summary(
                 file, args, summary,
             ));
-            (!propagated.is_empty()).then_some((callee, propagated))
+            (!propagated.is_empty()).then_some(propagated)
         })
         .collect::<Vec<_>>();
-    propagated_candidates.sort_by(|left, right| left.1.cmp(&right.1));
-    propagated_candidates.dedup_by(|left, right| left.1 == right.1);
-    if propagated_candidates.len() != 1 {
-        return None;
-    }
-    let (_, propagated) = propagated_candidates.pop()?;
+    propagated_candidates.sort();
+    propagated_candidates.dedup();
+    let propagated = common_propagated_parameters(propagated_candidates);
     (!propagated.is_empty()).then_some((call_span, call_name, propagated))
 }
 
@@ -3912,6 +3931,89 @@ contract Main {
     }
 
     #[test]
+    fn test_compiler_diagnostics_report_common_subset_non_unique_helper_contract_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_a_path = dir.path().join("PayHelperA.sol");
+        let helper_b_path = dir.path().join("PayHelperB.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_a_source = r#"pragma solidity ^0.8.0;
+contract PayHelperA {
+    function pay(address target, address refund, uint256 amount) public payable {
+        payable(target).call{value: amount}("");
+        payable(refund).call{value: amount}("");
+    }
+}
+"#;
+        let helper_b_source = r#"pragma solidity ^0.8.0;
+contract PayHelperB {
+    function pay(address target, address refund, uint256 amount) public payable {
+        refund;
+        payable(target).call{value: amount}("");
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./PayHelperA.sol";
+import "./PayHelperB.sol";
+
+contract Main {
+    PayHelperA private helperA;
+    PayHelperB private helperB;
+
+    constructor(PayHelperA initialHelperA, PayHelperB initialHelperB) {
+        helperA = initialHelperA;
+        helperB = initialHelperB;
+    }
+
+    function getHelper(bytes memory route) internal view returns (PayHelperA) {
+        route;
+        return helperA;
+    }
+
+    function getHelper(string memory route) internal view returns (PayHelperB) {
+        route;
+        return helperB;
+    }
+
+    function pay(address recipient, address refund, uint256 amount, bytes memory route) external payable {
+        getHelper(route).pay(recipient, refund, amount);
+    }
+}
+"#;
+        fs::write(&helper_a_path, helper_a_source).unwrap();
+        fs::write(&helper_b_path, helper_b_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `pay`")
+                    && diagnostic.message.contains("`recipient`")
+            })
+            .expect("expected common-subset non-unique helper contract finding");
+
+        assert!(!propagated.message.contains("`refund`"));
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_indexed_eth_transfer_wrapper_flow() {
         let dir = tempfile::tempdir().unwrap();
         let helper_path = dir.path().join("PayHelper.sol");
@@ -4132,6 +4234,63 @@ contract Main {
     }
 
     #[test]
+    fn test_compiler_diagnostics_report_common_subset_overloaded_delegatecall_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("BridgeHelper.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+function bridge(address target, address admin, bytes memory payload) {
+    target.delegatecall(payload);
+    admin.delegatecall(payload);
+}
+
+function bridge(address target, address admin, string memory payload) {
+    admin;
+    target.delegatecall(bytes(payload));
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+contract Main {
+    function run(address implementation, address admin, bytes memory payload) external {
+        bridge(implementation, admin, payload);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `bridge`")
+                    && diagnostic.message.contains("`implementation`")
+            })
+            .expect("expected common-subset overloaded delegatecall wrapper finding");
+
+        assert!(!propagated.message.contains("`admin`"));
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_transitive_imported_delegatecall_wrapper_flow() {
         let dir = tempfile::tempdir().unwrap();
         let helper_path = dir.path().join("BridgeHelper.sol");
@@ -4194,6 +4353,72 @@ contract Main {
     }
 
     #[test]
+    fn test_compiler_diagnostics_report_transitive_common_subset_delegatecall_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("BridgeHelper.sol");
+        let forwarder_path = dir.path().join("Forwarder.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+function bridge(address target, address admin, bytes memory payload) {
+    target.delegatecall(payload);
+    admin.delegatecall(payload);
+}
+
+function bridge(address target, address admin, string memory payload) {
+    admin;
+    target.delegatecall(bytes(payload));
+}
+"#;
+        let forwarder_source = r#"pragma solidity ^0.8.0;
+import "./BridgeHelper.sol";
+
+function forward(address implementation, address admin, bytes memory payload) {
+    bridge(implementation, admin, payload);
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./Forwarder.sol";
+
+contract Main {
+    function run(address implementation, address admin, bytes memory payload) external {
+        forward(implementation, admin, payload);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&forwarder_path, forwarder_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_DELEGATECALL_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `forward`")
+                    && diagnostic.message.contains("`implementation`")
+            })
+            .expect("expected transitive common-subset delegatecall wrapper finding");
+
+        assert!(!propagated.message.contains("`admin`"));
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_same_summary_overloaded_eth_transfer_wrapper_flow() {
         let dir = tempfile::tempdir().unwrap();
         let helper_path = dir.path().join("PayLib.sol");
@@ -4238,6 +4463,67 @@ contract Main {
             })
             .expect("expected same-summary overloaded ETH transfer wrapper finding");
 
+        let meta: FindingMeta = serde_json::from_value(
+            propagated
+                .data
+                .clone()
+                .expect("semantic detector should attach finding metadata"),
+        )
+        .expect("valid finding metadata");
+        assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_common_subset_overloaded_eth_transfer_wrapper_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let helper_path = dir.path().join("PayLib.sol");
+        let main_path = dir.path().join("Main.sol");
+        let helper_source = r#"pragma solidity ^0.8.0;
+library PayLib {
+    function pay(address target, address refund, uint256 amount, bytes memory note) internal {
+        note;
+        payable(target).call{value: amount}("");
+        payable(refund).call{value: amount}("");
+    }
+
+    function pay(address target, address refund, uint256 amount, string memory note) internal {
+        refund;
+        note;
+        payable(target).call{value: amount}("");
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import "./PayLib.sol";
+
+contract Main {
+    function pay(address recipient, address refund, uint256 amount, bytes memory note) external payable {
+        PayLib.pay(recipient, refund, amount, note);
+    }
+}
+"#;
+        fs::write(&helper_path, helper_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        USER_CONTROLLED_ETH_TRANSFER_ID.into(),
+                    ))
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `pay`")
+                    && diagnostic.message.contains("`recipient`")
+            })
+            .expect("expected common-subset overloaded ETH transfer wrapper finding");
+
+        assert!(!propagated.message.contains("`refund`"));
         let meta: FindingMeta = serde_json::from_value(
             propagated
                 .data

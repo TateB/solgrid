@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added detector propagation through imported overloaded helper wrappers when semantic filtering leaves one propagated sink result
 - Added detector propagation through overloaded helper-returning call expressions when their return targets collapse to the same helper contract
 - Added detector propagation through transitive imported wrapper chains when each step collapses to one propagated sink result
+- Changed detector propagation through imported overloads and wrapper chains to keep the common propagated sink result instead of requiring identical sink summaries
+- Added detector propagation through non-unique helper contracts when their member summaries share a common propagated sink result
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

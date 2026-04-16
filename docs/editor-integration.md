@@ -130,9 +130,10 @@ The current server-native interprocedural detector surface is intentionally cons
 - same-file helper propagation is supported for the native `delegatecall` and ETH-transfer detectors
 - inherited helper propagation is supported, including imported base contracts, when the helper target resolves uniquely
 - contract-typed helper-wrapper propagation is supported for uniquely resolved member and indexed helper bases, plus overloaded helper-returning call expressions when every candidate collapses to the same helper contract target
-- imported overloaded helper wrappers are supported when semantic filtering leaves exactly one propagated sink result
-- transitive imported wrapper chains are supported when each step still collapses to one propagated sink result
-- broader arbitrary non-unique cross-file wrapper graphs and overload sets with conflicting propagated sink evidence are still rejected instead of guessed
+- non-unique helper contracts are supported when their member summaries still share a non-empty common propagated sink result
+- imported overloaded helper wrappers are supported when semantic filtering leaves a non-empty common propagated sink result
+- transitive imported wrapper chains are supported when each step still leaves a non-empty common propagated sink result
+- broader arbitrary non-unique cross-file wrapper graphs and overload sets with no shared propagated sink evidence are still rejected instead of guessed
 
 ### Call Hierarchy
 
