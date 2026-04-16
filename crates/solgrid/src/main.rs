@@ -7,7 +7,7 @@ mod cache;
 mod commands;
 mod output;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process;
 
@@ -99,8 +99,40 @@ enum Commands {
         #[arg(long)]
         from: String,
     },
+    /// Export shared project graphs from the CLI
+    Graph {
+        /// Graph kind: imports, inheritance, linearized-inheritance, control-flow
+        #[arg(long, value_enum)]
+        kind: GraphKindArg,
+
+        /// Solidity file to analyze
+        path: PathBuf,
+
+        /// Target symbol for inheritance or control-flow graphs
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Export format: json, mermaid, or dot
+        #[arg(long, value_enum, default_value_t = GraphFormatArg::Json)]
+        format: GraphFormatArg,
+    },
     /// Start the LSP server (for editor integration)
     Server,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum GraphKindArg {
+    Imports,
+    Inheritance,
+    LinearizedInheritance,
+    ControlFlow,
+}
+
+#[derive(Clone, Debug, ValueEnum, PartialEq, Eq)]
+enum GraphFormatArg {
+    Json,
+    Mermaid,
+    Dot,
 }
 
 fn main() {
@@ -122,6 +154,12 @@ fn main() {
         Some(Commands::ListRules) => commands::list_rules::run(),
         Some(Commands::Explain { rule }) => commands::explain::run(rule),
         Some(Commands::Migrate { from }) => commands::migrate::run(from),
+        Some(Commands::Graph {
+            kind,
+            path,
+            symbol,
+            format,
+        }) => commands::graph::run(kind, path, symbol.as_deref(), format),
         Some(Commands::Server) => {
             let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
             rt.block_on(solgrid_server::run_server());

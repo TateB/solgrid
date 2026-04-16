@@ -46,6 +46,9 @@ async function main() {
     await runTests({
       extensionDevelopmentPath,
       extensionTestsPath,
+      extensionTestsEnv: {
+        SOLGRID_BIN: solgridBinary,
+      },
       launchArgs: [
         testWorkspace,
         "--disable-extensions", // Disable other extensions to isolate our tests

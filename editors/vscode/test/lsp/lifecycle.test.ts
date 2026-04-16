@@ -82,6 +82,35 @@ describe("LSP Server Lifecycle", () => {
     expect(result.capabilities.hoverProvider).toBeTruthy();
   });
 
+  it("declares navigation providers", async () => {
+    const result = await initializeServer(client);
+    expect(result.capabilities.definitionProvider).toBeTruthy();
+    expect(result.capabilities.referencesProvider).toBeTruthy();
+    expect(result.capabilities.documentSymbolProvider).toBeTruthy();
+    expect(result.capabilities.workspaceSymbolProvider).toBeTruthy();
+    expect(result.capabilities.documentLinkProvider).toBeDefined();
+    expect(result.capabilities.inlayHintProvider).toBeDefined();
+    expect(result.capabilities.semanticTokensProvider).toBeDefined();
+    expect(result.capabilities.semanticTokensProvider?.full).toBeTruthy();
+    expect(result.capabilities.semanticTokensProvider?.range).toBeTruthy();
+    expect(result.capabilities.codeLensProvider).toBeDefined();
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.workspace.rerunSecurityAnalysis"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.imports"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.inheritance"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.linearizedInheritance"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.controlFlow"
+    );
+  });
+
   it("declares completion provider with trigger characters", async () => {
     const result = await initializeServer(client);
     const completion = result.capabilities.completionProvider;

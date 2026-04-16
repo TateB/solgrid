@@ -29,6 +29,69 @@ impl fmt::Display for Severity {
     }
 }
 
+/// Normalized finding kind used by editor and reporting surfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FindingKind {
+    /// Rust-native semantic/compiler diagnostics.
+    Compiler,
+    /// Lint-style findings that are primarily style, naming, or gas guidance.
+    Lint,
+    /// Detector-oriented findings for security, best practices, and docs quality.
+    Detector,
+}
+
+/// Confidence level for a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
+/// Normalized metadata attached to diagnostics for editor and machine use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindingMeta {
+    /// Stable identifier for the finding.
+    pub id: String,
+    /// Human-readable title or summary.
+    pub title: String,
+    /// Category/grouping label such as `security` or `compiler`.
+    pub category: String,
+    /// Effective severity for this instance.
+    pub severity: Severity,
+    /// High-level finding kind.
+    pub kind: FindingKind,
+    /// Confidence when the finding is detector-like.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Confidence>,
+    /// Optional rule or documentation URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
+    /// Whether the finding can be suppressed/ignored.
+    pub suppressible: bool,
+    /// Whether the finding exposes any fix metadata.
+    pub has_fix: bool,
+}
+
+impl FindingMeta {
+    /// Create metadata for a compiler-style diagnostic.
+    pub fn compiler(id: impl Into<String>, title: impl Into<String>, severity: Severity) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            category: "compiler".into(),
+            severity,
+            kind: FindingKind::Compiler,
+            confidence: None,
+            help_url: None,
+            suppressible: false,
+            has_fix: false,
+        }
+    }
+}
+
 /// Safety tier for auto-fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -211,6 +274,62 @@ impl RuleMeta {
             _ => &[],
         }
     }
+
+    /// Return the normalized finding kind for this rule.
+    pub fn finding_kind(&self) -> FindingKind {
+        match self.category {
+            RuleCategory::Security | RuleCategory::BestPractices | RuleCategory::Docs => {
+                FindingKind::Detector
+            }
+            RuleCategory::Naming | RuleCategory::Gas | RuleCategory::Style => FindingKind::Lint,
+        }
+    }
+
+    /// Return the default detector confidence for this rule, if applicable.
+    pub fn default_confidence(&self) -> Option<Confidence> {
+        match self.finding_kind() {
+            FindingKind::Compiler | FindingKind::Lint => None,
+            FindingKind::Detector => Some(match self.category {
+                RuleCategory::Security => Confidence::High,
+                RuleCategory::BestPractices => Confidence::Medium,
+                RuleCategory::Docs => Confidence::Low,
+                RuleCategory::Naming | RuleCategory::Gas | RuleCategory::Style => {
+                    unreachable!("non-detector categories are filtered above")
+                }
+            }),
+        }
+    }
+
+    /// Return a stable documentation URL for this rule's implementation.
+    pub fn help_url(&self) -> String {
+        let category_dir = match self.category {
+            RuleCategory::Security => "security",
+            RuleCategory::BestPractices => "best_practices",
+            RuleCategory::Naming => "naming",
+            RuleCategory::Gas => "gas",
+            RuleCategory::Style => "style",
+            RuleCategory::Docs => "docs",
+        };
+        let rule_file = self.name.replace('-', "_");
+        format!(
+            "https://github.com/TateB/solgrid/blob/main/crates/solgrid_linter/src/rules/{category_dir}/{rule_file}.rs"
+        )
+    }
+
+    /// Build normalized finding metadata for this rule at an effective severity.
+    pub fn finding_meta(&self, severity: Severity) -> FindingMeta {
+        FindingMeta {
+            id: self.id.to_string(),
+            title: self.description.to_string(),
+            category: self.category.as_str().to_string(),
+            severity,
+            kind: self.finding_kind(),
+            confidence: self.default_confidence(),
+            help_url: Some(self.help_url()),
+            suppressible: true,
+            has_fix: self.fix_availability != FixAvailability::None,
+        }
+    }
 }
 
 /// A diagnostic produced by a lint rule.
@@ -383,5 +502,37 @@ mod tests {
         assert_eq!(format!("{}", FixSafety::Safe), "safe");
         assert_eq!(format!("{}", FixSafety::Suggestion), "suggestion");
         assert_eq!(format!("{}", FixSafety::Dangerous), "dangerous");
+    }
+
+    #[test]
+    fn test_rule_meta_finding_meta_for_security_rule() {
+        let meta = RuleMeta {
+            id: "security/tx-origin",
+            name: "tx-origin",
+            category: RuleCategory::Security,
+            default_severity: Severity::Error,
+            description: "Avoid using tx.origin for authorization",
+            fix_availability: FixAvailability::None,
+        };
+
+        let finding = meta.finding_meta(Severity::Warning);
+        assert_eq!(finding.id, "security/tx-origin");
+        assert_eq!(finding.kind, FindingKind::Detector);
+        assert_eq!(finding.confidence, Some(Confidence::High));
+        assert_eq!(finding.severity, Severity::Warning);
+        assert!(finding.help_url.unwrap().contains("security/tx_origin.rs"));
+    }
+
+    #[test]
+    fn test_compiler_finding_meta() {
+        let finding = FindingMeta::compiler(
+            "compiler/unresolved-type",
+            "Unresolved type",
+            Severity::Error,
+        );
+        assert_eq!(finding.kind, FindingKind::Compiler);
+        assert_eq!(finding.category, "compiler");
+        assert!(!finding.suppressible);
+        assert!(!finding.has_fix);
     }
 }

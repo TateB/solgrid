@@ -1,5 +1,6 @@
 //! Type conversion between solgrid diagnostics and LSP types.
 
+use serde_json::Value;
 use solgrid_diagnostics::{Diagnostic, FixSafety, Severity};
 use tower_lsp_server::ls_types;
 
@@ -71,6 +72,15 @@ pub fn severity_to_lsp(severity: Severity) -> ls_types::DiagnosticSeverity {
 
 /// Convert a solgrid Diagnostic to an LSP Diagnostic.
 pub fn diagnostic_to_lsp(source_text: &str, diag: &Diagnostic) -> ls_types::Diagnostic {
+    diagnostic_to_lsp_with_data(source_text, diag, None)
+}
+
+/// Convert a solgrid Diagnostic to an LSP Diagnostic with optional metadata.
+pub fn diagnostic_to_lsp_with_data(
+    source_text: &str,
+    diag: &Diagnostic,
+    data: Option<Value>,
+) -> ls_types::Diagnostic {
     ls_types::Diagnostic {
         range: span_to_range(source_text, &diag.span),
         severity: Some(severity_to_lsp(diag.severity)),
@@ -80,7 +90,7 @@ pub fn diagnostic_to_lsp(source_text: &str, diag: &Diagnostic) -> ls_types::Diag
         message: diag.message.clone(),
         related_information: None,
         tags: None,
-        data: None,
+        data,
     }
 }
 
@@ -191,5 +201,15 @@ mod tests {
         );
         assert_eq!(lsp_diag.source, Some("solgrid".into()));
         assert_eq!(lsp_diag.message, "test message");
+    }
+
+    #[test]
+    fn test_diagnostic_to_lsp_with_data() {
+        let source = "line one\nline two";
+        let diag = Diagnostic::new("test/rule", "test message", Severity::Warning, 9..17);
+        let data = serde_json::json!({ "kind": "lint", "id": "test/rule" });
+        let lsp_diag = diagnostic_to_lsp_with_data(source, &diag, Some(data.clone()));
+
+        assert_eq!(lsp_diag.data, Some(data));
     }
 }
