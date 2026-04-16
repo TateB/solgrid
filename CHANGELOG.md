@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-04-16
+
 ## [0.0.11] - 2026-04-16
 
 ### Fixed
@@ -180,8 +182,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.11...HEAD
-[0.0.11]: https://github.com/TateB/solgrid/compare/v0.0.10...v0.0.11
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/TateB/solgrid/compare/v0.0.11...v0.0.12
+[0.0.11]: https://github.com/TateB/solgrid/releases/tag/v0.0.11
 [0.0.10]: https://github.com/TateB/solgrid/releases/tag/v0.0.10
 [0.0.9]: https://github.com/TateB/solgrid/releases/tag/v0.0.9
 [0.0.8]: https://github.com/TateB/solgrid/releases/tag/v0.0.8
