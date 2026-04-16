@@ -451,6 +451,39 @@ fn test_keep_ternary_continuation_indented() {
 }
 
 #[test]
+fn test_align_ternary_branches_with_multiline_binary_condition() {
+    let source = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+                keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) ==
+                keccak256(name)
+                ? registry
+                : IRegistry(address(0));
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f(IRegistry registry, IRegistry rootRegistry, bytes memory name) internal view returns (IRegistry) {
+        return
+            address(registry) != address(0) &&
+            keccak256(bytes(LibRegistry.findCanonicalName(rootRegistry, registry))) == keccak256(name)
+            ? registry
+            : IRegistry(address(0));
+    }
+}
+"#;
+
+    let config = FormatConfig {
+        operator_line_break: OperatorLineBreak::Trailing,
+        ..default_config()
+    };
+
+    let formatted = format_source_verified(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn test_preserve_comments_inside_empty_if_block() {
     let source = r#"contract T {
     function f(bool unsafe, bytes memory v, bool ok, Lookup memory lu) internal {

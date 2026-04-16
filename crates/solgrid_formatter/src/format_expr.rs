@@ -60,30 +60,27 @@ pub fn format_expr(
             let cond_chunk = format_expr(cond, source, config, comments);
             let true_chunk = format_expr(if_true, source, config, comments);
             let false_chunk = format_expr(if_false, source, config, comments);
+            let align_branches_with_condition = ternary_condition_prefers_aligned_branches(cond);
 
             if span_text(source, expr.span).contains('\n') {
                 concat(vec![
                     cond_chunk,
-                    indent(vec![
-                        hardline(),
-                        text("? "),
+                    format_ternary_branches(
                         true_chunk,
-                        hardline(),
-                        text(": "),
                         false_chunk,
-                    ]),
+                        align_branches_with_condition,
+                        true,
+                    ),
                 ])
             } else {
                 group(vec![
                     cond_chunk,
-                    indent(vec![
-                        line(),
-                        text("? "),
+                    format_ternary_branches(
                         true_chunk,
-                        line(),
-                        text(": "),
                         false_chunk,
-                    ]),
+                        align_branches_with_condition,
+                        false,
+                    ),
                 ])
             }
         }
@@ -270,6 +267,42 @@ fn assignment_rhs_prefers_break_after_operator(expr: &Expr<'_>) -> bool {
             matches!(elements.as_ref(), [SpannedOption::Some(inner)] if assignment_rhs_prefers_break_after_operator(inner))
         }
         _ => false,
+    }
+}
+
+fn ternary_condition_prefers_aligned_branches(expr: &Expr<'_>) -> bool {
+    match &expr.kind {
+        ExprKind::Binary(..) => true,
+        ExprKind::Tuple(elements) => {
+            matches!(elements.as_ref(), [SpannedOption::Some(inner)] if ternary_condition_prefers_aligned_branches(inner))
+        }
+        _ => false,
+    }
+}
+
+fn format_ternary_branches(
+    if_true: FormatChunk,
+    if_false: FormatChunk,
+    align_with_condition: bool,
+    preserve_multiline: bool,
+) -> FormatChunk {
+    let lines = if preserve_multiline {
+        vec![
+            hardline(),
+            text("? "),
+            if_true,
+            hardline(),
+            text(": "),
+            if_false,
+        ]
+    } else {
+        vec![line(), text("? "), if_true, line(), text(": "), if_false]
+    };
+
+    if align_with_condition {
+        concat(lines)
+    } else {
+        indent(lines)
     }
 }
 
