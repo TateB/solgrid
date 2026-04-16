@@ -103,6 +103,7 @@ The semantic-token surface currently includes:
 - high-signal resolved references for local symbols and imported namespace-qualified types or members
 - readonly modifiers for enum members plus constant and immutable state variables at declaration, direct reference, and member-resolved reference sites
 - named import aliases preserve the imported symbol kind for common cases such as contracts and custom errors instead of collapsing to a generic type token
+- ambiguous plain-import collisions stay uncolored instead of guessing a semantic token kind from the first matching import
 - full-document, full-delta, and visible-range token requests through standard LSP semantic-token providers
 - conservative declaration-vs-reference coloring for namespace imports and common Solidity symbol sites without relying on extension-specific UI
 

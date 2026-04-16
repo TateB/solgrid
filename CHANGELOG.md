@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `textDocument/semanticTokens/full/delta` support with version-backed result IDs so editors can skip full-token refreshes when Solidity buffers are unchanged
 - Added deeper Solidity semantic-token coverage so named import aliases preserve common imported symbol kinds and readonly modifiers now propagate to constant/immutable state variables and enum members
 - Added semantic-token provenance tracking for resolved member targets so readonly metadata now survives member-heavy sites such as same-file library constant access
+- Added conservative ambiguity handling for semantic tokens so plain-import symbol collisions stay uncolored instead of taking the first cross-file match
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

@@ -13,7 +13,6 @@ import {
   requestSemanticTokensFullDelta,
   requestSemanticTokensRange,
   resetDocumentVersions,
-  waitForDiagnostics,
 } from "./helpers";
 
 function tempWorkspace(): string {
@@ -85,7 +84,6 @@ contract Token {
       expect(legend).toBeDefined();
 
       openDocument(client, uri, content);
-      await waitForDiagnostics(client, uri).catch(() => {});
 
       const result = await requestSemanticTokens(client, uri);
       expect(result).toBeDefined();
@@ -190,7 +188,6 @@ contract Token {
       expect(init.capabilities.semanticTokensProvider?.range).toBeTruthy();
 
       openDocument(client, uri, content);
-      await waitForDiagnostics(client, uri).catch(() => {});
 
       const lineText = content.split("\n")[12] ?? "";
       const result = await requestSemanticTokensRange(client, uri, {
@@ -288,7 +285,6 @@ contract Delta {
       expect(init.capabilities.semanticTokensProvider?.full).toBeTruthy();
 
       openDocument(client, uri, original);
-      await waitForDiagnostics(client, uri).catch(() => {});
 
       const full = await requestSemanticTokens(client, uri);
       expect(full?.resultId).toBeDefined();
@@ -306,7 +302,6 @@ contract Delta {
       }
 
       changeDocument(client, uri, updated);
-      await waitForDiagnostics(client, uri).catch(() => {});
 
       const changed = await requestSemanticTokensFullDelta(
         client,
@@ -366,9 +361,7 @@ contract Main {
       expect(legend).toBeDefined();
 
       openDocument(client, depUri, depSource);
-      await waitForDiagnostics(client, depUri).catch(() => {});
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, mainUri).catch(() => {});
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
@@ -466,9 +459,7 @@ contract Main {
       expect(legend).toBeDefined();
 
       openDocument(client, depUri, depSource);
-      await waitForDiagnostics(client, depUri).catch(() => {});
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, mainUri).catch(() => {});
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
@@ -553,6 +544,65 @@ contract Main {
           text: "MAX",
           tokenType: "property",
           tokenModifiers: ["readonly"],
+        })
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not guess semantic tokens for ambiguous plain-import symbol collisions", async () => {
+    const dir = tempWorkspace();
+    const aPath = path.join(dir, "A.sol");
+    const bPath = path.join(dir, "B.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const aUri = toUri(aPath);
+    const bUri = toUri(bPath);
+    const mainUri = toUri(mainPath);
+    const aSource = `pragma solidity ^0.8.0;
+contract Shared {}
+`;
+    const bSource = `pragma solidity ^0.8.0;
+enum Shared {
+    One
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./A.sol";
+import "./B.sol";
+
+contract Main {
+    Shared private value;
+}
+`;
+
+    fs.writeFileSync(aPath, aSource, "utf8");
+    fs.writeFileSync(bPath, bSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const init = await initializeServer(client, toUri(dir));
+      const legend = init.capabilities.semanticTokensProvider?.legend;
+      expect(legend).toBeDefined();
+
+      openDocument(client, aUri, aSource);
+      openDocument(client, bUri, bSource);
+      openDocument(client, mainUri, mainSource);
+
+      const result = await requestSemanticTokens(client, mainUri);
+      expect(result).toBeDefined();
+      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+        ...token,
+        text: tokenText(mainSource, token.line, token.startChar, token.length),
+      }));
+
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({
+          text: "Shared",
         })
       );
     } finally {

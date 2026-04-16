@@ -13,7 +13,7 @@ use solgrid_parser::solar_ast::{
 };
 use solgrid_parser::with_parsed_ast_sequential;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend,
 };
@@ -127,16 +127,9 @@ impl<'a> SemanticContext<'a> {
             return semantic_token_info_for_symbol(def, Some(self.source));
         }
 
-        if let Some(current_file) = self.current_file {
-            if let Some(cross) = definition::resolve_cross_file_symbol(
-                self.table,
-                ident.as_str(),
-                current_file,
-                self.get_source,
-                self.resolver,
-            ) {
-                return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
-            }
+        let cross = self.resolve_cross_file_symbol_defs(ident.as_str());
+        if let Some(info) = unique_semantic_token_info(&cross, self.source) {
+            return Some(info);
         }
 
         self.is_namespace_alias(ident.as_str())
@@ -186,16 +179,9 @@ impl<'a> SemanticContext<'a> {
             if let Some(def) = self.table.resolve(ident.as_str(), resolve_offset) {
                 return semantic_token_info_for_symbol(def, Some(self.source));
             }
-            if let Some(current_file) = self.current_file {
-                if let Some(cross) = definition::resolve_cross_file_symbol(
-                    self.table,
-                    ident.as_str(),
-                    current_file,
-                    self.get_source,
-                    self.resolver,
-                ) {
-                    return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
-                }
+            let cross = self.resolve_cross_file_symbol_defs(ident.as_str());
+            if let Some(info) = unique_semantic_token_info(&cross, self.source) {
+                return Some(info);
             }
             return None;
         }
@@ -275,6 +261,92 @@ impl<'a> SemanticContext<'a> {
         }
 
         symbols
+    }
+
+    fn resolve_cross_file_symbol_defs(&self, name: &str) -> Vec<ResolvedDef> {
+        let Some(current_file) = self.current_file else {
+            return Vec::new();
+        };
+
+        let mut visited = HashSet::new();
+        let mut resolved = Vec::new();
+        self.resolve_cross_file_symbol_defs_inner(
+            self.table,
+            name,
+            current_file,
+            &mut visited,
+            &mut resolved,
+        );
+        dedup_resolved_defs(resolved)
+    }
+
+    fn resolve_cross_file_symbol_defs_inner(
+        &self,
+        current_table: &SymbolTable,
+        name: &str,
+        importing_file: &Path,
+        visited: &mut HashSet<PathBuf>,
+        resolved_defs: &mut Vec<ResolvedDef>,
+    ) {
+        for import in &current_table.imports {
+            let target_name = match &import.symbols {
+                symbols::ImportedSymbols::Named(names) => {
+                    let mut found = None;
+                    for (original, alias) in names {
+                        let local_name = alias.as_deref().unwrap_or(original.as_str());
+                        if local_name == name {
+                            found = Some(original.as_str());
+                            break;
+                        }
+                    }
+                    match found {
+                        Some(n) => n,
+                        None => continue,
+                    }
+                }
+                symbols::ImportedSymbols::Plain(alias) => {
+                    if alias.is_some() {
+                        continue;
+                    }
+                    name
+                }
+                symbols::ImportedSymbols::Glob(_) => continue,
+            };
+
+            let Some(resolved_path) = self.resolver.resolve(&import.path, importing_file) else {
+                continue;
+            };
+            if !visited.insert(resolved_path.clone()) {
+                continue;
+            }
+
+            let Some(imported_source) = (self.get_source)(&resolved_path) else {
+                continue;
+            };
+            let filename = resolved_path.to_string_lossy().to_string();
+            let Some(imported_table) = symbols::build_symbol_table(&imported_source, &filename)
+            else {
+                continue;
+            };
+
+            if let Some(def) = imported_table.resolve(target_name, 0) {
+                resolved_defs.push(ResolvedDef {
+                    table: imported_table.clone(),
+                    def: def.clone(),
+                    source: Some(imported_source.clone()),
+                    origin_key: Some(resolved_path.to_string_lossy().to_string()),
+                });
+                continue;
+            }
+
+            self.resolve_cross_file_symbol_defs_inner(
+                &imported_table,
+                target_name,
+                &resolved_path,
+                visited,
+                resolved_defs,
+            );
+        }
     }
 
     fn resolve_container_targets_from_expr(&self, expr: &Expr<'_>) -> Vec<ResolvedDef> {
@@ -517,24 +589,9 @@ impl<'a> SemanticContext<'a> {
             }
         }
 
-        if let Some(current_file) = self.current_file {
-            if let Some(cross) = definition::resolve_cross_file_symbol(
-                self.table,
-                &path.segments[0],
-                current_file,
-                self.get_source,
-                self.resolver,
-            ) {
-                for def in cross.table.resolve_all(&cross.def.name, 0) {
-                    if is_container_kind(def.kind) {
-                        current.push(ResolvedDef {
-                            table: cross.table.clone(),
-                            def: def.clone(),
-                            source: Some(cross.source.clone()),
-                            origin_key: Some(cross.resolved_path.to_string_lossy().to_string()),
-                        });
-                    }
-                }
+        for cross in self.resolve_cross_file_symbol_defs(&path.segments[0]) {
+            if is_container_kind(cross.def.kind) {
+                current.push(cross);
             }
         }
 
@@ -1238,6 +1295,29 @@ fn semantic_token_info_for_symbol(
         kind: semantic_token_kind_for_symbol(def.kind)?,
         readonly: semantic_token_symbol_is_readonly(def, source),
     })
+}
+
+fn unique_semantic_token_info(
+    defs: &[ResolvedDef],
+    fallback_source: &str,
+) -> Option<SemanticTokenInfo> {
+    let mut infos = Vec::new();
+    for resolved in defs {
+        if let Some(info) = semantic_token_info_for_symbol(
+            &resolved.def,
+            resolved.source.as_deref().or(Some(fallback_source)),
+        ) {
+            if !infos.contains(&info) {
+                infos.push(info);
+            }
+        }
+    }
+
+    if infos.len() == 1 {
+        Some(infos[0])
+    } else {
+        None
+    }
 }
 
 fn semantic_token_symbol_is_readonly(def: &SymbolDef, source: Option<&str>) -> bool {
@@ -2327,6 +2407,7 @@ fn visit_expr_tree(expr: &Expr<'_>, visitor: &mut impl FnMut(&Expr<'_>)) {
 mod tests {
     use super::*;
     use crate::resolve::ImportResolver;
+    use std::fs;
 
     fn noop_source(_path: &Path) -> Option<String> {
         None
@@ -2463,5 +2544,69 @@ contract Router {
             .iter()
             .any(|label| label.starts_with("interface ID: ")));
         assert_eq!(labels.len(), 3);
+    }
+
+    #[test]
+    fn test_semantic_tokens_handle_import_alias_and_readonly_mix() {
+        let dir = tempfile::tempdir().unwrap();
+        let dep_path = dir.path().join("Lib.sol");
+        let main_path = dir.path().join("Main.sol");
+
+        let dep_source = r#"pragma solidity ^0.8.0;
+
+contract Vault {}
+error Unauthorized(address caller);
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import { Vault as ImportedVault, Unauthorized as ImportedUnauthorized } from "./Lib.sol";
+
+library Limits {
+    uint256 internal constant MAX = 2;
+}
+
+contract Main {
+    uint256 private constant LOCAL_MAX = 1;
+    address private immutable owner;
+
+    enum Mode {
+        Idle,
+        Running
+    }
+
+    ImportedVault vault;
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function run() external view returns (uint256) {
+        Mode mode = Mode.Running;
+        if (msg.sender != owner) {
+            revert ImportedUnauthorized(msg.sender);
+        }
+        if (mode == Mode.Running) {
+            return Limits.MAX;
+        }
+        if (mode == Mode.Idle) {
+            return LOCAL_MAX;
+        }
+        return 0;
+    }
+}
+"#;
+
+        fs::write(&dep_path, dep_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| fs::read_to_string(path).ok();
+
+        let tokens = semantic_tokens(
+            main_source,
+            Some(main_path.as_path()),
+            &get_source,
+            &resolver,
+        );
+        assert!(!tokens.is_empty());
     }
 }
