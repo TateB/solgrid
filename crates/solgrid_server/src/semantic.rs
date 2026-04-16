@@ -160,65 +160,33 @@ impl<'a> SemanticContext<'a> {
         }
 
         let defs = self.resolve_member_defs(base, member.as_str());
-        (defs.len() == 1)
-            .then(|| {
-                semantic_token_info_for_symbol(
-                    &defs[0].def,
-                    defs[0].source.as_deref().or(Some(self.source)),
-                )
-            })
-            .flatten()
+        unique_semantic_token_info(&defs, self.source)
     }
 
-    fn resolve_path_info(
+    fn resolve_path_segment_info(
         &self,
         path: &solar_ast::AstPath<'_>,
+        segment_index: usize,
         resolve_offset: usize,
     ) -> Option<SemanticTokenInfo> {
-        if let Some(ident) = path.get_ident() {
-            if let Some(def) = self.table.resolve(ident.as_str(), resolve_offset) {
-                return semantic_token_info_for_symbol(def, Some(self.source));
-            }
-            let cross = self.resolve_cross_file_symbol_defs(ident.as_str());
-            if let Some(info) = unique_semantic_token_info(&cross, self.source) {
-                return Some(info);
-            }
-            return None;
+        if segment_index == 0
+            && path.segments().len() >= 2
+            && self.is_namespace_alias(path.first().as_str())
+        {
+            return Some(SemanticTokenInfo {
+                kind: SemanticTokenKind::Namespace,
+                readonly: false,
+            });
         }
 
-        let first = path.first();
-        let last = path.last();
-        if self.is_namespace_alias(first.as_str()) {
-            if let Some(current_file) = self.current_file {
-                if let Some(cross) = definition::resolve_cross_file_member_symbol(
-                    self.table,
-                    first.as_str(),
-                    last.as_str(),
-                    current_file,
-                    self.get_source,
-                    self.resolver,
-                ) {
-                    return semantic_token_info_for_symbol(&cross.def, Some(&cross.source));
-                }
-            }
-        }
-
-        let type_path = symbols::TypePath {
-            segments: path
-                .segments()
+        let resolved = self.resolve_symbol_path_segments(
+            &path.segments()[..=segment_index]
                 .iter()
                 .map(|segment| segment.as_str().to_string())
-                .collect(),
-        };
-        let resolved = self.resolve_type_path(&type_path, resolve_offset);
-        (resolved.len() == 1)
-            .then(|| {
-                semantic_token_info_for_symbol(
-                    &resolved[0].def,
-                    resolved[0].source.as_deref().or(Some(self.source)),
-                )
-            })
-            .flatten()
+                .collect::<Vec<_>>(),
+            resolve_offset,
+        );
+        unique_semantic_token_info(&resolved, self.source)
     }
 
     fn resolve_namespace_scope_symbols(&self, namespace: &str) -> Vec<SymbolDef> {
@@ -604,6 +572,61 @@ impl<'a> SemanticContext<'a> {
                         .resolve_member_all(&container.def, segment)
                         .iter()
                         .filter(|member| is_container_kind(member.kind))
+                        .map(|member| ResolvedDef {
+                            table: container.table.clone(),
+                            def: (*member).clone(),
+                            source: container.source.clone(),
+                            origin_key: container.origin_key.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        }
+
+        dedup_resolved_defs(current)
+    }
+
+    fn resolve_symbol_path_segments(
+        &self,
+        segments: &[String],
+        resolve_offset: usize,
+    ) -> Vec<ResolvedDef> {
+        if segments.is_empty() {
+            return Vec::new();
+        }
+
+        let mut current = if segments.len() >= 2 && self.is_namespace_alias(&segments[0]) {
+            self.resolve_namespace_member_defs(&segments[0], &segments[1])
+        } else {
+            let mut defs = Vec::new();
+            for def in self.table.resolve_all(&segments[0], resolve_offset) {
+                defs.push(ResolvedDef {
+                    table: self.table.clone(),
+                    def: def.clone(),
+                    source: None,
+                    origin_key: self
+                        .current_file
+                        .map(|path| path.to_string_lossy().to_string()),
+                });
+            }
+            defs.extend(self.resolve_cross_file_symbol_defs(&segments[0]));
+            dedup_resolved_defs(defs)
+        };
+
+        let remaining = if segments.len() >= 2 && self.is_namespace_alias(&segments[0]) {
+            &segments[2..]
+        } else {
+            &segments[1..]
+        };
+
+        for segment in remaining {
+            current = current
+                .into_iter()
+                .flat_map(|container| {
+                    container
+                        .table
+                        .resolve_member_all(&container.def, segment)
+                        .iter()
                         .map(|member| ResolvedDef {
                             table: container.table.clone(),
                             def: (*member).clone(),
@@ -1238,17 +1261,10 @@ fn collect_path_semantic_tokens(
     semantic: &SemanticContext<'_>,
     tokens: &mut Vec<RawSemanticToken>,
 ) {
-    if path.segments().len() >= 2 && semantic.is_namespace_alias(path.first().as_str()) {
-        push_ident_semantic_token(
-            *path.first(),
-            SemanticTokenKind::Namespace,
-            false,
-            false,
-            tokens,
-        );
-    }
-    if let Some(info) = semantic.resolve_path_info(path, resolve_offset) {
-        push_ident_semantic_token(*path.last(), info.kind, false, info.readonly, tokens);
+    for (index, segment) in path.segments().iter().enumerate() {
+        if let Some(info) = semantic.resolve_path_segment_info(path, index, resolve_offset) {
+            push_ident_semantic_token(*segment, info.kind, false, info.readonly, tokens);
+        }
     }
 }
 

@@ -18,7 +18,7 @@ Planned improvements and future work for solgrid.
 - [x] Add coverage ingestion and editor UI, starting from imported workspace coverage artifacts before attempting a native runner
 - [ ] Extend semantic/interprocedural detector depth beyond the shipped same-file helper propagation, especially across inheritance and cross-file call edges
 - [ ] Decide whether coverage should grow beyond the shipped Foundry/Hardhat/custom command surface into provider-specific artifact management or stay intentionally thin
-- [ ] Deepen the shipped semantic-token surface beyond the current full/delta/range declarations, readonly markings, high-signal references, and conservative ambiguity handling, especially for harder cross-file and member-heavy cases that still need stronger kind/metadata preservation
+- [ ] Deepen the shipped semantic-token surface beyond the current full/delta/range declarations, readonly markings, high-signal references, multi-segment path coverage, conservative ambiguity handling, and same-semantics duplicate-resolution support, especially for harder cross-file and member-heavy cases that still need stronger kind/metadata preservation
 - [ ] Add editor polish items that improve parity or surpass it: broader rename/call-hierarchy support under ambiguous graphs and richer commands
 
 ## Performance

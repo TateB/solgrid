@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added deeper Solidity semantic-token coverage so named import aliases preserve common imported symbol kinds and readonly modifiers now propagate to constant/immutable state variables and enum members
 - Added semantic-token provenance tracking for resolved member targets so readonly metadata now survives member-heavy sites such as same-file library constant access
 - Added conservative ambiguity handling for semantic tokens so plain-import symbol collisions stay uncolored instead of taking the first cross-file match
+- Added semantic-token fallback handling for duplicate cross-file member and path resolutions when every candidate agrees on the same token kind and readonly state
+- Added semantic-token coverage for multi-segment Solidity paths so contract/type/error roots are colored beyond just the last segment
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

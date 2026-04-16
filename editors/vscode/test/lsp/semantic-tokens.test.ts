@@ -609,4 +609,148 @@ contract Main {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps semantic tokens when ambiguous plain imports agree on member semantics", async () => {
+    const dir = tempWorkspace();
+    const aPath = path.join(dir, "A.sol");
+    const bPath = path.join(dir, "B.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const aUri = toUri(aPath);
+    const bUri = toUri(bPath);
+    const mainUri = toUri(mainPath);
+    const sharedSource = `pragma solidity ^0.8.0;
+library Math {
+    uint256 internal constant MAX = 1;
+}
+
+enum Mode {
+    Idle,
+    Running
+}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./A.sol";
+import "./B.sol";
+
+contract Main {
+    function run() external pure returns (uint256) {
+        Mode mode = Mode.Running;
+        if (mode == Mode.Running) {
+            return Math.MAX;
+        }
+        return 0;
+    }
+}
+`;
+
+    fs.writeFileSync(aPath, sharedSource, "utf8");
+    fs.writeFileSync(bPath, sharedSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const init = await initializeServer(client, toUri(dir));
+      const legend = init.capabilities.semanticTokensProvider?.legend;
+      expect(legend).toBeDefined();
+
+      openDocument(client, aUri, sharedSource);
+      openDocument(client, bUri, sharedSource);
+      openDocument(client, mainUri, mainSource);
+
+      const result = await requestSemanticTokens(client, mainUri);
+      expect(result).toBeDefined();
+      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+        ...token,
+        text: tokenText(mainSource, token.line, token.startChar, token.length),
+      }));
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Running",
+          tokenType: "enumMember",
+          tokenModifiers: ["readonly"],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "MAX",
+          tokenType: "property",
+          tokenModifiers: ["readonly"],
+        })
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("colors multi-segment type and error paths beyond the last segment", async () => {
+    const dir = tempWorkspace();
+    const filePath = path.join(dir, "Paths.sol");
+    const uri = toUri(filePath);
+    const content = `pragma solidity ^0.8.0;
+
+contract Types {
+    enum Mode {
+        Idle,
+        Running
+    }
+
+    error Unauthorized(address caller);
+}
+
+contract Main {
+    function run() external pure returns (Types.Mode) {
+        revert Types.Unauthorized(msg.sender);
+    }
+}
+`;
+
+    fs.writeFileSync(filePath, content, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const init = await initializeServer(client, toUri(dir));
+      const legend = init.capabilities.semanticTokensProvider?.legend;
+      expect(legend).toBeDefined();
+
+      openDocument(client, uri, content);
+
+      const result = await requestSemanticTokens(client, uri);
+      expect(result).toBeDefined();
+      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+        ...token,
+        text: tokenText(content, token.line, token.startChar, token.length),
+      }));
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Types",
+          tokenType: "class",
+          tokenModifiers: [],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Mode",
+          tokenType: "enum",
+          tokenModifiers: [],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Unauthorized",
+          tokenType: "type",
+          tokenModifiers: [],
+        })
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

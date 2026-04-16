@@ -364,7 +364,7 @@ This is the point where `solgrid` starts to feel meaningfully closer to Wake in 
 ### Milestone 5: Coverage and Advanced Analysis
 
 - complete: LCOV/Cobertura coverage artifact ingestion, VS Code coverage decorations and summary view, provider-aware Foundry, Hardhat, and custom coverage run commands, stronger same-file interprocedural semantic detectors for helper-mediated delegatecall and ETH-transfer flows, conservative rename for same-file plus safe cross-file symbol graphs, and conservative call hierarchy for resolvable function and modifier declarations/call sites
-- future depth work: cross-file or inheritance-aware interprocedural detectors, deeper semantic-token coverage beyond the shipped full/delta/range declaration, readonly, high-signal reference, and conservative ambiguity-handling slice, broader rename/call-hierarchy support under ambiguous overload or alias graphs, and any provider-specific coverage polish beyond the shipped command and artifact surface
+- future depth work: cross-file or inheritance-aware interprocedural detectors, deeper semantic-token coverage beyond the shipped full/delta/range declaration, readonly, high-signal reference, multi-segment path coverage, conservative ambiguity-handling, and same-semantics duplicate-resolution slice, broader rename/call-hierarchy support under ambiguous overload or alias graphs, and any provider-specific coverage polish beyond the shipped command and artifact surface
 
 ## Testing and Verification Plan
 
