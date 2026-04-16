@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added conservative ambiguity handling for semantic tokens so plain-import symbol collisions stay uncolored instead of taking the first cross-file match
 - Added semantic-token fallback handling for duplicate cross-file member and path resolutions when every candidate agrees on the same token kind and readonly state
 - Added semantic-token coverage for multi-segment Solidity paths so contract/type/error roots are colored beyond just the last segment
+- Added semantic-token resolution for transitive namespace-qualified re-exports so `import "..." as Alias` paths preserve token kinds and readonly metadata across re-export chains
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site

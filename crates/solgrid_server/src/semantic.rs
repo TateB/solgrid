@@ -460,6 +460,7 @@ impl<'a> SemanticContext<'a> {
         };
 
         let mut resolved = Vec::new();
+        let mut visited = HashSet::new();
         for import in &self.table.imports {
             let matches_namespace = match &import.symbols {
                 symbols::ImportedSymbols::Plain(Some(alias))
@@ -473,6 +474,9 @@ impl<'a> SemanticContext<'a> {
             let Some(path) = self.resolver.resolve(&import.path, current_file) else {
                 continue;
             };
+            if !visited.insert(path.clone()) {
+                continue;
+            }
             let Some(imported_source) = (self.get_source)(&path) else {
                 continue;
             };
@@ -489,7 +493,16 @@ impl<'a> SemanticContext<'a> {
                     source: Some(imported_source.clone()),
                     origin_key: Some(path.to_string_lossy().to_string()),
                 });
+                continue;
             }
+
+            self.resolve_cross_file_symbol_defs_inner(
+                &imported_table,
+                member_name,
+                &path,
+                &mut visited,
+                &mut resolved,
+            );
         }
 
         dedup_resolved_defs(resolved)

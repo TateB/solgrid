@@ -753,4 +753,94 @@ contract Main {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("resolves semantic tokens through transitive namespace-qualified re-exports", async () => {
+    const dir = tempWorkspace();
+    const aPath = path.join(dir, "A.sol");
+    const bPath = path.join(dir, "B.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const aUri = toUri(aPath);
+    const bUri = toUri(bPath);
+    const mainUri = toUri(mainPath);
+    const aSource = `pragma solidity ^0.8.0;
+
+library Limits {
+    uint256 internal constant MAX = 1;
+}
+
+error Unauthorized(address caller);
+`;
+    const bSource = `pragma solidity ^0.8.0;
+import { Limits, Unauthorized } from "./A.sol";
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import "./B.sol" as Pkg;
+
+contract Main {
+    function max() external pure returns (uint256) {
+        return Pkg.Limits.MAX;
+    }
+
+    function fail() external pure {
+        revert Pkg.Unauthorized(msg.sender);
+    }
+}
+`;
+
+    fs.writeFileSync(aPath, aSource, "utf8");
+    fs.writeFileSync(bPath, bSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const init = await initializeServer(client, toUri(dir));
+      const legend = init.capabilities.semanticTokensProvider?.legend;
+      expect(legend).toBeDefined();
+
+      openDocument(client, aUri, aSource);
+      openDocument(client, bUri, bSource);
+      openDocument(client, mainUri, mainSource);
+
+      const result = await requestSemanticTokens(client, mainUri);
+      expect(result).toBeDefined();
+      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+        ...token,
+        text: tokenText(mainSource, token.line, token.startChar, token.length),
+      }));
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Pkg",
+          tokenType: "namespace",
+          tokenModifiers: [],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Limits",
+          tokenType: "class",
+          tokenModifiers: [],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "MAX",
+          tokenType: "property",
+          tokenModifiers: ["readonly"],
+        })
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          text: "Unauthorized",
+          tokenType: "type",
+          tokenModifiers: [],
+        })
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

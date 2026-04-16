@@ -100,7 +100,7 @@ The inlay-hint surface currently includes:
 The semantic-token surface currently includes:
 
 - contract, interface, library, struct, enum, UDVT, event, function, modifier, variable, property, parameter, and enum-member declarations
-- high-signal resolved references for local symbols, imported namespace-qualified types or members, and multi-segment contract/type/error paths beyond just the last segment
+- high-signal resolved references for local symbols, direct or transitive imported namespace-qualified types or members, and multi-segment contract/type/error paths beyond just the last segment
 - readonly modifiers for enum members plus constant and immutable state variables at declaration, direct reference, and member-resolved reference sites
 - named import aliases preserve the imported symbol kind for common cases such as contracts and custom errors instead of collapsing to a generic type token
 - ambiguous plain-import collisions stay uncolored instead of guessing a semantic token kind from the first matching import
