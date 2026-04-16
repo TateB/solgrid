@@ -101,7 +101,21 @@ impl SolgridServer {
             return (*config).clone();
         }
 
-        let config = solgrid_config::resolve_config(path);
+        let config = match solgrid_config::resolve_config(path) {
+            Ok(config) => config,
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!(
+                            "Failed to load solgrid config for {}: {error}",
+                            path.display()
+                        ),
+                    )
+                    .await;
+                Config::default()
+            }
+        };
         self.config_cache
             .write()
             .await

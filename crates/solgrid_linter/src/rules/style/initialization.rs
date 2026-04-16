@@ -1,5 +1,4 @@
-use serde::Deserialize;
-use solgrid_config::Config;
+use solgrid_config::{CategoryHeadersSettings, Config};
 use solgrid_parser::solar_ast::{FunctionKind, ItemFunction};
 
 const DEFAULT_INITIALIZATION_FUNCTIONS: &[&str] = &[
@@ -9,14 +8,8 @@ const DEFAULT_INITIALIZATION_FUNCTIONS: &[&str] = &[
     "initialize",
 ];
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-struct InitializationSettings {
-    initialization_functions: Vec<String>,
-}
-
 pub(crate) fn configured_initialization_functions(config: &Config) -> Vec<String> {
-    let settings: InitializationSettings = config.rule_settings("style/category-headers");
+    let settings: CategoryHeadersSettings = config.rule_settings("style/category-headers");
     settings.initialization_functions
 }
 

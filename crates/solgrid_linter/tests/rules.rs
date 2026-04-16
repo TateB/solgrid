@@ -25,6 +25,82 @@ fn table(entries: &[(&str, toml::Value)]) -> toml::Value {
     )
 }
 
+fn strings(values: &[&str]) -> toml::Value {
+    toml::Value::Array(
+        values
+            .iter()
+            .map(|value| toml::Value::String((*value).to_string()))
+            .collect(),
+    )
+}
+
+fn migration_natspec_config() -> Config {
+    let mut config = Config::default();
+    config
+        .lint
+        .rules
+        .insert("docs/natspec".into(), RuleLevel::Info);
+    config.lint.settings.insert(
+        "docs/natspec".into(),
+        table(&[
+            ("comment_style", toml::Value::String("triple_slash".into())),
+            ("continuation_indent", toml::Value::String("padded".into())),
+            (
+                "tags",
+                table(&[
+                    (
+                        "notice",
+                        table(&[
+                            (
+                                "include",
+                                strings(&[
+                                    "function:public",
+                                    "function:external",
+                                    "function:default",
+                                    "variable:public",
+                                    "event",
+                                    "contract:concrete",
+                                ]),
+                            ),
+                            ("exclude", strings(&["function:library"])),
+                        ]),
+                    ),
+                    (
+                        "dev",
+                        table(&[(
+                            "include",
+                            strings(&[
+                                "function:internal",
+                                "function:private",
+                                "function:library",
+                                "variable:internal",
+                                "variable:private",
+                                "contract:abstract",
+                                "contract:library",
+                            ]),
+                        )]),
+                    ),
+                    (
+                        "param",
+                        table(&[(
+                            "exclude",
+                            strings(&["function:internal", "function:private", "function:library"]),
+                        )]),
+                    ),
+                    (
+                        "return",
+                        table(&[(
+                            "exclude",
+                            strings(&["function:internal", "function:private", "function:library"]),
+                        )]),
+                    ),
+                ]),
+            ),
+        ]),
+    );
+    config
+}
+
 // =============================================================================
 // Security rules
 // =============================================================================
@@ -1580,6 +1656,49 @@ contract Test is ITest {
 }
 
 #[test]
+fn test_docs_natspec_respects_visibility_context_filters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @notice Alias resolver
+contract Test {
+    /// @dev Apply one round of aliasing.
+    /// @param fromName The source DNS-encoded name.
+    /// @return matchName The alias that matched.
+    /// @return toName The destination DNS-encoded name or empty if no match.
+    function _resolveAlias(bytes memory fromName)
+        internal
+        view
+        returns (bytes memory matchName, bytes memory toName)
+    {
+        return (fromName, fromName);
+    }
+}
+"#;
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "docs/natspec", &migration_natspec_config());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn test_docs_natspec_respects_library_function_context_filters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Shared math helpers.
+library TestLib {
+    /// @dev Clamp a value to the provided upper bound.
+    function clamp(uint256 value, uint256 maxValue) public pure returns (uint256) {
+        return value > maxValue ? maxValue : value;
+    }
+}
+"#;
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "docs/natspec", &migration_natspec_config());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn test_visibility_modifier_order_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -2565,6 +2684,83 @@ min_categories = 3
 }
 
 #[test]
+fn test_category_headers_accepts_custom_labels_and_order() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    ////////////////////////////////////////////////////////////////////////
+    // Data Types
+    ////////////////////////////////////////////////////////////////////////
+
+    struct Entry {
+        uint256 value;
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    // State
+    ////////////////////////////////////////////////////////////////////////
+
+    uint256 private storedValue;
+
+    ////////////////////////////////////////////////////////////////////////
+    // External API
+    ////////////////////////////////////////////////////////////////////////
+
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+min_categories = 3
+order = ["types", "storage", "implementation"]
+
+[lint.settings."style/category-headers".labels]
+types = "Data Types"
+storage = "State"
+implementation = "External API"
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/category-headers", &config);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn test_category_headers_merges_constants_and_immutables_when_both_present() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Constants & Immutables"));
+    assert!(!fixed.contains("// Constants\n"));
+    assert!(!fixed.contains("// Immutables\n"));
+}
+
+#[test]
+fn test_category_headers_uses_constants_section_when_only_constants_exist() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Constants"));
+    assert!(!fixed.contains("// Constants & Immutables"));
+}
+
+#[test]
 fn test_category_headers_uses_configured_initialization_functions() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -3428,6 +3624,19 @@ interface ITest {
 "#;
     let fixed = fix_source(source);
     assert!(fixed.contains("/// @dev Interface selector: `0x2fbebd38`"));
+}
+
+#[test]
+fn test_selector_tags_accepts_exact_canonical_interface_line() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Interface selector: `0xc2985578`
+interface ITest {
+    function foo() external;
+}
+"#;
+    assert_no_diagnostics(source, "docs/selector-tags");
 }
 
 #[test]
