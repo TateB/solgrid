@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { renderGraphMarkdown } from "./graphPreviewRender";
+import {
+  buildGraphPreviewSnapshot,
+  renderGraphWebviewHtml,
+} from "./graphPreviewRender";
 
-describe("renderGraphMarkdown", () => {
-  it("renders a mermaid graph and node summary", () => {
-    const markdown = renderGraphMarkdown({
-      kind: "inheritance",
+describe("renderGraphWebviewHtml", () => {
+  it("renders an inheritance graph webview with svg content", () => {
+    const graph = {
+      kind: "inheritance" as const,
       title: "Inheritance graph for Vault",
       focusNodeId: "Vault",
       nodes: [
@@ -12,14 +15,14 @@ describe("renderGraphMarkdown", () => {
           id: "Vault",
           label: "Vault",
           detail: "Contract in src/Vault.sol",
-          kind: "contract",
+          kind: "contract" as const,
           uri: "file:///workspace/src/Vault.sol",
         },
         {
           id: "Ownable",
           label: "Ownable",
           detail: "Contract in lib/Ownable.sol",
-          kind: "contract",
+          kind: "contract" as const,
           uri: "file:///workspace/lib/Ownable.sol",
         },
       ],
@@ -28,66 +31,58 @@ describe("renderGraphMarkdown", () => {
           from: "Vault",
           to: "Ownable",
           label: "inherits",
-          kind: "inherits",
+          kind: "inherits" as const,
         },
       ],
+    };
+
+    const html = renderGraphWebviewHtml(graph, {
+      cspSource: "vscode-webview://test",
+      nonce: "nonce",
     });
 
-    expect(markdown).toContain("# Inheritance graph for Vault");
-    expect(markdown).toContain("```mermaid");
-    expect(markdown).toContain('n0["Vault"]');
-    expect(markdown).toContain("n0 -->|inherits| n1");
-    expect(markdown).toContain("style n0 fill:#d9f2e6");
-    expect(markdown).toContain("class n0,n1 contract");
-    expect(markdown).toContain("## Nodes");
-    expect(markdown).toContain("**Vault** `contract`: Contract in src/Vault.sol");
+    expect(html).toContain("<svg");
+    expect(html).toContain("Inheritance graph for Vault");
+    expect(html).toContain("Open source");
+    expect(html).toContain("Vault");
+    expect(html).toContain("Ownable");
+    expect(html).toContain("marker-end=\"url(#arrow)\"");
+    expect(html).not.toContain("```mermaid");
   });
 
-  it("renders linearized inheritance order explicitly", () => {
-    const markdown = renderGraphMarkdown({
-      kind: "linearized-inheritance",
-      title: "Linearized inheritance for Vault",
-      focusNodeId: "Vault",
-      nodes: [
-        {
-          id: "Vault",
-          label: "Vault",
-          detail: "#1 Contract in src/Vault.sol",
-        },
-        {
-          id: "AccessControl",
-          label: "AccessControl",
-          detail: "#2 Contract in src/AccessControl.sol",
-        },
-        {
-          id: "Context",
-          label: "Context",
-          detail: "#3 Contract in src/Context.sol",
-        },
-      ],
-      edges: [
-        {
-          from: "Vault",
-          to: "AccessControl",
-          label: "precedes",
-        },
-        {
-          from: "AccessControl",
-          to: "Context",
-          label: "precedes",
-        },
-      ],
-    });
+  it("renders explicit linearization metadata in the sidebar", () => {
+    const html = renderGraphWebviewHtml(
+      {
+        kind: "linearized-inheritance",
+        title: "Linearized inheritance for Vault",
+        focusNodeId: "Vault",
+        nodes: [
+          { id: "Vault", label: "Vault", detail: "#1 Contract in src/Vault.sol" },
+          {
+            id: "AccessControl",
+            label: "AccessControl",
+            detail: "#2 Contract in src/AccessControl.sol",
+          },
+          { id: "Context", label: "Context", detail: "#3 Contract in src/Context.sol" },
+        ],
+        edges: [
+          { from: "Vault", to: "AccessControl", label: "precedes" },
+          { from: "AccessControl", to: "Context", label: "precedes" },
+        ],
+      },
+      {
+        cspSource: "vscode-webview://test",
+        nonce: "nonce",
+      }
+    );
 
-    expect(markdown).toContain("Order: Vault -> AccessControl -> Context");
-    expect(markdown).toContain("## Linearization");
-    expect(markdown).toContain("1. `Vault`");
-    expect(markdown).toContain("2. `AccessControl`");
-    expect(markdown).toContain("3. `Context`");
+    expect(html).toContain("Linearization");
+    expect(html).toContain("Order: Vault -&gt; AccessControl -&gt; Context");
+    expect(html).toContain("lineage-index");
   });
 
-  it("renders control-flow graphs top-down", () => {
-    const markdown = renderGraphMarkdown({
+  it("builds a stable preview snapshot for the test harness", () => {
+    const snapshot = buildGraphPreviewSnapshot({
       kind: "control-flow",
       title: "Control-flow graph for Vault.run",
       focusNodeId: "entry",
@@ -105,12 +100,6 @@ describe("renderGraphMarkdown", () => {
           kind: "branch",
         },
         {
-          id: "call",
-          label: "call require",
-          detail: "require(amount > 0);",
-          kind: "call",
-        },
-        {
           id: "exit",
           label: "Exit",
           detail: "Flow leaves Vault.sol",
@@ -118,34 +107,15 @@ describe("renderGraphMarkdown", () => {
         },
       ],
       edges: [
-        {
-          from: "entry",
-          to: "if",
-          kind: "normal",
-        },
-        {
-          from: "if",
-          to: "call",
-          label: "true",
-          kind: "branch-true",
-        },
-        {
-          from: "call",
-          to: "exit",
-          label: "return",
-          kind: "return",
-        },
+        { from: "entry", to: "if", kind: "normal" },
+        { from: "if", to: "exit", label: "return", kind: "return" },
       ],
     });
 
-    expect(markdown).toContain("# Control-flow graph for Vault.run");
-    expect(markdown).toContain("flowchart TD");
-    expect(markdown).toContain("including 1 branch node, 1 call/emission node");
-    expect(markdown).toContain("class n0 entry");
-    expect(markdown).toContain("class n1 branch");
-    expect(markdown).toContain("class n2 call");
-    expect(markdown).toContain("class n3 exit");
-    expect(markdown).toContain("n1 -->|true| n2");
-    expect(markdown).toContain("n2 ==>|return| n3");
+    expect(snapshot.title).toBe("Control-flow graph for Vault.run");
+    expect(snapshot.kind).toBe("control-flow");
+    expect(snapshot.focusLabel).toBe("Entry");
+    expect(snapshot.nodeLabels).toEqual(["Entry", "if amount == 0", "Exit"]);
+    expect(snapshot.summary).toContain("Function-level CFG");
   });
 });

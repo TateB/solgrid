@@ -134,6 +134,60 @@ export class SecurityOverviewProvider
     this.refresh();
   }
 
+  async resetForTests(): Promise<void> {
+    let changed = false;
+
+    if (this.groupMode !== "file") {
+      this.groupMode = "file";
+      changed = true;
+    }
+    if (this.filterMode !== "security") {
+      this.filterMode = "security";
+      changed = true;
+    }
+    if (this.showIgnoredBaselines) {
+      this.showIgnoredBaselines = false;
+      changed = true;
+    }
+    if (this.ignoredFindingKeys.size > 0) {
+      this.ignoredFindingKeys.clear();
+      await this.persistIgnoredFindingKeys();
+      changed = true;
+    }
+
+    if (changed) {
+      this.refresh();
+    }
+  }
+
+  debugStateForTests(): {
+    groupMode: SecurityOverviewGroupMode;
+    filterMode: SecurityOverviewFilterMode;
+    showIgnoredBaselines: boolean;
+    ignoredFindingKeys: string[];
+    findings: Array<{
+      uri: string;
+      code: string;
+      message: string;
+      fingerprint: string;
+    }>;
+  } {
+    const findings = this.currentFindings().map((finding) => ({
+      uri: finding.uri,
+      code: finding.code,
+      message: finding.message,
+      fingerprint: findingFingerprint(finding),
+    }));
+
+    return {
+      groupMode: this.groupMode,
+      filterMode: this.filterMode,
+      showIgnoredBaselines: this.showIgnoredBaselines,
+      ignoredFindingKeys: Array.from(this.ignoredFindingKeys).sort(),
+      findings,
+    };
+  }
+
   getTreeItem(element: SecurityOverviewNode): vscode.TreeItem {
     if (element.kind === "group") {
       const item = new vscode.TreeItem(
@@ -328,6 +382,44 @@ export async function applyGroupFixes(
   );
 }
 
+export interface SecurityFixPreview {
+  selectedTitle?: string;
+  selectedKind?: string;
+  matchingTitles: string[];
+  matchingKinds: string[];
+  allTitles: string[];
+}
+
+export async function previewFindingFix(
+  node?: SecurityOverviewFindingNode
+): Promise<SecurityFixPreview | undefined> {
+  if (!node?.finding.meta.hasFix) {
+    return undefined;
+  }
+
+  const resolution = await resolvePreferredFixForFinding(node.finding);
+  return {
+    selectedTitle: resolution.selected?.title,
+    selectedKind: resolution.selected?.kind?.value,
+    matchingTitles: resolution.matchingActions.map((action) => action.title),
+    matchingKinds: resolution.matchingActions.map(
+      (action) => action.kind?.value ?? ""
+    ),
+    allTitles: resolution.actions
+      .filter(isCodeAction)
+      .map((action) => action.title),
+  };
+}
+
+export async function applyFindingFixForTests(
+  node?: SecurityOverviewFindingNode
+): Promise<boolean> {
+  if (!node?.finding.meta.hasFix) {
+    return false;
+  }
+  return applyPreferredFixForFinding(node.finding, false);
+}
+
 function groupIcon(
   key: string,
   groupMode: SecurityOverviewGroupMode
@@ -464,8 +556,23 @@ async function applyPreferredFixForFinding(
   finding: SecurityFinding,
   reveal: boolean
 ): Promise<boolean> {
+  const resolution = await resolvePreferredFixForFinding(finding);
+  const action = resolution.selected;
+  if (!action) {
+    return false;
+  }
+
+  return applyResolvedFixAction(finding, action, reveal);
+}
+
+async function resolvePreferredFixForFinding(
+  finding: SecurityFinding
+): Promise<{
+  actions: Array<vscode.CodeAction | vscode.Command>;
+  matchingActions: vscode.CodeAction[];
+  selected: vscode.CodeAction | undefined;
+}> {
   const uri = vscode.Uri.parse(finding.uri);
-  const document = await vscode.workspace.openTextDocument(uri);
   const range = new vscode.Range(
     new vscode.Position(
       finding.range.start.line,
@@ -480,15 +587,42 @@ async function applyPreferredFixForFinding(
   const actions =
     (await vscode.commands.executeCommand<
       Array<vscode.CodeAction | vscode.Command>
-    >("vscode.executeCodeActionProvider", uri, range, vscode.CodeActionKind.QuickFix)) ?? [];
+    >(
+      "vscode.executeCodeActionProvider",
+      uri,
+      range,
+      vscode.CodeActionKind.QuickFix.value
+    )) ?? [];
   const matchingActions = actions.filter(isCodeAction);
-  const action = pickPreferredCodeActionForFinding<vscode.CodeAction>(
+  const selected = pickPreferredCodeActionForFinding<vscode.CodeAction>(
     finding,
     matchingActions
+  ) ?? fallbackQuickFixAction(matchingActions);
+
+  return {
+    actions,
+    matchingActions,
+    selected,
+  };
+}
+
+async function applyResolvedFixAction(
+  finding: SecurityFinding,
+  action: vscode.CodeAction,
+  reveal: boolean
+): Promise<boolean> {
+  const uri = vscode.Uri.parse(finding.uri);
+  const document = await vscode.workspace.openTextDocument(uri);
+  const range = new vscode.Range(
+    new vscode.Position(
+      finding.range.start.line,
+      finding.range.start.character
+    ),
+    new vscode.Position(
+      finding.range.end.line,
+      finding.range.end.character
+    )
   );
-  if (!action) {
-    return false;
-  }
 
   if (action.edit) {
     const applied = await vscode.workspace.applyEdit(action.edit);
@@ -512,6 +646,32 @@ async function applyPreferredFixForFinding(
   }
 
   return true;
+}
+
+function fallbackQuickFixAction(
+  actions: readonly vscode.CodeAction[]
+): vscode.CodeAction | undefined {
+  if (actions.length === 0) {
+    return undefined;
+  }
+
+  const quickFixes = actions.filter((action) =>
+    action.kind?.contains(vscode.CodeActionKind.QuickFix) ?? true
+  );
+  if (quickFixes.length === 1) {
+    return quickFixes[0];
+  }
+
+  const preferredQuickFixes = quickFixes.filter((action) => action.isPreferred);
+  if (preferredQuickFixes.length === 1) {
+    return preferredQuickFixes[0];
+  }
+
+  if (actions.length === 1) {
+    return actions[0];
+  }
+
+  return undefined;
 }
 
 function readIgnoredFindingKeys(storage: vscode.Memento): string[] {

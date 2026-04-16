@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
 - Fixed overlapping ETH-send diagnostics to suppress broad `security/arbitrary-send-eth` findings when the semantic user-controlled transfer detector covers the same call site
 - Fixed VS Code diagnostics delivery so the security overview no longer intercepts `publishDiagnostics` in a way that prevents editor diagnostics and E2E code-action flows from working
+- Fixed VS Code security-overview fix actions in the real extension host by sending a string quick-fix kind to `vscode.executeCodeActionProvider`
+- Fixed VS Code security-overview fix selection to fall back to unique/preferred quick fixes when VS Code omits diagnostic metadata on returned code actions
+- Fixed VS Code ignored security baselines to key off stable finding identity instead of diagnostic message text
+- Fixed VS Code graph previews to render in a dedicated webview instead of raw markdown/Mermaid output
 
 ## [0.0.12] - 2026-04-16
 

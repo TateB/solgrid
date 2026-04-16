@@ -514,7 +514,14 @@ function titleCase(value: string): string {
 }
 
 export function findingFingerprint(finding: SecurityFinding): string {
-  return `${finding.uri}:${finding.range.start.line}:${finding.range.start.character}:${finding.code}:${finding.message}`;
+  return [
+    finding.uri,
+    finding.range.start.line,
+    finding.range.start.character,
+    finding.range.end.line,
+    finding.range.end.character,
+    finding.meta.id || finding.code,
+  ].join(":");
 }
 
 const EMPTY_FINDING_KEYS = new Set<string>();

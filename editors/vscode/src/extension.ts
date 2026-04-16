@@ -21,14 +21,21 @@ import { runCoverageCommand, runPreferredCoverageCommand } from "./coverageRun";
 import {
   applyGroupFixes,
   applyFindingFix,
+  applyFindingFixForTests,
   openFindingHelp,
   openSecurityFinding,
+  previewFindingFix,
   SecurityOverviewNode,
   SecurityOverviewProvider,
   suppressGroupNextLine,
   suppressFindingNextLine,
 } from "./securityOverview";
-import { activeImportsGraphArgs, showGraph } from "./graphPreview";
+import { SecurityOverviewFindingNode } from "./securityOverviewModel";
+import {
+  activeImportsGraphArgs,
+  getGraphPreviewSnapshot,
+  showGraph,
+} from "./graphPreview";
 
 let client: LanguageClient | undefined;
 
@@ -167,6 +174,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
         await showGraph(client, args);
       }
     }),
+    commands.registerCommand("_solgrid.test.getGraphPreviewSnapshot", () =>
+      getGraphPreviewSnapshot()
+    ),
     commands.registerCommand("solgrid.coverage.refresh", () =>
       coverageOverview.refresh()
     ),
@@ -203,6 +213,64 @@ export async function activate(context: ExtensionContext): Promise<void> {
     ),
     commands.registerCommand("solgrid.coverage.openNode", (node) =>
       coverageOverview.openNode(node)
+    ),
+    commands.registerCommand("_solgrid.test.getSecurityOverviewSnapshot", async () =>
+      snapshotSecurityOverview(securityOverview)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.findSecurityOverviewFinding",
+      async (criteria) => findSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand("_solgrid.test.resetSecurityOverviewState", () =>
+      securityOverview.resetForTests()
+    ),
+    commands.registerCommand("_solgrid.test.getSecurityOverviewDebugState", () =>
+      securityOverview.debugStateForTests()
+    ),
+    commands.registerCommand(
+      "_solgrid.test.ignoreSecurityOverviewGroup",
+      async (criteria) =>
+        ignoreSecurityOverviewGroup(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.restoreSecurityOverviewGroup",
+      async (criteria) =>
+        restoreSecurityOverviewGroup(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.applySecurityOverviewGroupFixes",
+      async (criteria) =>
+        applySecurityOverviewGroupFixes(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.suppressSecurityOverviewGroupNextLine",
+      async (criteria) =>
+        suppressSecurityOverviewGroupNextLine(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.ignoreSecurityOverviewFinding",
+      async (criteria) =>
+        ignoreSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.restoreSecurityOverviewFinding",
+      async (criteria) =>
+        restoreSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.previewSecurityOverviewFix",
+      previewFindingFix
+    ),
+    commands.registerCommand(
+      "_solgrid.test.applySecurityOverviewFix",
+      applyFindingFixForTests
+    ),
+    commands.registerCommand("_solgrid.test.getCoverageOverviewSnapshot", async () =>
+      snapshotCoverageOverview(coverageOverview)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.findCoverageOverviewNode",
+      async (criteria) => findCoverageOverviewNode(coverageOverview, criteria)
     ),
     commands.registerCommand("solgrid.securityOverview.ignoreFinding", (node) =>
       securityOverview.ignoreFinding(node)
@@ -358,4 +426,336 @@ async function rerunSecurityAnalysis(
     });
   }
   securityOverview.refresh();
+}
+
+interface SecurityOverviewFindingCriteria {
+  uri?: string;
+  code?: string;
+  fixable?: boolean;
+  suppressible?: boolean;
+  labelIncludes?: string;
+}
+
+interface SecurityOverviewGroupCriteria {
+  labelIncludes?: string;
+  childUri?: string;
+  childCode?: string;
+}
+
+interface SecurityOverviewFindingNodeLike {
+  kind: "finding";
+  label: string;
+  description: string;
+  ignored: boolean;
+  finding: {
+    uri: string;
+    code: string;
+    message: string;
+    source: string;
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    meta: {
+      id: string;
+      title: string;
+      category: string;
+      severity: "error" | "warning" | "info";
+      kind: "compiler" | "lint" | "detector";
+      hasFix: boolean;
+      suppressible: boolean;
+    };
+  };
+}
+
+interface CoverageOverviewNodeCriteria {
+  filePath?: string;
+  kind?: "file" | "line";
+  label?: string;
+  line?: number;
+}
+
+async function snapshotSecurityOverview(
+  securityOverview: SecurityOverviewProvider
+): Promise<unknown[]> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  return roots.map((node) => snapshotSecurityNode(securityOverview, node));
+}
+
+function snapshotSecurityNode(
+  securityOverview: SecurityOverviewProvider,
+  node: SecurityOverviewNode
+): unknown {
+  const item = securityOverview.getTreeItem(node);
+  if (node.kind === "group") {
+    return {
+      kind: "group",
+      label: node.label,
+      description: node.description,
+      contextValue: item.contextValue,
+      children: node.children.map((child) =>
+        snapshotSecurityNode(securityOverview, child)
+      ),
+    };
+  }
+  return {
+    kind: "finding",
+    label: node.label,
+    description: node.description,
+    contextValue: item.contextValue,
+    code: node.finding.code,
+    uri: node.finding.uri,
+  };
+}
+
+async function findSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<SecurityOverviewFindingNodeLike | undefined> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  return node;
+}
+
+async function ignoreSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.ignoreFinding(node);
+  return true;
+}
+
+async function restoreSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.restoreFinding(node);
+  return true;
+}
+
+async function ignoreSecurityOverviewGroup(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.ignoreGroup(node);
+  return true;
+}
+
+async function restoreSecurityOverviewGroup(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.restoreGroup(node);
+  return true;
+}
+
+async function applySecurityOverviewGroupFixes(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await applyGroupFixes(node);
+  return true;
+}
+
+async function suppressSecurityOverviewGroupNextLine(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await suppressGroupNextLine(node);
+  return true;
+}
+
+async function findSecurityOverviewFindingNode(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<SecurityOverviewFindingNode | undefined> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  for (const root of roots) {
+    if (root.kind !== "group") {
+      continue;
+    }
+    for (const child of root.children) {
+      if (matchesSecurityFinding(child, criteria)) {
+        return child;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function findSecurityOverviewGroupNode(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<Extract<SecurityOverviewNode, { kind: "group" }> | undefined> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  for (const root of roots) {
+    if (root.kind !== "group") {
+      continue;
+    }
+    if (matchesSecurityGroup(root, criteria)) {
+      return root;
+    }
+  }
+  return undefined;
+}
+
+function matchesSecurityFinding(
+  node: SecurityOverviewFindingNodeLike,
+  criteria: SecurityOverviewFindingCriteria
+): boolean {
+  if (criteria.uri && node.finding.uri !== criteria.uri) {
+    return false;
+  }
+  if (criteria.code && node.finding.code !== criteria.code) {
+    return false;
+  }
+  if (
+    typeof criteria.fixable === "boolean" &&
+    node.finding.meta.hasFix !== criteria.fixable
+  ) {
+    return false;
+  }
+  if (
+    typeof criteria.suppressible === "boolean" &&
+    node.finding.meta.suppressible !== criteria.suppressible
+  ) {
+    return false;
+  }
+  if (
+    criteria.labelIncludes &&
+    !node.label.toLowerCase().includes(criteria.labelIncludes.toLowerCase())
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function matchesSecurityGroup(
+  node: Extract<SecurityOverviewNode, { kind: "group" }>,
+  criteria: SecurityOverviewGroupCriteria
+): boolean {
+  if (
+    criteria.labelIncludes &&
+    !node.label.toLowerCase().includes(criteria.labelIncludes.toLowerCase())
+  ) {
+    return false;
+  }
+  if (criteria.childUri || criteria.childCode) {
+    return node.children.some(
+      (child) =>
+        (!criteria.childUri || child.finding.uri === criteria.childUri) &&
+        (!criteria.childCode || child.finding.code === criteria.childCode)
+    );
+  }
+  return true;
+}
+
+async function snapshotCoverageOverview(
+  coverageOverview: CoverageOverviewFeature
+): Promise<unknown[]> {
+  const roots = await resolveProviderChildren(coverageOverview.getChildren());
+  return roots.map((node) => snapshotCoverageNode(coverageOverview, node));
+}
+
+function snapshotCoverageNode(
+  coverageOverview: CoverageOverviewFeature,
+  node: CoverageOverviewNode
+): unknown {
+  const item = coverageOverview.getTreeItem(node);
+  if (node.kind === "file") {
+    return {
+      kind: "file",
+      label: node.label,
+      description: node.description,
+      contextValue: item.contextValue,
+      filePath: node.summary.filePath,
+      children: node.children.map((child) =>
+        snapshotCoverageNode(coverageOverview, child)
+      ),
+    };
+  }
+  return {
+    kind: "line",
+    label: node.label,
+    description: node.description,
+    contextValue: item.contextValue,
+    filePath: node.filePath,
+    line: node.detail.line,
+    status: node.detail.status,
+  };
+}
+
+async function findCoverageOverviewNode(
+  coverageOverview: CoverageOverviewFeature,
+  criteria: CoverageOverviewNodeCriteria = {}
+): Promise<CoverageOverviewNode | undefined> {
+  const roots = await resolveProviderChildren(coverageOverview.getChildren());
+  for (const root of roots) {
+    if (matchesCoverageNode(root, criteria)) {
+      return root;
+    }
+    if (root.kind === "file") {
+      for (const child of root.children) {
+        if (matchesCoverageNode(child, criteria)) {
+          return child;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function matchesCoverageNode(
+  node: CoverageOverviewNode,
+  criteria: CoverageOverviewNodeCriteria
+): boolean {
+  if (criteria.kind && node.kind !== criteria.kind) {
+    return false;
+  }
+  if (criteria.label && node.label !== criteria.label) {
+    return false;
+  }
+  if (criteria.filePath) {
+    const nodeFilePath =
+      node.kind === "file" ? node.summary.filePath : node.filePath;
+    if (nodeFilePath !== criteria.filePath) {
+      return false;
+    }
+  }
+  if (typeof criteria.line === "number") {
+    if (node.kind !== "line" || node.detail.line !== criteria.line) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function resolveProviderChildren<T>(
+  value: T[] | undefined | null | Promise<T[] | undefined | null> | Thenable<T[] | undefined | null>
+): Promise<T[]> {
+  const resolved = await Promise.resolve(value);
+  return resolved ?? [];
 }

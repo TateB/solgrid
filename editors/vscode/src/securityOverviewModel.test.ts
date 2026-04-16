@@ -513,4 +513,52 @@ describe("ignored baseline helpers", () => {
       "security/tx-origin"
     );
   });
+
+  it("uses a stable fingerprint when the diagnostic message changes", () => {
+    const variants = extractSecurityFindings({
+      uri: "file:///workspace/Test.sol",
+      diagnostics: [
+        {
+          range: {
+            start: { line: 1, character: 0 },
+            end: { line: 1, character: 9 },
+          },
+          severity: 1,
+          code: "security/tx-origin",
+          source: "solgrid",
+          message: "Avoid using tx.origin",
+          data: {
+            id: "security/tx-origin",
+            title: "Avoid using tx.origin",
+            category: "security",
+            severity: "error",
+            kind: "detector",
+            suppressible: true,
+            has_fix: false,
+          },
+        },
+        {
+          range: {
+            start: { line: 1, character: 0 },
+            end: { line: 1, character: 9 },
+          },
+          severity: 1,
+          code: "security/tx-origin",
+          source: "solgrid",
+          message: "Avoid using tx.origin for authorization",
+          data: {
+            id: "security/tx-origin",
+            title: "Avoid using tx.origin",
+            category: "security",
+            severity: "error",
+            kind: "detector",
+            suppressible: true,
+            has_fix: false,
+          },
+        },
+      ],
+    });
+
+    expect(findingFingerprint(variants[0])).toBe(findingFingerprint(variants[1]));
+  });
 });

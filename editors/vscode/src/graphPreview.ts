@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
 import {
+  buildGraphPreviewSnapshot,
   GraphDocumentLike,
   GraphKind,
-  renderGraphMarkdown,
+  GraphPreviewSnapshot,
+  renderGraphWebviewHtml,
 } from "./graphPreviewRender";
 
 export interface GraphCommandArgs {
@@ -11,6 +13,15 @@ export interface GraphCommandArgs {
   uri: string;
   symbolName?: string;
   targetOffset?: number;
+}
+
+let graphPanel: vscode.WebviewPanel | undefined;
+let lastGraphPreviewSnapshot: GraphPreviewSnapshot | undefined;
+
+export function getGraphPreviewSnapshot():
+  | GraphPreviewSnapshot
+  | undefined {
+  return lastGraphPreviewSnapshot;
 }
 
 export async function showGraph(
@@ -47,19 +58,7 @@ export async function showGraph(
     return;
   }
 
-  const document = await vscode.workspace.openTextDocument({
-    language: "markdown",
-    content: renderGraphMarkdown(graph),
-  });
-
-  try {
-    await vscode.commands.executeCommand("markdown.showPreview", document.uri);
-  } catch {
-    await vscode.window.showTextDocument(document, {
-      preview: false,
-      preserveFocus: false,
-    });
-  }
+  showGraphPanel(graph);
 }
 
 function graphCommand(kind: GraphKind): string {
@@ -90,6 +89,44 @@ function graphSubject(request: GraphCommandArgs): string {
   }
 }
 
+function showGraphPanel(graph: GraphDocumentLike): void {
+  if (!graphPanel) {
+    graphPanel = vscode.window.createWebviewPanel(
+      "solgridGraphPreview",
+      graph.title,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+      }
+    );
+    graphPanel.onDidDispose(() => {
+      graphPanel = undefined;
+    });
+    graphPanel.webview.onDidReceiveMessage((message) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        message.type === "openSource" &&
+        typeof message.uri === "string"
+      ) {
+        void vscode.commands.executeCommand(
+          "vscode.open",
+          vscode.Uri.parse(message.uri)
+        );
+      }
+    });
+  }
+
+  graphPanel.title = graph.title;
+  graphPanel.webview.html = renderGraphWebviewHtml(graph, {
+    cspSource: graphPanel.webview.cspSource,
+    nonce: createNonce(),
+  });
+  graphPanel.reveal(vscode.ViewColumn.Beside, false);
+  lastGraphPreviewSnapshot = buildGraphPreviewSnapshot(graph);
+}
+
 export function activeImportsGraphArgs(): GraphCommandArgs | undefined {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== "solidity") {
@@ -103,4 +140,8 @@ export function activeImportsGraphArgs(): GraphCommandArgs | undefined {
     kind: "imports",
     uri: editor.document.uri.toString(),
   };
+}
+
+function createNonce(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
