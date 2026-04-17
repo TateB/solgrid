@@ -92,8 +92,16 @@ fn import_statement(
         ImportItems::Plain(alias) => vec![ImportedObject {
             source_name: object_name_from_path(&path),
             source_span: item_span.clone(),
-            local_name: alias.map(|ident| ident.as_str().to_string()),
-            local_span: alias.map(|ident| solgrid_ast::span_to_range(ident.span)),
+            local_name: Some(
+                alias
+                    .map(|ident| ident.as_str().to_string())
+                    .unwrap_or_else(|| object_name_from_path(&path)),
+            ),
+            local_span: Some(
+                alias
+                    .map(|ident| solgrid_ast::span_to_range(ident.span))
+                    .unwrap_or(item_span),
+            ),
         }],
         ImportItems::Glob(alias) => vec![ImportedObject {
             source_name: object_name_from_path(&path),

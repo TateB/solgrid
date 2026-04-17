@@ -1872,6 +1872,18 @@ contract Test {}
 }
 
 #[test]
+fn test_duplicated_imports_detects_cross_path_plain_import_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./LibraryA.sol";
+import {LibraryA} from "./other/LibraryA.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
 fn test_no_unused_state_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
