@@ -24,9 +24,10 @@ pub struct DuplicatedImportsRule;
 
 #[derive(Clone)]
 struct ImportedObject {
-    name: String,
-    alias: Option<String>,
-    span: Range<usize>,
+    source_name: String,
+    source_span: Range<usize>,
+    local_name: Option<String>,
+    local_span: Option<Range<usize>>,
 }
 
 struct ImportStatementData {
@@ -70,21 +71,35 @@ fn import_statement(
     let objects = match &import.items {
         ImportItems::Aliases(aliases) => aliases
             .iter()
-            .map(|(name, alias)| ImportedObject {
-                name: name.as_str().to_string(),
-                alias: alias.map(|ident| ident.as_str().to_string()),
-                span: solgrid_ast::span_to_range(name.span),
+            .map(|(name, alias)| {
+                let source_name = name.as_str().to_string();
+                let local_name = alias
+                    .map(|ident| ident.as_str().to_string())
+                    .unwrap_or_else(|| source_name.clone());
+                let source_span = solgrid_ast::span_to_range(name.span);
+                let local_span = alias
+                    .map(|ident| solgrid_ast::span_to_range(ident.span))
+                    .unwrap_or_else(|| source_span.clone());
+
+                ImportedObject {
+                    source_name,
+                    source_span,
+                    local_name: Some(local_name),
+                    local_span: Some(local_span),
+                }
             })
             .collect(),
         ImportItems::Plain(alias) => vec![ImportedObject {
-            name: object_name_from_path(&path),
-            alias: alias.map(|ident| ident.as_str().to_string()),
-            span: item_span,
+            source_name: object_name_from_path(&path),
+            source_span: item_span.clone(),
+            local_name: alias.map(|ident| ident.as_str().to_string()),
+            local_span: alias.map(|ident| solgrid_ast::span_to_range(ident.span)),
         }],
         ImportItems::Glob(alias) => vec![ImportedObject {
-            name: object_name_from_path(&path),
-            alias: Some(alias.as_str().to_string()),
-            span: item_span,
+            source_name: object_name_from_path(&path),
+            source_span: item_span,
+            local_name: Some(alias.as_str().to_string()),
+            local_span: Some(solgrid_ast::span_to_range(alias.span)),
         }],
     };
 
@@ -99,15 +114,17 @@ fn inline_duplicates(imports: &[ImportStatementData]) -> Vec<Diagnostic> {
         let mut reported = HashSet::new();
 
         for object in &import.objects {
-            if !seen.insert(object.name.as_str()) && reported.insert(object.name.as_str()) {
+            if !seen.insert(object.source_name.as_str())
+                && reported.insert(object.source_name.as_str())
+            {
                 diagnostics.push(Diagnostic::new(
                     META.id,
                     format!(
                         "`{}` is imported more than once in the same import statement",
-                        object.name
+                        object.source_name
                     ),
                     META.default_severity,
-                    object.span.clone(),
+                    object.source_span.clone(),
                 ));
             }
         }
@@ -123,8 +140,8 @@ fn global_same_path_duplicates(imports: &[ImportStatementData]) -> Vec<Diagnosti
         let mut names_in_statement = HashMap::new();
         for object in &import.objects {
             names_in_statement
-                .entry(object.name.clone())
-                .or_insert_with(|| object.span.clone());
+                .entry(object.source_name.clone())
+                .or_insert_with(|| object.source_span.clone());
         }
 
         for (name, span) in names_in_statement {
@@ -156,10 +173,15 @@ fn global_diff_path_duplicates(imports: &[ImportStatementData]) -> Vec<Diagnosti
     for import in imports {
         let mut names_in_statement = HashMap::new();
         for object in &import.objects {
-            if object.alias.is_none() {
+            if let Some(local_name) = &object.local_name {
                 names_in_statement
-                    .entry(object.name.clone())
-                    .or_insert_with(|| object.span.clone());
+                    .entry(local_name.clone())
+                    .or_insert_with(|| {
+                        object
+                            .local_span
+                            .clone()
+                            .unwrap_or_else(|| object.source_span.clone())
+                    });
             }
         }
 
@@ -177,7 +199,7 @@ fn global_diff_path_duplicates(imports: &[ImportStatementData]) -> Vec<Diagnosti
             (entries.len() > 1).then(|| {
                 Diagnostic::new(
                     META.id,
-                    format!("`{name}` is imported from multiple paths without an alias"),
+                    format!("`{name}` is imported from multiple paths"),
                     META.default_severity,
                     entries[1].1.clone(),
                 )
