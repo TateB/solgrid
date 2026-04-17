@@ -3,6 +3,11 @@
 //! Handles `solgrid.toml` config files with support for hierarchical
 //! config resolution and foundry.toml fallback.
 
+mod rule_settings;
+
+pub use rule_settings::*;
+
+use regex::Regex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use solgrid_diagnostics::{RuleCategory, Severity};
 use std::collections::HashMap;
@@ -11,7 +16,7 @@ use std::sync::Arc;
 
 /// Top-level solgrid configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub lint: LintConfig,
     pub format: FormatConfig,
@@ -87,7 +92,7 @@ fn aliased_rule_ids(rule_id: &str) -> &'static [&'static str] {
 
 /// Lint configuration section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LintConfig {
     /// Rule preset.
     pub preset: RulePreset,
@@ -330,7 +335,7 @@ impl Config {
 
 /// Formatter configuration section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FormatConfig {
     /// Maximum line length before wrapping (default: 120).
     pub line_length: usize,
@@ -443,7 +448,7 @@ pub enum ContractBodySpacing {
 
 /// Global configuration section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GlobalConfig {
     /// Solidity version hint (auto-detected from pragma if omitted).
     pub solidity_version: Option<String>,
@@ -490,9 +495,9 @@ impl ConfigResolver {
         }
     }
 
-    pub fn resolve_for_path(&mut self, path: &Path) -> Arc<Config> {
+    pub fn resolve_for_path(&mut self, path: &Path) -> Result<Arc<Config>, String> {
         if let Some(config) = &self.explicit {
-            return config.clone();
+            return Ok(config.clone());
         }
 
         let dir = if path.is_dir() {
@@ -504,12 +509,12 @@ impl ConfigResolver {
         };
 
         if let Some(config) = self.cache.get(&dir) {
-            return config.clone();
+            return Ok(config.clone());
         }
 
-        let config = Arc::new(resolve_config(&dir));
+        let config = Arc::new(resolve_config(&dir)?);
         self.cache.insert(dir, config.clone());
-        config
+        Ok(config)
     }
 }
 
@@ -549,19 +554,152 @@ fn normalize_rule_aliases(config: &mut Config) {
     }
 }
 
-fn warn_for_invalid_settings(config: &Config, path: &Path) {
-    if let Err(error) = config.lint.compiler_version_allowed() {
-        eprintln!(
-            "warning: invalid setting for `security/compiler-version.allowed` in {}: {error}; falling back to default compiler-version rule behavior",
-            path.display()
-        );
-    }
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CodeComplexitySettings {
+    threshold: usize,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
+struct FunctionMaxLinesSettings {
+    max_lines: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MaxStatesCountSettings {
+    max_count: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct CompilerVersionSettings {
+    allowed: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FoundryTestFunctionSettings {
+    pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FuncNameMixedcaseSettings {
+    allow: Vec<String>,
+    allow_regex: Option<String>,
+    allow_public_abi: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct MaxLineLengthSettings {
+    limit: usize,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct ImportsOrderingSettings {
     import_order: Vec<String>,
+}
+
+fn parse_rule_settings<T>(rule_id: &str, value: &toml::Value, path: &Path) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    value.clone().try_into::<T>().map_err(|error| {
+        format!(
+            "invalid settings for `{rule_id}` in {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn validate_rule_settings(config: &Config, path: &Path) -> Result<(), String> {
+    for (raw_rule_id, value) in &config.lint.settings {
+        let rule_id = canonical_rule_id(raw_rule_id);
+        match rule_id {
+            "best-practices/code-complexity" => {
+                let _: CodeComplexitySettings = parse_rule_settings(rule_id, value, path)?;
+            }
+            "best-practices/function-max-lines" => {
+                let _: FunctionMaxLinesSettings = parse_rule_settings(rule_id, value, path)?;
+            }
+            "best-practices/max-states-count" => {
+                let _: MaxStatesCountSettings = parse_rule_settings(rule_id, value, path)?;
+            }
+            "security/compiler-version" => {
+                let _: CompilerVersionSettings = parse_rule_settings(rule_id, value, path)?;
+                config.lint.compiler_version_allowed().map_err(|error| {
+                    format!(
+                        "invalid settings for `{rule_id}` in {}: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+            "naming/foundry-test-functions" => {
+                let settings: FoundryTestFunctionSettings =
+                    parse_rule_settings(rule_id, value, path)?;
+                if let Some(pattern) = settings.pattern {
+                    Regex::new(&pattern).map_err(|error| {
+                        format!(
+                            "invalid settings for `{rule_id}` in {}: invalid regex `{pattern}`: {error}",
+                            path.display()
+                        )
+                    })?;
+                }
+            }
+            "naming/func-name-mixedcase" => {
+                let settings: FuncNameMixedcaseSettings =
+                    parse_rule_settings(rule_id, value, path)?;
+                let _ = settings.allow;
+                let _ = settings.allow_public_abi;
+                if let Some(pattern) = settings.allow_regex {
+                    Regex::new(&pattern).map_err(|error| {
+                        format!(
+                            "invalid settings for `{rule_id}` in {}: invalid regex `{pattern}`: {error}",
+                            path.display()
+                        )
+                    })?;
+                }
+            }
+            "style/max-line-length" => {
+                let _: MaxLineLengthSettings = parse_rule_settings(rule_id, value, path)?;
+            }
+            "docs/natspec" => {
+                let _: NatspecSettings = parse_rule_settings(rule_id, value, path)?;
+            }
+            "style/category-headers" => {
+                let settings: CategoryHeadersSettings = parse_rule_settings(rule_id, value, path)?;
+                settings.validate().map_err(|error| {
+                    format!(
+                        "invalid settings for `{rule_id}` in {}: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+            "style/imports-ordering" => {
+                let settings: ImportsOrderingSettings = parse_rule_settings(rule_id, value, path)?;
+                for pattern in settings.import_order {
+                    Regex::new(&pattern).map_err(|error| {
+                        format!(
+                            "invalid settings for `{rule_id}` in {}: invalid regex `{pattern}`: {error}",
+                            path.display()
+                        )
+                    })?;
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "unknown settings entry for `{raw_rule_id}` in {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn populate_derived_format_settings(config: &mut Config) {
@@ -580,15 +718,15 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
     let mut config: Config =
         toml::from_str(&content).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
     normalize_rule_aliases(&mut config);
+    validate_rule_settings(&config, path)?;
     populate_derived_format_settings(&mut config);
-    warn_for_invalid_settings(&config, path);
     Ok(config)
 }
 
 /// Discover and load config by walking up the filesystem from `start_dir`.
 /// Falls back to foundry.toml `[fmt]` section if no solgrid.toml is found.
 /// Returns default config if no config file is found.
-pub fn resolve_config(start_dir: &Path) -> Config {
+pub fn resolve_config(start_dir: &Path) -> Result<Config, String> {
     let search_root = if start_dir.is_dir() {
         start_dir.to_path_buf()
     } else {
@@ -599,25 +737,15 @@ pub fn resolve_config(start_dir: &Path) -> Config {
     };
 
     if let Some(path) = find_config_file(&search_root) {
-        match load_config(&path) {
-            Ok(config) => return config,
-            Err(e) => {
-                eprintln!("warning: {e}, using defaults");
-            }
-        }
+        return load_config(&path);
     }
 
     // Fallback: try foundry.toml
     if let Some(path) = find_foundry_toml(&search_root) {
-        match load_foundry_fmt_config(&path) {
-            Ok(config) => return config,
-            Err(e) => {
-                eprintln!("warning: {e}, using defaults");
-            }
-        }
+        return load_foundry_fmt_config(&path);
     }
 
-    Config::default()
+    Ok(Config::default())
 }
 
 /// Find the nearest `solgrid.toml` by walking up from `start_dir`.
@@ -1126,7 +1254,7 @@ threads = 4
         fs::write(&file, "contract Token {}").unwrap();
 
         let mut resolver = ConfigResolver::new(None);
-        let config = resolver.resolve_for_path(&file);
+        let config = resolver.resolve_for_path(&file).unwrap();
         assert_eq!(config.lint.preset, RulePreset::All);
 
         let _ = fs::remove_dir_all(root);
@@ -1201,6 +1329,136 @@ import_order = ["^forge-std/", "^@?\\w", "^\\.\\./", "^\\./"]
         let config = load_config(&config_path).unwrap();
         assert!(config.lint.settings.contains_key("docs/natspec"));
         assert!(!config.lint.settings.contains_key("docs/natspec-function"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_rejects_unknown_rule_setting_field() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_unknown_setting_field_{}_{}",
+            std::process::id(),
+            5
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."docs/natspec"]
+comment_style = "triple_slash"
+unknown_key = true
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(error.contains("docs/natspec"));
+        assert!(error.contains("unknown field"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_rejects_unknown_rule_settings_entry() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_unknown_rule_settings_{}_{}",
+            std::process::id(),
+            6
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."docs/not-a-rule"]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(error.contains("unknown settings entry"));
+        assert!(error.contains("docs/not-a-rule"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_rejects_duplicate_category_header_order_entries() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_duplicate_category_order_{}_{}",
+            std::process::id(),
+            7
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."style/category-headers"]
+order = ["types", "types"]
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(error.contains("style/category-headers"));
+        assert!(error.contains("duplicate category id"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_accepts_func_name_mixedcase_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_func_name_mixedcase_{}_{}",
+            std::process::id(),
+            8
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."naming/func-name-mixedcase"]
+allow = ["ROOT_RESOURCE"]
+allow_regex = "^[A-Z][A-Z0-9_]*$"
+allow_public_abi = false
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        assert!(config
+            .lint
+            .settings
+            .contains_key("naming/func-name-mixedcase"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_rejects_invalid_func_name_mixedcase_regex() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_func_name_mixedcase_regex_{}_{}",
+            std::process::id(),
+            9
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."naming/func-name-mixedcase"]
+allow_regex = "("
+"#,
+        )
+        .unwrap();
+
+        let error = load_config(&config_path).unwrap_err();
+        assert!(error.contains("naming/func-name-mixedcase"));
+        assert!(error.contains("invalid regex"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1347,7 +1605,7 @@ remappings = [
         )
         .unwrap();
 
-        let config = resolve_config(dir.path());
+        let config = resolve_config(dir.path()).unwrap();
         assert_eq!(
             config.format.operator_line_break,
             OperatorLineBreak::Trailing

@@ -10,6 +10,7 @@ description = "Configuration parsing for solgrid (solgrid.toml)"
 solgrid_diagnostics = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

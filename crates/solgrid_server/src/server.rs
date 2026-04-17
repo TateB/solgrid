@@ -68,13 +68,16 @@ impl SolgridServer {
         }
     }
 
-    async fn resolve_config_for_path(&self, path: &std::path::Path) -> Config {
+    async fn resolve_config_for_path(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<Arc<Config>, String> {
         if let Some(config_path) = self.config_path.read().await.clone() {
             if let Some(config) = self.config_cache.read().await.explicit_config(&config_path) {
-                return (*config).clone();
+                return config.cloned_result();
             }
 
-            let config = match solgrid_config::load_config(&config_path) {
+            let config = match load_explicit_config_entry(&config_path) {
                 Ok(config) => config,
                 Err(error) => {
                     self.client
@@ -86,31 +89,64 @@ impl SolgridServer {
                             ),
                         )
                         .await;
-                    Config::default()
+                    CachedConfigEntry::Failed(error.into())
                 }
             };
             self.config_cache
                 .write()
                 .await
-                .store_explicit(config_path, Arc::new(config.clone()));
-            return config;
+                .store_explicit(config_path, config.clone());
+            return config.into_result();
         }
 
         let cache_key = config_cache_key(path);
         if let Some(config) = self.config_cache.read().await.nearest_config(&cache_key) {
-            return (*config).clone();
+            return config.cloned_result();
         }
 
-        let config = solgrid_config::resolve_config(path);
+        let config = match load_nearest_config_entry(path) {
+            Ok(config) => config,
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!(
+                            "Failed to load solgrid config for {}: {error}",
+                            path.display()
+                        ),
+                    )
+                    .await;
+                CachedConfigEntry::Failed(error.into())
+            }
+        };
         self.config_cache
             .write()
             .await
-            .store_nearest(cache_key, Arc::new(config.clone()));
-        config
+            .store_nearest(cache_key, config.clone());
+        config.into_result()
     }
 
     async fn clear_config_cache(&self) {
         self.config_cache.write().await.clear();
+    }
+
+    async fn publish_config_error(&self, uri: &Uri, version: i32, error: &str) {
+        let diagnostics = vec![Diagnostic {
+            range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("solgrid".into()),
+            message: format!("Error loading config: {error}"),
+            ..Default::default()
+        }];
+
+        {
+            let mut cache = self.published_diagnostics.write().await;
+            cache.insert(uri.clone(), diagnostics.clone());
+        }
+
+        self.client
+            .publish_diagnostics(uri.clone(), diagnostics, Some(version))
+            .await;
     }
 
     async fn set_pending_save_document(&self, uri: &Uri, source: Option<String>) {
@@ -162,7 +198,17 @@ impl SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        {
+            let mut index = self.workspace_index.write().await;
+            index.update_file(&path, &source);
+        }
+        let config = match self.resolve_config_for_path(&path).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.publish_config_error(uri, version, &error).await;
+                return;
+            }
+        };
 
         let resolver = self.resolver.read().await;
         let remappings = resolver.remappings_for_file(&path);
@@ -186,12 +232,6 @@ impl SolgridServer {
             cache.insert(uri.clone(), lsp_diags.clone());
         }
 
-        // Update the workspace symbol index for this file.
-        {
-            let mut index = self.workspace_index.write().await;
-            index.update_file(&path, &source);
-        }
-
         self.client
             .publish_diagnostics(uri.clone(), lsp_diags, Some(version))
             .await;
@@ -210,7 +250,9 @@ impl SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        let Ok(config) = self.resolve_config_for_path(&path).await else {
+            return;
+        };
         let mut current_source = source;
         let resolver = self.resolver.read().await;
         let remappings = resolver.remappings_for_file(&path);
@@ -471,7 +513,13 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        let config = match self.resolve_config_for_path(&path).await {
+            Ok(config) => config,
+            Err(_) => {
+                self.set_pending_save_document(uri, None).await;
+                return Ok(None);
+            }
+        };
         let mut final_source = source.clone();
         let resolver = self.resolver.read().await;
         let remappings = resolver.remappings_for_file(&path);
@@ -527,7 +575,9 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        let Ok(config) = self.resolve_config_for_path(&path).await else {
+            return Ok(None);
+        };
         let resolver = self.resolver.read().await;
         let remappings = resolver.remappings_for_file(&path);
         drop(resolver);
@@ -563,7 +613,9 @@ impl LanguageServer for SolgridServer {
         };
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        let Ok(config) = self.resolve_config_for_path(&path).await else {
+            return Ok(None);
+        };
         let edits = format::format_document(&source, &config.format);
 
         if edits.is_empty() {
@@ -588,7 +640,9 @@ impl LanguageServer for SolgridServer {
         };
 
         let path = uri_to_path(uri);
-        let config = self.resolve_config_for_path(&path).await;
+        let Ok(config) = self.resolve_config_for_path(&path).await else {
+            return Ok(None);
+        };
         let edits = format::format_range(&source, &params.range, &config.format);
 
         if edits.is_empty() {
@@ -806,6 +860,37 @@ impl LanguageServer for SolgridServer {
     }
 }
 
+#[derive(Debug, Clone)]
+enum CachedConfigEntry {
+    Loaded(Arc<Config>),
+    Failed(Arc<str>),
+}
+
+impl CachedConfigEntry {
+    fn cloned_result(&self) -> std::result::Result<Arc<Config>, String> {
+        match self {
+            Self::Loaded(config) => Ok(config.clone()),
+            Self::Failed(error) => Err(error.to_string()),
+        }
+    }
+
+    fn into_result(self) -> std::result::Result<Arc<Config>, String> {
+        self.cloned_result()
+    }
+}
+
+fn load_explicit_config_entry(
+    path: &std::path::Path,
+) -> std::result::Result<CachedConfigEntry, String> {
+    solgrid_config::load_config(path).map(|config| CachedConfigEntry::Loaded(Arc::new(config)))
+}
+
+fn load_nearest_config_entry(
+    path: &std::path::Path,
+) -> std::result::Result<CachedConfigEntry, String> {
+    solgrid_config::resolve_config(path).map(|config| CachedConfigEntry::Loaded(Arc::new(config)))
+}
+
 /// Client settings sent via didChangeConfiguration.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -884,27 +969,27 @@ fn sync_workspace_index_for_closed_file(index: &mut WorkspaceIndex, path: &std::
 
 #[derive(Debug, Default)]
 struct ServerConfigCache {
-    explicit: Option<(PathBuf, Arc<Config>)>,
-    nearest: HashMap<PathBuf, Arc<Config>>,
+    explicit: Option<(PathBuf, CachedConfigEntry)>,
+    nearest: HashMap<PathBuf, CachedConfigEntry>,
 }
 
 impl ServerConfigCache {
-    fn explicit_config(&self, path: &std::path::Path) -> Option<Arc<Config>> {
+    fn explicit_config(&self, path: &std::path::Path) -> Option<CachedConfigEntry> {
         self.explicit
             .as_ref()
             .filter(|(cached_path, _)| cached_path == path)
             .map(|(_, config)| config.clone())
     }
 
-    fn store_explicit(&mut self, path: PathBuf, config: Arc<Config>) {
+    fn store_explicit(&mut self, path: PathBuf, config: CachedConfigEntry) {
         self.explicit = Some((path, config));
     }
 
-    fn nearest_config(&self, dir: &std::path::Path) -> Option<Arc<Config>> {
+    fn nearest_config(&self, dir: &std::path::Path) -> Option<CachedConfigEntry> {
         self.nearest.get(dir).cloned()
     }
 
-    fn store_nearest(&mut self, dir: PathBuf, config: Arc<Config>) {
+    fn store_nearest(&mut self, dir: PathBuf, config: CachedConfigEntry) {
         self.nearest.insert(dir, config);
     }
 
@@ -1069,17 +1154,67 @@ contract Token {}
         let mut cache = ServerConfigCache::default();
         let explicit_path = PathBuf::from("/tmp/project/solgrid.toml");
         let nearest_path = PathBuf::from("/tmp/project/src");
-        let config = Arc::new(Config::default());
+        let config = CachedConfigEntry::Loaded(Arc::new(Config::default()));
+        let error = CachedConfigEntry::Failed("invalid config".into());
 
         cache.store_explicit(explicit_path.clone(), config.clone());
-        cache.store_nearest(nearest_path.clone(), config.clone());
+        cache.store_nearest(nearest_path.clone(), error.clone());
 
-        assert!(cache.explicit_config(&explicit_path).is_some());
-        assert!(cache.nearest_config(&nearest_path).is_some());
+        assert!(matches!(
+            cache.explicit_config(&explicit_path),
+            Some(CachedConfigEntry::Loaded(_))
+        ));
+        assert!(matches!(
+            cache.nearest_config(&nearest_path),
+            Some(CachedConfigEntry::Failed(_))
+        ));
 
         cache.clear();
 
         assert!(cache.explicit_config(&explicit_path).is_none());
         assert!(cache.nearest_config(&nearest_path).is_none());
+    }
+
+    #[test]
+    fn test_load_explicit_config_entry_preserves_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("solgrid.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[lint]
+preset = "all"
+
+[lint.settings."docs/not-a-rule"]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let error = load_explicit_config_entry(&config_path).unwrap_err();
+        assert!(error.contains("unknown settings entry"));
+        assert!(error.contains("docs/not-a-rule"));
+    }
+
+    #[test]
+    fn test_load_nearest_config_entry_preserves_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            dir.path().join("solgrid.toml"),
+            r#"
+[lint]
+preset = "all"
+
+[lint.settings."docs/not-a-rule"]
+enabled = true
+"#,
+        )
+        .unwrap();
+
+        let error = load_nearest_config_entry(&src.join("Token.sol")).unwrap_err();
+        assert!(error.contains("unknown settings entry"));
+        assert!(error.contains("docs/not-a-rule"));
     }
 }

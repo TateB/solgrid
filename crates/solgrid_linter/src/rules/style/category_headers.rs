@@ -5,7 +5,7 @@
 use super::initialization;
 use crate::context::LintContext;
 use crate::rule::Rule;
-use serde::Deserialize;
+use solgrid_config::{CategoryHeaderId, CategoryHeadersSettings};
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{
     ContractKind, FunctionKind, Item, ItemFunction, ItemKind, Visibility,
@@ -24,13 +24,6 @@ static META: RuleMeta = RuleMeta {
 
 pub struct CategoryHeadersRule;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-struct CategoryHeadersSettings {
-    min_categories: usize,
-    initialization_functions: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CoarseCategory {
     Types,
@@ -41,31 +34,6 @@ enum CoarseCategory {
     Modifiers,
     Initialization,
     Functions,
-}
-
-const CANONICAL_CATEGORIES: [&str; 13] = [
-    "Types",
-    "Constants & Immutables",
-    "Constants",
-    "Immutables",
-    "Storage",
-    "Events",
-    "Errors",
-    "Modifiers",
-    "Initialization",
-    "Functions",
-    "Implementation",
-    "Internal Functions",
-    "Private Functions",
-];
-
-impl Default for CategoryHeadersSettings {
-    fn default() -> Self {
-        Self {
-            min_categories: 2,
-            initialization_functions: Vec::new(),
-        }
-    }
 }
 
 impl Rule for CategoryHeadersRule {
@@ -95,7 +63,7 @@ impl Rule for CategoryHeadersRule {
                 let headers = scan_headers(ctx.source, body_start, body_end);
                 let unknown_headers: Vec<_> = headers
                     .iter()
-                    .filter(|header| !is_known_category(&header.name))
+                    .filter(|header| settings.category_for_label(&header.name).is_none())
                     .collect();
 
                 let categorized_items: Vec<_> = contract
@@ -169,7 +137,7 @@ struct HeaderBlock {
 
 #[derive(Debug, Clone)]
 struct CategorizedItem {
-    category: &'static str,
+    category: CategoryHeaderId,
     coarse: CoarseCategory,
 }
 
@@ -189,7 +157,7 @@ fn rebuild_contract_body(
     let indent = body_indent(source, body_start, body_end, &body_items, headers);
 
     let mut preamble = Vec::new();
-    let mut sections: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut sections: BTreeMap<CategoryHeaderId, Vec<String>> = BTreeMap::new();
 
     for body_item in body_items {
         let chunk = item_chunk(source, body_item, body_start, &header_ranges);
@@ -208,16 +176,46 @@ fn rebuild_contract_body(
         parts.push(preamble.join("\n\n"));
     }
 
-    for category in CANONICAL_CATEGORIES {
-        let Some(chunks) = sections.get(category) else {
-            continue;
+    let merge_constants = should_merge_constants(&sections, settings);
+
+    for category in settings.display_categories() {
+        let chunks = match category {
+            CategoryHeaderId::ConstantsAndImmutables if merge_constants => {
+                let mut merged = Vec::new();
+                if let Some(constants) = sections.get(&CategoryHeaderId::Constants) {
+                    merged.extend(constants.iter().cloned());
+                }
+                if let Some(immutables) = sections.get(&CategoryHeaderId::Immutables) {
+                    merged.extend(immutables.iter().cloned());
+                }
+                if merged.is_empty() {
+                    continue;
+                }
+                merged
+            }
+            CategoryHeaderId::Constants | CategoryHeaderId::Immutables if merge_constants => {
+                continue;
+            }
+            _ => {
+                let Some(chunks) = sections.get(&category) else {
+                    continue;
+                };
+                chunks.clone()
+            }
         };
+
+        if chunks.is_empty() {
+            continue;
+        }
 
         if !parts.is_empty() {
             parts.push(String::new());
         }
 
-        parts.push(render_header(&indent, category));
+        parts.push(render_header(
+            &indent,
+            settings.label_for(category).as_ref(),
+        ));
         parts.push(String::new());
         parts.push(chunks.join("\n\n"));
     }
@@ -227,6 +225,15 @@ fn rebuild_contract_body(
     } else {
         format!("\n{}\n", parts.join("\n"))
     }
+}
+
+fn should_merge_constants(
+    sections: &BTreeMap<CategoryHeaderId, Vec<String>>,
+    settings: &CategoryHeadersSettings,
+) -> bool {
+    sections.contains_key(&CategoryHeaderId::Constants)
+        && sections.contains_key(&CategoryHeaderId::Immutables)
+        && !settings.prefers_split_constants_and_immutables()
 }
 
 fn body_indent(
@@ -448,22 +455,23 @@ fn categorize_item(
 ) -> Option<CategorizedItem> {
     let (category, coarse) = match &item.kind {
         ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Udvt(_) => {
-            ("Types", CoarseCategory::Types)
+            (CategoryHeaderId::Types, CoarseCategory::Types)
         }
-        ItemKind::Variable(_)
-            if is_constant_like(source, item) || is_immutable_like(source, item) =>
-        {
-            ("Constants & Immutables", CoarseCategory::Constants)
+        ItemKind::Variable(_) if is_constant_like(source, item) => {
+            (CategoryHeaderId::Constants, CoarseCategory::Constants)
         }
-        ItemKind::Variable(_) => ("Storage", CoarseCategory::Storage),
-        ItemKind::Event(_) => ("Events", CoarseCategory::Events),
-        ItemKind::Error(_) => ("Errors", CoarseCategory::Errors),
+        ItemKind::Variable(_) if is_immutable_like(source, item) => {
+            (CategoryHeaderId::Immutables, CoarseCategory::Constants)
+        }
+        ItemKind::Variable(_) => (CategoryHeaderId::Storage, CoarseCategory::Storage),
+        ItemKind::Event(_) => (CategoryHeaderId::Events, CoarseCategory::Events),
+        ItemKind::Error(_) => (CategoryHeaderId::Errors, CoarseCategory::Errors),
         ItemKind::Function(func) if func.kind == FunctionKind::Modifier => {
-            ("Modifiers", CoarseCategory::Modifiers)
+            (CategoryHeaderId::Modifiers, CoarseCategory::Modifiers)
         }
         ItemKind::Function(func) => {
             let category = function_category(source, contract_kind, func, settings);
-            let coarse = if category == "Initialization" {
+            let coarse = if category == CategoryHeaderId::Initialization {
                 CoarseCategory::Initialization
             } else {
                 CoarseCategory::Functions
@@ -481,29 +489,31 @@ fn function_category(
     contract_kind: ContractKind,
     func: &ItemFunction<'_>,
     settings: &CategoryHeadersSettings,
-) -> &'static str {
+) -> CategoryHeaderId {
     if contract_kind == ContractKind::Interface {
-        return "Functions";
+        return CategoryHeaderId::Functions;
     }
 
     let _ = source;
 
     if initialization::is_initialization_function(func, &settings.initialization_functions) {
-        return "Initialization";
+        return CategoryHeaderId::Initialization;
     }
 
     let base = match func.kind {
-        FunctionKind::Fallback | FunctionKind::Receive => "Implementation",
-        FunctionKind::Modifier => "Modifiers",
+        FunctionKind::Fallback | FunctionKind::Receive => CategoryHeaderId::Implementation,
+        FunctionKind::Modifier => CategoryHeaderId::Modifiers,
         FunctionKind::Constructor | FunctionKind::Function => match func.header.visibility() {
-            Some(Visibility::Internal) => "Internal Functions",
-            Some(Visibility::Private) => "Private Functions",
-            Some(Visibility::External) | Some(Visibility::Public) | None => "Implementation",
+            Some(Visibility::Internal) => CategoryHeaderId::InternalFunctions,
+            Some(Visibility::Private) => CategoryHeaderId::PrivateFunctions,
+            Some(Visibility::External) | Some(Visibility::Public) | None => {
+                CategoryHeaderId::Implementation
+            }
         },
     };
 
-    if contract_kind == ContractKind::Library && base == "Internal Functions" {
-        "Implementation"
+    if contract_kind == ContractKind::Library && base == CategoryHeaderId::InternalFunctions {
+        CategoryHeaderId::Implementation
     } else {
         base
     }
@@ -517,8 +527,4 @@ fn is_constant_like(source: &str, item: &Item<'_>) -> bool {
 fn is_immutable_like(source: &str, item: &Item<'_>) -> bool {
     let text = solgrid_ast::span_text(source, item.span);
     text.contains(" immutable ") || text.contains(" immutable;")
-}
-
-fn is_known_category(name: &str) -> bool {
-    CANONICAL_CATEGORIES.contains(&name)
 }

@@ -82,14 +82,32 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `best-practices/max-states-count` | `max_count` | `15` | Max state variables per contract |
 | `security/compiler-version` | `allowed` | `[">=0.8.19", "<0.9.0"]` | Allowed compiler versions |
 | `naming/foundry-test-functions` | `pattern` | `"test(Fork)?(Fuzz)?(Fail)?_"` | Test function regex |
+| `naming/func-name-mixedcase` | `allow`, `allow_regex`, `allow_public_abi` | rule-specific | Allow exact names, regex-matched names, or public/external ABI-style uppercase names |
 | `style/max-line-length` | `limit` | `120` | Max line length |
 | `docs/natspec` | `comment_style` | `"triple_slash"` | Accept only `///` comments or allow `/** */` with `"either"` |
 | `docs/natspec` | `continuation_indent` | `"padded"` | Continuation indent mode: `"padded"` or `"none"` |
-| `docs/natspec` | `tags.<tag>.*` | tag-specific | Configure `enabled`, `include`, `exclude`, `skip_internal` for `title`, `author`, `notice`, `dev`, `param`, `return` |
+| `docs/natspec` | `tags.<tag>.*` | tag-specific | Configure `enabled`, `include`, `exclude`, `skip_internal` for `title`, `author`, `notice`, `dev`, `param`, `return`; `include` and `exclude` are both applied |
 | `docs/selector-tags` | none | n/a | No settings |
 | `style/category-headers` | `min_categories` | `2` | Minimum distinct declaration categories before headers are enforced |
 | `style/category-headers` | `initialization_functions` | built-in list | Function names treated as initialization sections |
+| `style/category-headers` | `order` | built-in order | Ordered category IDs such as `types`, `storage`, `implementation`, `internal_functions` |
+| `style/category-headers` | `labels.<category>` | built-in labels | Override rendered header labels for any configured category |
 | `style/imports-ordering` | `import_order` | default external / `../` / `./` grouping | Regex-defined import groups |
+
+`docs/natspec` include/exclude matching is evaluated against declaration contexts such as
+`contract:concrete`, `contract:abstract`, `contract:library`, `contract:interface`,
+`function:public`, `function:internal`, `function:library`, `variable:public`,
+`variable:private`, and `event`.
+
+`style/category-headers.order` accepts the built-in category IDs:
+`types`, `constants_and_immutables`, `constants`, `immutables`, `storage`, `events`,
+`errors`, `modifiers`, `initialization`, `functions`, `implementation`,
+`internal_functions`, `private_functions`.
+Any category IDs omitted from `order` are appended afterward in the built-in order.
+When both constants and immutables are present, solgrid uses the combined header by default;
+specifying `constants` or `immutables` in `order`, or overriding either label, keeps them split.
+
+Unknown or invalid rule settings now fail config loading instead of being ignored.
 
 ## Format Configuration
 
