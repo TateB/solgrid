@@ -1,6 +1,6 @@
 {
   "name": "@solgrid/napi-linux-x64",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "solgrid NAPI native binding for Linux x64",
   "license": "MIT",
   "repository": {
