@@ -11,6 +11,7 @@ mod immutable_name_snakecase;
 mod interface_starts_with_i;
 mod library_name_capwords;
 mod modifier_name_mixedcase;
+mod named_parameters_mapping;
 mod param_name_mixedcase;
 mod private_vars_underscore;
 mod struct_name_capwords;
@@ -30,6 +31,9 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(event_name_capwords::EventNameCapwordsRule));
     registry.register(Box::new(error_name_capwords::ErrorNameCapwordsRule));
     registry.register(Box::new(param_name_mixedcase::ParamNameMixedcaseRule));
+    registry.register(Box::new(
+        named_parameters_mapping::NamedParametersMappingRule,
+    ));
     registry.register(Box::new(var_name_mixedcase::VarNameMixedcaseRule));
     registry.register(Box::new(
         immutable_name_snakecase::ImmutableNameSnakecaseRule,

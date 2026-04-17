@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added Solhint parity coverage for `best-practices/duplicated-imports` and `naming/named-parameters-mapping`, including migration support from `.solhint.json`
 - Added richer `docs/natspec` context matching and configurable `style/category-headers` order/labels so repo-specific Solhint migrations can preserve per-target documentation and section-header policies
 
 ### Fixed
