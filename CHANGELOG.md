@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.13] - 2026-04-17
 
 ### Added
+- Added Solhint parity coverage for `best-practices/duplicated-imports` and `naming/named-parameters-mapping`, including migration support from `.solhint.json`
 - Added richer `docs/natspec` context matching and configurable `style/category-headers` order/labels so repo-specific Solhint migrations can preserve per-target documentation and section-header policies
 
 ### Fixed
+- Fixed `best-practices/duplicated-imports` to catch duplicate imported aliases and aliasless plain imports across paths while ignoring unsupported namespace imports, and `naming/named-parameters-mapping` to lint mapping-typed parameters and storage references without over-enforcing nested mapping names
 - Fixed `docs/selector-tags` canonical exact-match handling to avoid false positives when an interface or error selector tag already matches the expected value
 - Fixed config loading to reject unknown or invalid rule settings instead of silently ignoring them during lint and format runs
 - Fixed `style/category-headers` suggestion fixes to preserve categories omitted from custom `order` lists and respect explicit `constants` / `immutables` section splits, and restored validated config support for `naming/func-name-mixedcase` exceptions

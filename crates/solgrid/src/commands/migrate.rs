@@ -151,6 +151,7 @@ fn map_solhint_rule(solhint_rule: &str) -> Option<&'static str> {
         "custom-errors" => Some("best-practices/custom-errors"),
         "no-floating-pragma" => Some("best-practices/no-floating-pragma"),
         "imports-on-top" => Some("best-practices/imports-on-top"),
+        "duplicated-imports" => Some("best-practices/duplicated-imports"),
         "visibility-modifier-order" => Some("best-practices/visibility-modifier-order"),
 
         // Naming
@@ -161,7 +162,7 @@ fn map_solhint_rule(solhint_rule: &str) -> Option<&'static str> {
         "use-forbidden-name" | "var-name-mixedcase" => Some("naming/var-name-mixedcase"),
         "event-name-camelcase" => Some("naming/event-name-capwords"),
         "modifier-name-mixedcase" => Some("naming/modifier-name-mixedcase"),
-        "named-parameters-mapping" => None,
+        "named-parameters-mapping" => Some("naming/named-parameters-mapping"),
         "immutable-vars-naming" => Some("naming/immutable-name-snakecase"),
 
         // Gas

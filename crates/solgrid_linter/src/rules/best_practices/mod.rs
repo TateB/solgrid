@@ -3,6 +3,7 @@
 mod code_complexity;
 mod constructor_syntax;
 mod custom_errors;
+mod duplicated_imports;
 mod explicit_types;
 mod function_max_lines;
 mod imports_on_top;
@@ -26,6 +27,7 @@ pub fn register(registry: &mut RuleRegistry) {
     registry.register(Box::new(no_console::NoConsoleRule));
     registry.register(Box::new(explicit_types::ExplicitTypesRule));
     registry.register(Box::new(no_empty_blocks::NoEmptyBlocksRule));
+    registry.register(Box::new(duplicated_imports::DuplicatedImportsRule));
     registry.register(Box::new(function_max_lines::FunctionMaxLinesRule));
     registry.register(Box::new(max_states_count::MaxStatesCountRule));
     registry.register(Box::new(one_contract_per_file::OneContractPerFileRule));

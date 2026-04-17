@@ -1300,6 +1300,68 @@ contract Test {
 }
 
 #[test]
+fn test_named_parameters_mapping_detects_missing_regular_names() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address => uint256) public balances;
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 2);
+}
+
+#[test]
+fn test_named_parameters_mapping_only_requires_outer_key_for_nested_mappings() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address => mapping(address token => uint256 balance)) public balances;
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 1);
+}
+
+#[test]
+fn test_named_parameters_mapping_allows_missing_nested_mapping_names() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address owner => mapping(address => uint256 balance)) public balances;
+}
+"#;
+    assert_no_diagnostics(source, "naming/named-parameters-mapping");
+}
+
+#[test]
+fn test_named_parameters_mapping_detects_mapping_typed_function_parameters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+library TestLib {
+    function configure(mapping(address => uint256) storage balances) internal {
+        balances[address(0)] = 1;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 2);
+}
+
+#[test]
+fn test_named_parameters_mapping_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address owner => mapping(address token => uint256 balance)) public balances;
+}
+"#;
+    assert_no_diagnostics(source, "naming/named-parameters-mapping");
+}
+
+#[test]
 fn test_var_name_mixedcase_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -1748,6 +1810,101 @@ contract Test {
 }
 "#;
     assert_no_diagnostics(source, "best-practices/no-unused-imports");
+}
+
+#[test]
+fn test_duplicated_imports_detects_inline_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Token, Token as Tkn} from "./Token.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_same_path_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Token} from "./Token.sol";
+import {Token as TokenAlias} from "./Token.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_unaliased_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {SharedLib} from "./LibraryA.sol";
+import {SharedLib} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_allows_cross_path_aliases() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {SharedLib} from "./LibraryA.sol";
+import {SharedLib as SharedLibB} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_alias_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Foo as SharedLib} from "./LibraryA.sol";
+import {Bar as SharedLib} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_plain_import_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./LibraryA.sol";
+import {LibraryA} from "./other/LibraryA.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_same_path() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryAAgain from "./LibraryA.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_different_paths() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryB from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
 }
 
 #[test]
@@ -4227,8 +4384,10 @@ fn test_registry_lookup() {
     assert!(registry.get("security/uninitialized-storage").is_some());
     assert!(registry.get("naming/contract-name-capwords").is_some());
     assert!(registry.get("naming/interface-starts-with-i").is_some());
+    assert!(registry.get("naming/named-parameters-mapping").is_some());
     assert!(registry.get("best-practices/no-floating-pragma").is_some());
     assert!(registry.get("best-practices/constructor-syntax").is_some());
+    assert!(registry.get("best-practices/duplicated-imports").is_some());
     assert!(registry
         .get("best-practices/visibility-modifier-order")
         .is_some());
