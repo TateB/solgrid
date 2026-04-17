@@ -151,6 +151,4 @@ fn check_mapping_type(ty: &Type<'_>, label: &str, diagnostics: &mut Vec<Diagnost
             solgrid_ast::span_to_range(mapping.value.span),
         ));
     }
-
-    check_mapping_type(&mapping.value, label, diagnostics);
 }

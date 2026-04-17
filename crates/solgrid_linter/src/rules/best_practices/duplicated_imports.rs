@@ -103,12 +103,8 @@ fn import_statement(
                     .unwrap_or(item_span),
             ),
         }],
-        ImportItems::Glob(alias) => vec![ImportedObject {
-            source_name: object_name_from_path(&path),
-            source_span: item_span,
-            local_name: Some(alias.as_str().to_string()),
-            local_span: Some(solgrid_ast::span_to_range(alias.span)),
-        }],
+        // Solhint does not consider namespace imports in this rule.
+        ImportItems::Glob(_) => Vec::new(),
     };
 
     ImportStatementData { path, objects }

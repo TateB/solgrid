@@ -1324,7 +1324,7 @@ contract Test {
 }
 
 #[test]
-fn test_named_parameters_mapping_detects_missing_nested_mapping_names() {
+fn test_named_parameters_mapping_allows_missing_nested_mapping_names() {
     let source = r#"
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
@@ -1332,7 +1332,7 @@ contract Test {
     mapping(address owner => mapping(address => uint256 balance)) public balances;
 }
 "#;
-    assert_diagnostic_count(source, "naming/named-parameters-mapping", 1);
+    assert_no_diagnostics(source, "naming/named-parameters-mapping");
 }
 
 #[test]
@@ -1881,6 +1881,30 @@ import {LibraryA} from "./other/LibraryA.sol";
 contract Test {}
 "#;
     assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_same_path() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryAAgain from "./LibraryA.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_different_paths() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryB from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
 }
 
 #[test]
