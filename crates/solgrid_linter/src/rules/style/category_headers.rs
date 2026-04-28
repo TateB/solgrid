@@ -103,7 +103,8 @@ impl Rule for CategoryHeadersRule {
                     &settings,
                 );
 
-                if ctx.source[body_start..body_end] == replacement {
+                let body = &ctx.source[body_start..body_end];
+                if body == replacement || equal_ignoring_whitespace(body, &replacement) {
                     continue;
                 }
 
@@ -348,6 +349,12 @@ fn normalize_chunk(chunk: &str) -> String {
         .rposition(|line| !line.trim().is_empty())
         .unwrap_or(first);
     lines[first..=last].join("\n")
+}
+
+fn equal_ignoring_whitespace(left: &str, right: &str) -> bool {
+    left.chars()
+        .filter(|ch| !ch.is_whitespace())
+        .eq(right.chars().filter(|ch| !ch.is_whitespace()))
 }
 
 fn render_header(indent: &str, name: &str) -> String {

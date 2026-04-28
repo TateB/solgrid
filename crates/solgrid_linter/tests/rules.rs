@@ -2822,6 +2822,27 @@ contract Test {
 }
 
 #[test]
+fn test_category_headers_ignores_spacing_only_differences() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    ////////////////////////////////////////////////////////////////////////
+    // Storage
+    ////////////////////////////////////////////////////////////////////////
+
+
+    uint256 value;
+
+    ////////////////////////////////////////////////////////////////////////
+    // Implementation
+    ////////////////////////////////////////////////////////////////////////
+    function run() external {}
+}
+"#;
+    assert_no_diagnostics(source, "style/category-headers");
+}
+
+#[test]
 fn test_category_headers_respects_min_categories_setting() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;

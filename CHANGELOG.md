@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed `style/category-headers` to ignore whitespace-only differences so spacing issues are not reported as category-header violations
+
 ## [0.0.14] - 2026-04-17
 
 ## [0.0.13] - 2026-04-17
