@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Fixed CLI file discovery so quoted glob arguments such as `src/**/*.sol` expand to matching Solidity files.
+
 ## [0.0.15] - 2026-04-28
 
 ### Fixed
