@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `best-practices/no-empty-blocks` now allows comment-only empty bodies by default, with a setting to report them.
+
 ## [0.0.16] - 2026-05-06
 
 ### Fixed

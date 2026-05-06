@@ -46,6 +46,20 @@ pub struct NatspecSettings {
     pub tags: NatspecTagSettings,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NoEmptyBlocksSettings {
+    pub allow_comments: bool,
+}
+
+impl Default for NoEmptyBlocksSettings {
+    fn default() -> Self {
+        Self {
+            allow_comments: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CategoryHeaderId {

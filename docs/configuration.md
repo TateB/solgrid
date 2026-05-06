@@ -80,6 +80,7 @@ Some rules accept additional configuration in `[lint.settings]`:
 | `best-practices/code-complexity` | `threshold` | `10` | Max cyclomatic complexity |
 | `best-practices/function-max-lines` | `max_lines` | `50` | Max function line count |
 | `best-practices/max-states-count` | `max_count` | `15` | Max state variables per contract |
+| `best-practices/no-empty-blocks` | `allow_comments` | `true` | Allow otherwise-empty bodies that contain a comment such as `/* empty */` |
 | `security/compiler-version` | `allowed` | `[">=0.8.19", "<0.9.0"]` | Allowed compiler versions |
 | `naming/foundry-test-functions` | `pattern` | `"test(Fork)?(Fuzz)?(Fail)?_"` | Test function regex |
 | `naming/func-name-mixedcase` | `allow`, `allow_regex`, `allow_public_abi` | rule-specific | Allow exact names, regex-matched names, or public/external ABI-style uppercase names |
