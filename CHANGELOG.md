@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `best-practices/no-empty-blocks` now allows comment-only empty bodies by default, with a setting to report them.
+
 ### Fixed
 - Fixed CLI file discovery so quoted glob arguments such as `src/**/*.sol` expand to matching Solidity files.
 

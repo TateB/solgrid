@@ -4563,6 +4563,55 @@ contract Test {
     assert_no_diagnostics(source, "best-practices/no-empty-blocks");
 }
 
+#[test]
+fn test_no_empty_blocks_reports_virtual_functions_by_default() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function hook() internal virtual {}
+}
+"#;
+    assert_diagnostic_count(source, "best-practices/no-empty-blocks", 1);
+}
+
+#[test]
+fn test_no_empty_blocks_ignores_commented_empty_functions_by_default() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function hook() internal {
+        /* empty */
+    }
+}
+"#;
+    assert_no_diagnostics(source, "best-practices/no-empty-blocks");
+}
+
+#[test]
+fn test_no_empty_blocks_can_report_commented_empty_functions() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    function hook() internal {
+        /* empty */
+    }
+}
+"#;
+    let mut config = Config::default();
+    config.lint.preset = RulePreset::All;
+    config.lint.settings.insert(
+        "best-practices/no-empty-blocks".into(),
+        table(&[("allow_comments", toml::Value::Boolean(false))]),
+    );
+
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "best-practices/no-empty-blocks", &config);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+}
+
 // =============================================================================
 // Additional gas rules
 // =============================================================================

@@ -629,6 +629,9 @@ fn validate_rule_settings(config: &Config, path: &Path) -> Result<(), String> {
             "best-practices/max-states-count" => {
                 let _: MaxStatesCountSettings = parse_rule_settings(rule_id, value, path)?;
             }
+            "best-practices/no-empty-blocks" => {
+                let _: NoEmptyBlocksSettings = parse_rule_settings(rule_id, value, path)?;
+            }
             "security/compiler-version" => {
                 let _: CompilerVersionSettings = parse_rule_settings(rule_id, value, path)?;
                 config.lint.compiler_version_allowed().map_err(|error| {
@@ -1405,6 +1408,32 @@ order = ["types", "types"]
         let error = load_config(&config_path).unwrap_err();
         assert!(error.contains("style/category-headers"));
         assert!(error.contains("duplicate category id"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_load_config_accepts_no_empty_blocks_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "solgrid_config_no_empty_blocks_{}_{}",
+            std::process::id(),
+            8
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("solgrid.toml");
+        fs::write(
+            &config_path,
+            r#"
+[lint.settings."best-practices/no-empty-blocks"]
+allow_comments = false
+"#,
+        )
+        .unwrap();
+
+        let config = load_config(&config_path).unwrap();
+        let settings: NoEmptyBlocksSettings =
+            config.rule_settings("best-practices/no-empty-blocks");
+        assert!(!settings.allow_comments);
 
         let _ = fs::remove_dir_all(root);
     }
