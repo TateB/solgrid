@@ -155,7 +155,7 @@ If `global.include` is omitted, solgrid uses the default include set:
 `["src/**/*.sol", "test/**/*.sol", "script/**/*.sol"]`.
 
 If `global.include = []` is set explicitly, solgrid discovers no files unless
-you pass file paths directly on the CLI.
+you pass file paths or glob patterns directly on the CLI.
 
 ## Config Resolution
 

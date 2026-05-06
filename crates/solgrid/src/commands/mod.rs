@@ -6,7 +6,7 @@ pub mod list_rules;
 pub mod migrate;
 
 use crate::cache::{config_hash, Cache};
-use glob::Pattern;
+use glob::{glob, Pattern};
 use ignore::WalkBuilder;
 use rayon::ThreadPoolBuilder;
 use solgrid_config::{Config, ConfigResolver};
@@ -58,6 +58,8 @@ pub fn discover_sol_files(
                 }
             } else if path.is_dir() {
                 collect_sol_files(path, resolver, &mut files, true)?;
+            } else if is_glob_path(path) {
+                collect_glob_sol_files(path, resolver, &mut files)?;
             }
         }
     }
@@ -85,6 +87,38 @@ where
     } else {
         f()
     }
+}
+
+fn collect_glob_sol_files(
+    pattern: &Path,
+    resolver: &mut ConfigResolver,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let pattern_str = pattern
+        .to_str()
+        .ok_or_else(|| format!("glob path must be valid UTF-8: {}", pattern.display()))?;
+
+    let entries = glob(pattern_str)
+        .map_err(|error| format!("invalid glob pattern `{}`: {error}", pattern.display()))?;
+
+    for entry in entries {
+        let path = entry.map_err(|error| {
+            format!(
+                "failed to read glob match for `{}`: {error}",
+                pattern.display()
+            )
+        })?;
+
+        if path.is_file() {
+            if path.extension().is_some_and(|ext| ext == "sol") {
+                files.push(path);
+            }
+        } else if path.is_dir() {
+            collect_sol_files(&path, resolver, files, true)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn collect_sol_files(
@@ -119,6 +153,11 @@ fn collect_sol_files(
     }
 
     Ok(())
+}
+
+fn is_glob_path(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|path| path.bytes().any(|byte| matches!(byte, b'*' | b'?' | b'[')))
 }
 
 fn compile_patterns(patterns: &[String]) -> Vec<Pattern> {
@@ -343,6 +382,41 @@ mod tests {
         let files = discover_sol_files(std::slice::from_ref(&file), &mut resolver).unwrap();
         assert_eq!(files, vec![file]);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_glob_path_discovers_matching_sol_files() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_discovery_{}_{}", std::process::id(), 4));
+        let src = root.join("src");
+        let nested = src.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(src.join("Token.sol"), "contract Token {}").unwrap();
+        fs::write(nested.join("Vault.sol"), "contract Vault {}").unwrap();
+        fs::write(nested.join("notes.txt"), "not solidity").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let files = discover_sol_files(&[root.join("src/**/*.sol")], &mut resolver).unwrap();
+
+        assert_eq!(files, vec![src.join("Token.sol"), nested.join("Vault.sol")]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_glob_path_bypasses_empty_include() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_discovery_{}_{}", std::process::id(), 5));
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(root.join("solgrid.toml"), "[global]\ninclude = []\n").unwrap();
+        let file = src.join("Token.sol");
+        fs::write(&file, "contract Token {}").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let files = discover_sol_files(&[root.join("src/**/*.sol")], &mut resolver).unwrap();
+
+        assert_eq!(files, vec![file]);
         let _ = fs::remove_dir_all(root);
     }
 
