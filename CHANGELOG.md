@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `best-practices/no-empty-blocks` now allows comment-only empty bodies by default, with a setting to report them.
 
+## [0.0.16] - 2026-05-06
+
 ### Fixed
 - Fixed CLI file discovery so quoted glob arguments such as `src/**/*.sol` expand to matching Solidity files.
 
@@ -208,8 +210,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.15...HEAD
-[0.0.15]: https://github.com/TateB/solgrid/compare/v0.0.14...v0.0.15
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.16...HEAD
+[0.0.16]: https://github.com/TateB/solgrid/compare/v0.0.15...v0.0.16
+[0.0.15]: https://github.com/TateB/solgrid/releases/tag/v0.0.15
 [0.0.14]: https://github.com/TateB/solgrid/releases/tag/v0.0.14
 [0.0.13]: https://github.com/TateB/solgrid/releases/tag/v0.0.13
 [0.0.12]: https://github.com/TateB/solgrid/releases/tag/v0.0.12
