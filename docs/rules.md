@@ -18,7 +18,7 @@ solgrid explain <rule-id>
 
 Notes:
 
-- The current registry contains 82 active rules.
+- The current registry contains 84 active rules.
 - Legacy NatSpec rule IDs such as `best-practices/use-natspec` are deprecated config aliases for `docs/natspec`, not separately registered rules.
 
 ## Security
@@ -52,6 +52,7 @@ Notes:
 | `best-practices/code-complexity` | `warning` | `-` |
 | `best-practices/constructor-syntax` | `warning` | `safe` |
 | `best-practices/custom-errors` | `warning` | `-` |
+| `best-practices/duplicated-imports` | `warning` | `-` |
 | `best-practices/explicit-types` | `warning` | `safe` |
 | `best-practices/function-max-lines` | `warning` | `-` |
 | `best-practices/imports-on-top` | `warning` | `-` |
@@ -84,6 +85,7 @@ Notes:
 | `naming/interface-starts-with-i` | `warning` | `-` |
 | `naming/library-name-capwords` | `warning` | `-` |
 | `naming/modifier-name-mixedcase` | `warning` | `-` |
+| `naming/named-parameters-mapping` | `warning` | `-` |
 | `naming/param-name-mixedcase` | `warning` | `-` |
 | `naming/private-vars-underscore` | `warning` | `-` |
 | `naming/struct-name-capwords` | `warning` | `-` |

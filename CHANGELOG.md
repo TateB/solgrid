@@ -73,6 +73,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code reference CodeLens actions by wiring `solgrid.showReferences` to the native references peek command and suppressing transient `0 references` counts while the workspace index is warming
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH
 
+## [0.0.16] - 2026-05-06
+
+### Fixed
+- Fixed CLI file discovery so quoted glob arguments such as `src/**/*.sol` expand to matching Solidity files.
+
+## [0.0.15] - 2026-04-28
+
+### Fixed
+- Fixed `style/category-headers` to ignore whitespace-only differences so spacing issues are not reported as category-header violations
+
+## [0.0.14] - 2026-04-17
+
+## [0.0.13] - 2026-04-17
+
+### Added
+- Added Solhint parity coverage for `best-practices/duplicated-imports` and `naming/named-parameters-mapping`, including migration support from `.solhint.json`
+- Added richer `docs/natspec` context matching and configurable `style/category-headers` order/labels so repo-specific Solhint migrations can preserve per-target documentation and section-header policies
+
+### Fixed
+- Fixed `best-practices/duplicated-imports` to catch duplicate imported aliases and aliasless plain imports across paths while ignoring unsupported namespace imports, and `naming/named-parameters-mapping` to lint mapping-typed parameters and storage references without over-enforcing nested mapping names
+- Fixed `docs/selector-tags` canonical exact-match handling to avoid false positives when an interface or error selector tag already matches the expected value
+- Fixed config loading to reject unknown or invalid rule settings instead of silently ignoring them during lint and format runs
+- Fixed `style/category-headers` suggestion fixes to preserve categories omitted from custom `order` lists and respect explicit `constants` / `immutables` section splits, and restored validated config support for `naming/func-name-mixedcase` exceptions
+- Fixed the LSP server to stop linting, formatting, and applying save-time fixes with default settings after a config load failure, so editor behavior now matches CLI config rejection
+
 ## [0.0.12] - 2026-04-16
 
 ## [0.0.11] - 2026-04-16
@@ -248,8 +273,12 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.12...HEAD
-[0.0.12]: https://github.com/TateB/solgrid/compare/v0.0.11...v0.0.12
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.16...HEAD
+[0.0.16]: https://github.com/TateB/solgrid/compare/v0.0.15...v0.0.16
+[0.0.15]: https://github.com/TateB/solgrid/releases/tag/v0.0.15
+[0.0.14]: https://github.com/TateB/solgrid/releases/tag/v0.0.14
+[0.0.13]: https://github.com/TateB/solgrid/releases/tag/v0.0.13
+[0.0.12]: https://github.com/TateB/solgrid/releases/tag/v0.0.12
 [0.0.11]: https://github.com/TateB/solgrid/releases/tag/v0.0.11
 [0.0.10]: https://github.com/TateB/solgrid/releases/tag/v0.0.10
 [0.0.9]: https://github.com/TateB/solgrid/releases/tag/v0.0.9

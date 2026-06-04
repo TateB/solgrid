@@ -4,10 +4,10 @@
 
 use crate::context::LintContext;
 use crate::rule::Rule;
-use serde::Deserialize;
 use solgrid_ast::natspec::{
     find_attached_natspec, render_triple_slash_block, NatSpecBlock, NatSpecStyle,
 };
+use solgrid_config::{NatspecCommentStyle, NatspecContinuationIndent, NatspecSettings};
 use solgrid_diagnostics::*;
 use solgrid_parser::solar_ast::{
     ContractKind, FunctionKind, Item, ItemFunction, ItemKind, StateMutability, Visibility,
@@ -24,51 +24,6 @@ static META: RuleMeta = RuleMeta {
 };
 
 pub struct NatspecRule;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum CommentStyleSetting {
-    #[default]
-    TripleSlash,
-    Either,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ContinuationIndentSetting {
-    #[default]
-    Padded,
-    None,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-struct NatspecTagSettings {
-    title: TagRuleConfig,
-    author: TagRuleConfig,
-    notice: TagRuleConfig,
-    dev: TagRuleConfig,
-    param: TagRuleConfig,
-    #[serde(rename = "return")]
-    return_tag: TagRuleConfig,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-struct TagRuleConfig {
-    enabled: Option<bool>,
-    include: Option<Vec<String>>,
-    exclude: Option<Vec<String>>,
-    skip_internal: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-struct NatspecSettings {
-    comment_style: CommentStyleSetting,
-    continuation_indent: ContinuationIndentSetting,
-    tags: NatspecTagSettings,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TagKind {
@@ -121,7 +76,7 @@ struct Subject {
     kind: SubjectKind,
     name: String,
     span: std::ops::Range<usize>,
-    context: String,
+    contexts: Vec<String>,
     block: Option<NatSpecBlock>,
     params: Vec<Option<String>>,
     returns: Vec<Option<String>>,
@@ -132,6 +87,53 @@ struct Subject {
 struct ParsedTagLine {
     kind: String,
     arg: Option<String>,
+}
+
+fn contract_contexts(kind: ContractKind) -> Vec<String> {
+    match kind {
+        ContractKind::Contract => vec!["contract".into(), "contract:concrete".into()],
+        ContractKind::AbstractContract => {
+            vec![
+                "contract".into(),
+                "contract:abstract".into(),
+                "abstract".into(),
+            ]
+        }
+        ContractKind::Library => vec![
+            "contract".into(),
+            "contract:library".into(),
+            "library".into(),
+        ],
+        ContractKind::Interface => {
+            vec![
+                "contract".into(),
+                "contract:interface".into(),
+                "interface".into(),
+            ]
+        }
+    }
+}
+
+fn contract_scope(kind: ContractKind) -> &'static str {
+    match kind {
+        ContractKind::Contract => "concrete",
+        ContractKind::AbstractContract => "abstract",
+        ContractKind::Library => "library",
+        ContractKind::Interface => "interface",
+    }
+}
+
+fn declaration_contexts(kind: &str, visibility: Option<&str>, owner: ContractKind) -> Vec<String> {
+    let mut contexts = vec![kind.to_string()];
+    if let Some(visibility) = visibility {
+        contexts.push(format!("{kind}:{visibility}"));
+    }
+    let scope = contract_scope(owner);
+    contexts.push(format!("{kind}:{scope}"));
+    if let Some(visibility) = visibility {
+        contexts.push(format!("{kind}:{visibility}:{scope}"));
+    }
+    contexts
 }
 
 impl Rule for NatspecRule {
@@ -158,15 +160,21 @@ impl Rule for NatspecRule {
                 for body_item in contract.body.iter() {
                     match &body_item.kind {
                         ItemKind::Function(func) if func.kind != FunctionKind::Modifier => {
-                            let subject = function_subject(ctx.source, body_item, func);
+                            let subject =
+                                function_subject(ctx.source, body_item, func, contract.kind);
                             diagnostics.extend(check_subject(ctx, &settings, &subject));
                         }
                         ItemKind::Event(_) => {
-                            let subject = event_subject(ctx.source, body_item);
+                            let subject = event_subject(ctx.source, body_item, contract.kind);
                             diagnostics.extend(check_subject(ctx, &settings, &subject));
                         }
                         ItemKind::Variable(var) => {
-                            let subject = variable_subject(ctx.source, body_item, var.visibility);
+                            let subject = variable_subject(
+                                ctx.source,
+                                body_item,
+                                var.visibility,
+                                contract.kind,
+                            );
                             diagnostics.extend(check_subject(ctx, &settings, &subject));
                         }
                         _ => {}
@@ -185,18 +193,12 @@ fn contract_subject(source: &str, item: &Item<'_>) -> Option<Subject> {
         return None;
     };
 
-    let context = match contract.kind {
-        ContractKind::Contract | ContractKind::AbstractContract => "contract".to_string(),
-        ContractKind::Library => "library".to_string(),
-        ContractKind::Interface => "interface".to_string(),
-    };
-
     let start = solgrid_ast::span_to_range(item.span).start;
     Some(Subject {
         kind: SubjectKind::Contract(contract.kind),
         name: contract.name.as_str().to_string(),
         span: solgrid_ast::item_name_range(item),
-        context,
+        contexts: contract_contexts(contract.kind),
         block: find_attached_natspec(source, start),
         params: Vec::new(),
         returns: Vec::new(),
@@ -204,7 +206,12 @@ fn contract_subject(source: &str, item: &Item<'_>) -> Option<Subject> {
     })
 }
 
-fn function_subject(source: &str, item: &Item<'_>, func: &ItemFunction<'_>) -> Subject {
+fn function_subject(
+    source: &str,
+    item: &Item<'_>,
+    func: &ItemFunction<'_>,
+    owner: ContractKind,
+) -> Subject {
     let start = solgrid_ast::span_to_range(item.span).start;
     let name = func
         .header
@@ -229,7 +236,7 @@ fn function_subject(source: &str, item: &Item<'_>, func: &ItemFunction<'_>) -> S
         kind: SubjectKind::Function,
         name,
         span: solgrid_ast::item_name_range(item),
-        context: format!("function:{visibility}"),
+        contexts: declaration_contexts("function", Some(visibility), owner),
         block: find_attached_natspec(source, start),
         params: func
             .header
@@ -242,7 +249,7 @@ fn function_subject(source: &str, item: &Item<'_>, func: &ItemFunction<'_>) -> S
     }
 }
 
-fn event_subject(source: &str, item: &Item<'_>) -> Subject {
+fn event_subject(source: &str, item: &Item<'_>, owner: ContractKind) -> Subject {
     let ItemKind::Event(event) = &item.kind else {
         unreachable!();
     };
@@ -251,7 +258,7 @@ fn event_subject(source: &str, item: &Item<'_>) -> Subject {
         kind: SubjectKind::Event,
         name: event.name.as_str().to_string(),
         span: solgrid_ast::item_name_range(item),
-        context: "event".to_string(),
+        contexts: declaration_contexts("event", None, owner),
         block: find_attached_natspec(source, start),
         params: event
             .parameters
@@ -263,16 +270,21 @@ fn event_subject(source: &str, item: &Item<'_>) -> Subject {
     }
 }
 
-fn variable_subject(source: &str, item: &Item<'_>, visibility: Option<Visibility>) -> Subject {
+fn variable_subject(
+    source: &str,
+    item: &Item<'_>,
+    visibility: Option<Visibility>,
+    owner: ContractKind,
+) -> Subject {
     let ItemKind::Variable(variable) = &item.kind else {
         unreachable!();
     };
     let start = solgrid_ast::span_to_range(item.span).start;
-    let context = match visibility {
-        Some(Visibility::Public) => "variable:public",
-        Some(Visibility::Private) => "variable:private",
-        Some(Visibility::Internal) | None => "variable:internal",
-        Some(Visibility::External) => "variable:internal",
+    let visibility = match visibility {
+        Some(Visibility::Public) => "public",
+        Some(Visibility::Private) => "private",
+        Some(Visibility::Internal) | None => "internal",
+        Some(Visibility::External) => "internal",
     };
 
     Subject {
@@ -282,7 +294,7 @@ fn variable_subject(source: &str, item: &Item<'_>, visibility: Option<Visibility
             .map(|name| name.as_str().to_string())
             .unwrap_or_else(|| "variable".to_string()),
         span: solgrid_ast::item_name_range(item),
-        context: context.to_string(),
+        contexts: declaration_contexts("variable", Some(visibility), owner),
         block: find_attached_natspec(source, start),
         params: Vec::new(),
         returns: Vec::new(),
@@ -395,7 +407,7 @@ fn formatting_diagnostic(
 ) -> Option<Diagnostic> {
     let formatted_lines = format_contents(stripped_lines, settings.continuation_indent);
     let style_invalid = block.style == NatSpecStyle::Block
-        && settings.comment_style == CommentStyleSetting::TripleSlash;
+        && settings.comment_style == NatspecCommentStyle::TripleSlash;
     let format_invalid = formatted_lines != stripped_lines;
 
     if !style_invalid && !format_invalid {
@@ -429,7 +441,7 @@ fn formatting_diagnostic(
 
 fn format_contents(
     lines: &[String],
-    continuation_indent: ContinuationIndentSetting,
+    continuation_indent: NatspecContinuationIndent,
 ) -> Vec<String> {
     let mut result = Vec::new();
     let mut cursor = 0;
@@ -457,7 +469,7 @@ fn format_contents(
 
 fn format_tag_group(
     group: &[String],
-    continuation_indent: ContinuationIndentSetting,
+    continuation_indent: NatspecContinuationIndent,
 ) -> Vec<String> {
     let mut lines = group.to_vec();
     while matches!(lines.last(), Some(last) if last.trim().is_empty()) {
@@ -468,7 +480,7 @@ fn format_tag_group(
         return lines;
     }
 
-    if continuation_indent == ContinuationIndentSetting::None {
+    if continuation_indent == NatspecContinuationIndent::None {
         let mut formatted = vec![lines[0].clone()];
         for line in lines.iter().skip(1) {
             if line.trim().is_empty() {
@@ -665,7 +677,7 @@ fn required_tags(subject: &Subject, settings: &NatspecSettings) -> Vec<TagKind> 
         SubjectKind::Variable => vec![TagKind::Notice, TagKind::Dev],
     };
 
-    tags.retain(|tag| tag_enabled(settings, *tag, &subject.context));
+    tags.retain(|tag| tag_enabled(settings, *tag, &subject.contexts));
 
     if subject.params.is_empty() {
         tags.retain(|tag| *tag != TagKind::Param);
@@ -680,7 +692,7 @@ fn required_tags(subject: &Subject, settings: &NatspecSettings) -> Vec<TagKind> 
     tags
 }
 
-fn tag_enabled(settings: &NatspecSettings, tag: TagKind, context: &str) -> bool {
+fn tag_enabled(settings: &NatspecSettings, tag: TagKind, contexts: &[String]) -> bool {
     let config = match tag {
         TagKind::Title => &settings.tags.title,
         TagKind::Author => &settings.tags.author,
@@ -696,17 +708,23 @@ fn tag_enabled(settings: &NatspecSettings, tag: TagKind, context: &str) -> bool 
     }
 
     if let Some(include) = &config.include {
-        return include
-            .iter()
-            .any(|pattern| context_matches(pattern, context));
+        enabled &= include.iter().any(|pattern| {
+            contexts
+                .iter()
+                .any(|context| context_matches(pattern, context))
+        });
     }
 
     if let Some(exclude) = &config.exclude {
-        enabled &= !exclude
-            .iter()
-            .any(|pattern| context_matches(pattern, context));
+        enabled &= !exclude.iter().any(|pattern| {
+            contexts
+                .iter()
+                .any(|context| context_matches(pattern, context))
+        });
     } else if config.skip_internal.unwrap_or(false) {
-        enabled &= !matches!(context, "function:internal" | "function:private");
+        enabled &= !contexts
+            .iter()
+            .any(|context| matches!(context.as_str(), "function:internal" | "function:private"));
     }
 
     enabled

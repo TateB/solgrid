@@ -25,6 +25,82 @@ fn table(entries: &[(&str, toml::Value)]) -> toml::Value {
     )
 }
 
+fn strings(values: &[&str]) -> toml::Value {
+    toml::Value::Array(
+        values
+            .iter()
+            .map(|value| toml::Value::String((*value).to_string()))
+            .collect(),
+    )
+}
+
+fn migration_natspec_config() -> Config {
+    let mut config = Config::default();
+    config
+        .lint
+        .rules
+        .insert("docs/natspec".into(), RuleLevel::Info);
+    config.lint.settings.insert(
+        "docs/natspec".into(),
+        table(&[
+            ("comment_style", toml::Value::String("triple_slash".into())),
+            ("continuation_indent", toml::Value::String("padded".into())),
+            (
+                "tags",
+                table(&[
+                    (
+                        "notice",
+                        table(&[
+                            (
+                                "include",
+                                strings(&[
+                                    "function:public",
+                                    "function:external",
+                                    "function:default",
+                                    "variable:public",
+                                    "event",
+                                    "contract:concrete",
+                                ]),
+                            ),
+                            ("exclude", strings(&["function:library"])),
+                        ]),
+                    ),
+                    (
+                        "dev",
+                        table(&[(
+                            "include",
+                            strings(&[
+                                "function:internal",
+                                "function:private",
+                                "function:library",
+                                "variable:internal",
+                                "variable:private",
+                                "contract:abstract",
+                                "contract:library",
+                            ]),
+                        )]),
+                    ),
+                    (
+                        "param",
+                        table(&[(
+                            "exclude",
+                            strings(&["function:internal", "function:private", "function:library"]),
+                        )]),
+                    ),
+                    (
+                        "return",
+                        table(&[(
+                            "exclude",
+                            strings(&["function:internal", "function:private", "function:library"]),
+                        )]),
+                    ),
+                ]),
+            ),
+        ]),
+    );
+    config
+}
+
 // =============================================================================
 // Security rules
 // =============================================================================
@@ -1224,6 +1300,68 @@ contract Test {
 }
 
 #[test]
+fn test_named_parameters_mapping_detects_missing_regular_names() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address => uint256) public balances;
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 2);
+}
+
+#[test]
+fn test_named_parameters_mapping_only_requires_outer_key_for_nested_mappings() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address => mapping(address token => uint256 balance)) public balances;
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 1);
+}
+
+#[test]
+fn test_named_parameters_mapping_allows_missing_nested_mapping_names() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address owner => mapping(address => uint256 balance)) public balances;
+}
+"#;
+    assert_no_diagnostics(source, "naming/named-parameters-mapping");
+}
+
+#[test]
+fn test_named_parameters_mapping_detects_mapping_typed_function_parameters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+library TestLib {
+    function configure(mapping(address => uint256) storage balances) internal {
+        balances[address(0)] = 1;
+    }
+}
+"#;
+    assert_diagnostic_count(source, "naming/named-parameters-mapping", 2);
+}
+
+#[test]
+fn test_named_parameters_mapping_clean() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.18;
+contract Test {
+    mapping(address owner => mapping(address token => uint256 balance)) public balances;
+}
+"#;
+    assert_no_diagnostics(source, "naming/named-parameters-mapping");
+}
+
+#[test]
 fn test_var_name_mixedcase_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -1580,6 +1718,49 @@ contract Test is ITest {
 }
 
 #[test]
+fn test_docs_natspec_respects_visibility_context_filters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @notice Alias resolver
+contract Test {
+    /// @dev Apply one round of aliasing.
+    /// @param fromName The source DNS-encoded name.
+    /// @return matchName The alias that matched.
+    /// @return toName The destination DNS-encoded name or empty if no match.
+    function _resolveAlias(bytes memory fromName)
+        internal
+        view
+        returns (bytes memory matchName, bytes memory toName)
+    {
+        return (fromName, fromName);
+    }
+}
+"#;
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "docs/natspec", &migration_natspec_config());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn test_docs_natspec_respects_library_function_context_filters() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Shared math helpers.
+library TestLib {
+    /// @dev Clamp a value to the provided upper bound.
+    function clamp(uint256 value, uint256 maxValue) public pure returns (uint256) {
+        return value > maxValue ? maxValue : value;
+    }
+}
+"#;
+    let diagnostics =
+        lint_source_for_rule_with_config(source, "docs/natspec", &migration_natspec_config());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn test_visibility_modifier_order_detected() {
     let source = r#"
 // SPDX-License-Identifier: MIT
@@ -1629,6 +1810,101 @@ contract Test {
 }
 "#;
     assert_no_diagnostics(source, "best-practices/no-unused-imports");
+}
+
+#[test]
+fn test_duplicated_imports_detects_inline_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Token, Token as Tkn} from "./Token.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_same_path_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Token} from "./Token.sol";
+import {Token as TokenAlias} from "./Token.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_unaliased_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {SharedLib} from "./LibraryA.sol";
+import {SharedLib} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_allows_cross_path_aliases() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {SharedLib} from "./LibraryA.sol";
+import {SharedLib as SharedLibB} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_alias_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import {Foo as SharedLib} from "./LibraryA.sol";
+import {Bar as SharedLib} from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_detects_cross_path_plain_import_duplicates() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import "./LibraryA.sol";
+import {LibraryA} from "./other/LibraryA.sol";
+contract Test {}
+"#;
+    assert_diagnostic_count(source, "best-practices/duplicated-imports", 1);
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_same_path() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryAAgain from "./LibraryA.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
+}
+
+#[test]
+fn test_duplicated_imports_ignores_namespace_imports_from_different_paths() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+import * as LibraryA from "./LibraryA.sol";
+import * as LibraryB from "./LibraryB.sol";
+contract Test {}
+"#;
+    assert_no_diagnostics(source, "best-practices/duplicated-imports");
 }
 
 #[test]
@@ -2546,6 +2822,27 @@ contract Test {
 }
 
 #[test]
+fn test_category_headers_ignores_spacing_only_differences() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    ////////////////////////////////////////////////////////////////////////
+    // Storage
+    ////////////////////////////////////////////////////////////////////////
+
+
+    uint256 value;
+
+    ////////////////////////////////////////////////////////////////////////
+    // Implementation
+    ////////////////////////////////////////////////////////////////////////
+    function run() external {}
+}
+"#;
+    assert_no_diagnostics(source, "style/category-headers");
+}
+
+#[test]
 fn test_category_headers_respects_min_categories_setting() {
     let source = r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
@@ -2562,6 +2859,164 @@ min_categories = 3
     );
     let diagnostics = lint_source_for_rule_with_config(source, "style/category-headers", &config);
     assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn test_category_headers_accepts_custom_labels_and_order() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    ////////////////////////////////////////////////////////////////////////
+    // Data Types
+    ////////////////////////////////////////////////////////////////////////
+
+    struct Entry {
+        uint256 value;
+    }
+
+    ////////////////////////////////////////////////////////////////////////
+    // State
+    ////////////////////////////////////////////////////////////////////////
+
+    uint256 private storedValue;
+
+    ////////////////////////////////////////////////////////////////////////
+    // External API
+    ////////////////////////////////////////////////////////////////////////
+
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+min_categories = 3
+order = ["types", "storage", "implementation"]
+
+[lint.settings."style/category-headers".labels]
+types = "Data Types"
+storage = "State"
+implementation = "External API"
+"#,
+    );
+    let diagnostics = lint_source_for_rule_with_config(source, "style/category-headers", &config);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn test_category_headers_partial_order_preserves_unlisted_categories() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    event Done();
+    uint256 value;
+    function run() external {}
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+order = ["storage", "implementation"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("event Done();"), "{fixed}");
+    assert!(fixed.contains("// Events"), "{fixed}");
+    assert!(fixed.contains("// Storage"), "{fixed}");
+    assert!(fixed.contains("// Implementation"), "{fixed}");
+}
+
+#[test]
+fn test_category_headers_merges_constants_and_immutables_when_both_present() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Constants & Immutables"));
+    assert!(!fixed.contains("// Constants\n"));
+    assert!(!fixed.contains("// Immutables\n"));
+}
+
+#[test]
+fn test_category_headers_respects_separate_constant_and_immutable_order() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers"]
+order = ["constants", "immutables", "initialization"]
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Constants"), "{fixed}");
+    assert!(fixed.contains("// Immutables"), "{fixed}");
+    assert!(!fixed.contains("// Constants & Immutables"), "{fixed}");
+}
+
+#[test]
+fn test_category_headers_respects_custom_constant_and_immutable_labels() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    uint256 immutable ownerId;
+    constructor(uint256 initialOwnerId) {
+        ownerId = initialOwnerId;
+    }
+}
+"#;
+    let config = load_test_config(
+        r#"
+[lint]
+preset = "all"
+
+[lint.settings."style/category-headers".labels]
+constants = "Compile-Time Values"
+immutables = "Constructor State"
+"#,
+    );
+    let fixed = fix_source_unsafe_with_config(source, &config);
+    assert!(fixed.contains("// Compile-Time Values"), "{fixed}");
+    assert!(fixed.contains("// Constructor State"), "{fixed}");
+    assert!(!fixed.contains("// Constants & Immutables"), "{fixed}");
+}
+
+#[test]
+fn test_category_headers_uses_constants_section_when_only_constants_exist() {
+    let source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+contract Test {
+    uint256 constant MAX = 10;
+    function run() external {}
+}
+"#;
+    let fixed = fix_source_unsafe(source);
+    assert!(fixed.contains("// Constants"));
+    assert!(!fixed.contains("// Constants & Immutables"));
 }
 
 #[test]
@@ -3431,6 +3886,19 @@ interface ITest {
 }
 
 #[test]
+fn test_selector_tags_accepts_exact_canonical_interface_line() {
+    let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+/// @dev Interface selector: `0xc2985578`
+interface ITest {
+    function foo() external;
+}
+"#;
+    assert_no_diagnostics(source, "docs/selector-tags");
+}
+
+#[test]
 fn test_selector_tags_resolves_imported_structs() {
     let dir = tempfile::tempdir().unwrap();
     let shared_path = dir.path().join("Shared.sol");
@@ -3937,8 +4405,10 @@ fn test_registry_lookup() {
     assert!(registry.get("security/uninitialized-storage").is_some());
     assert!(registry.get("naming/contract-name-capwords").is_some());
     assert!(registry.get("naming/interface-starts-with-i").is_some());
+    assert!(registry.get("naming/named-parameters-mapping").is_some());
     assert!(registry.get("best-practices/no-floating-pragma").is_some());
     assert!(registry.get("best-practices/constructor-syntax").is_some());
+    assert!(registry.get("best-practices/duplicated-imports").is_some());
     assert!(registry
         .get("best-practices/visibility-modifier-order")
         .is_some());

@@ -7,7 +7,7 @@ pub mod list_rules;
 pub mod migrate;
 
 use crate::cache::{config_hash, Cache};
-use glob::Pattern;
+use glob::{glob, Pattern};
 use ignore::WalkBuilder;
 use rayon::ThreadPoolBuilder;
 use solgrid_config::{Config, ConfigResolver};
@@ -43,11 +43,14 @@ pub struct CacheUpdate {
 }
 
 /// Discover .sol files from the given paths.
-pub fn discover_sol_files(paths: &[PathBuf], resolver: &mut ConfigResolver) -> Vec<PathBuf> {
+pub fn discover_sol_files(
+    paths: &[PathBuf],
+    resolver: &mut ConfigResolver,
+) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
 
     if paths.is_empty() {
-        collect_sol_files(Path::new("."), resolver, &mut files, true);
+        collect_sol_files(Path::new("."), resolver, &mut files, true)?;
     } else {
         for path in paths {
             if path.is_file() {
@@ -55,14 +58,16 @@ pub fn discover_sol_files(paths: &[PathBuf], resolver: &mut ConfigResolver) -> V
                     files.push(path.clone());
                 }
             } else if path.is_dir() {
-                collect_sol_files(path, resolver, &mut files, true);
+                collect_sol_files(path, resolver, &mut files, true)?;
+            } else if is_glob_path(path) {
+                collect_glob_sol_files(path, resolver, &mut files)?;
             }
         }
     }
 
     files.sort();
     files.dedup();
-    files
+    Ok(files)
 }
 
 pub fn thread_probe_path(paths: &[PathBuf]) -> PathBuf {
@@ -85,13 +90,45 @@ where
     }
 }
 
+fn collect_glob_sol_files(
+    pattern: &Path,
+    resolver: &mut ConfigResolver,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let pattern_str = pattern
+        .to_str()
+        .ok_or_else(|| format!("glob path must be valid UTF-8: {}", pattern.display()))?;
+
+    let entries = glob(pattern_str)
+        .map_err(|error| format!("invalid glob pattern `{}`: {error}", pattern.display()))?;
+
+    for entry in entries {
+        let path = entry.map_err(|error| {
+            format!(
+                "failed to read glob match for `{}`: {error}",
+                pattern.display()
+            )
+        })?;
+
+        if path.is_file() {
+            if path.extension().is_some_and(|ext| ext == "sol") {
+                files.push(path);
+            }
+        } else if path.is_dir() {
+            collect_sol_files(&path, resolver, files, true)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn collect_sol_files(
     dir: &Path,
     resolver: &mut ConfigResolver,
     files: &mut Vec<PathBuf>,
     apply_include: bool,
-) {
-    let config = resolver.resolve_for_path(dir);
+) -> Result<(), String> {
+    let config = resolver.resolve_for_path(dir)?;
     let include_patterns = compile_patterns(&config.global.include);
     let exclude_patterns = compile_patterns(&config.global.exclude);
     let walker = WalkBuilder::new(dir)
@@ -115,6 +152,13 @@ fn collect_sol_files(
 
         files.push(path.to_path_buf());
     }
+
+    Ok(())
+}
+
+fn is_glob_path(path: &Path) -> bool {
+    path.to_str()
+        .is_some_and(|path| path.bytes().any(|byte| matches!(byte, b'*' | b'?' | b'[')))
 }
 
 fn compile_patterns(patterns: &[String]) -> Vec<Pattern> {
@@ -149,12 +193,15 @@ pub fn load_workspace_remappings(start_path: &Path) -> Vec<(String, PathBuf)> {
         .unwrap_or_default()
 }
 
-pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> PreparedFiles {
+pub fn prepare_files(
+    paths: &[PathBuf],
+    explicit_config: Option<Config>,
+) -> Result<PreparedFiles, String> {
     let mut discovery_resolver = ConfigResolver::new(explicit_config.clone());
-    let files = discover_sol_files(paths, &mut discovery_resolver);
+    let files = discover_sol_files(paths, &mut discovery_resolver)?;
     let thread_probe = thread_probe_path(paths);
     let thread_count = discovery_resolver
-        .resolve_for_path(&thread_probe)
+        .resolve_for_path(&thread_probe)?
         .global
         .threads;
 
@@ -163,8 +210,8 @@ pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> Prep
         HashMap::new();
     let files = files
         .into_iter()
-        .map(|path| {
-            let config = resolver.resolve_for_path(&path);
+        .map(|path| -> Result<PreparedFile, String> {
+            let config = resolver.resolve_for_path(&path)?;
             let workspace_root = workspace_root_for_path(&path);
             let remappings = remappings_cache
                 .entry(workspace_root.clone())
@@ -181,21 +228,21 @@ pub fn prepare_files(paths: &[PathBuf], explicit_config: Option<Config>) -> Prep
             let cache_dir = config.global.cache_dir.clone();
             let path_display = path.display().to_string();
 
-            PreparedFile {
+            Ok(PreparedFile {
                 path,
                 path_display,
                 config,
                 remappings,
                 config_hash,
                 cache_dir,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
-    PreparedFiles {
+    Ok(PreparedFiles {
         files,
         thread_count,
-    }
+    })
 }
 
 fn workspace_root_for_path(path: &Path) -> Option<PathBuf> {
@@ -285,7 +332,7 @@ mod tests {
         fs::write(test.join("Skip.sol"), "contract Skip {}").unwrap();
 
         let mut resolver = ConfigResolver::new(None);
-        let files = discover_sol_files(std::slice::from_ref(&root), &mut resolver);
+        let files = discover_sol_files(std::slice::from_ref(&root), &mut resolver).unwrap();
         let labels: Vec<_> = files
             .iter()
             .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
@@ -308,7 +355,7 @@ mod tests {
         fs::write(src.join("Token.sol"), "contract Token {}").unwrap();
 
         let mut resolver = ConfigResolver::new(None);
-        let files = discover_sol_files(std::slice::from_ref(&root), &mut resolver);
+        let files = discover_sol_files(std::slice::from_ref(&root), &mut resolver).unwrap();
         // With include = [], no files should be discovered.
         assert!(
             files.is_empty(),
@@ -333,9 +380,44 @@ mod tests {
         fs::write(&file, "contract Token {}").unwrap();
 
         let mut resolver = ConfigResolver::new(None);
-        let files = discover_sol_files(std::slice::from_ref(&file), &mut resolver);
+        let files = discover_sol_files(std::slice::from_ref(&file), &mut resolver).unwrap();
         assert_eq!(files, vec![file]);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_glob_path_discovers_matching_sol_files() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_discovery_{}_{}", std::process::id(), 4));
+        let src = root.join("src");
+        let nested = src.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(src.join("Token.sol"), "contract Token {}").unwrap();
+        fs::write(nested.join("Vault.sol"), "contract Vault {}").unwrap();
+        fs::write(nested.join("notes.txt"), "not solidity").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let files = discover_sol_files(&[root.join("src/**/*.sol")], &mut resolver).unwrap();
+
+        assert_eq!(files, vec![src.join("Token.sol"), nested.join("Vault.sol")]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_glob_path_bypasses_empty_include() {
+        let root =
+            std::env::temp_dir().join(format!("solgrid_discovery_{}_{}", std::process::id(), 5));
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(root.join("solgrid.toml"), "[global]\ninclude = []\n").unwrap();
+        let file = src.join("Token.sol");
+        fs::write(&file, "contract Token {}").unwrap();
+
+        let mut resolver = ConfigResolver::new(None);
+        let files = discover_sol_files(&[root.join("src/**/*.sol")], &mut resolver).unwrap();
+
+        assert_eq!(files, vec![file]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -355,12 +437,12 @@ mod tests {
         .unwrap();
         fs::write(nested.join("Token.sol"), "contract Token {}").unwrap();
 
-        let prepared = prepare_files(std::slice::from_ref(&root), None);
+        let prepared = prepare_files(std::slice::from_ref(&root), None).unwrap();
         assert_eq!(prepared.files.len(), 1);
         assert_eq!(prepared.files[0].path, nested.join("Token.sol"));
         assert!(!prepared.files[0].config_hash.is_empty());
 
-        let prepared_again = prepare_files(std::slice::from_ref(&root), None);
+        let prepared_again = prepare_files(std::slice::from_ref(&root), None).unwrap();
         assert_eq!(
             prepared.files[0].config_hash,
             prepared_again.files[0].config_hash
@@ -382,7 +464,7 @@ mod tests {
         let file = contracts.join("Token.sol");
         fs::write(&file, "contract Token {}").unwrap();
 
-        let prepared = prepare_files(std::slice::from_ref(&file), None);
+        let prepared = prepare_files(std::slice::from_ref(&file), None).unwrap();
         assert_eq!(prepared.files.len(), 1);
         let remappings = prepared.files[0].remappings.as_ref();
         assert_eq!(remappings.len(), 1);

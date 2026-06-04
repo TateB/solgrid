@@ -10,12 +10,19 @@ pub fn run(paths: &[PathBuf], cli: &Cli) -> i32 {
     let explicit_config = super::load_explicit_config(cli);
 
     if cli.stdin {
-        let config = explicit_config
-            .unwrap_or_else(|| resolve_config(&std::env::current_dir().unwrap_or_default()));
+        let config = explicit_config.unwrap_or_else(|| {
+            resolve_config(&std::env::current_dir().unwrap_or_default()).unwrap_or_else(|error| {
+                eprintln!("Error loading config: {error}");
+                std::process::exit(2);
+            })
+        });
         return run_stdin(&config, cli);
     }
 
-    let prepared = super::prepare_files(paths, explicit_config);
+    let prepared = super::prepare_files(paths, explicit_config).unwrap_or_else(|error| {
+        eprintln!("Error loading config: {error}");
+        std::process::exit(2);
+    });
 
     if prepared.files.is_empty() {
         eprintln!("No .sol files found");

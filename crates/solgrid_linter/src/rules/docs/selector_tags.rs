@@ -230,25 +230,21 @@ fn selector_diagnostic(
 
     if let Some(block) = block {
         let lines = block.stripped_lines();
-        if let Some((index, line)) = lines
-            .iter()
-            .enumerate()
-            .find(|(_, line)| selector_line_matches(line, kind))
-        {
-            if line.trim() == expected_line && block.style == NatSpecStyle::TripleSlash {
-                return None;
-            }
-
-            let actual = extract_hex(line);
+        if let Some((index, parsed)) = lines.iter().enumerate().find_map(|(index, line)| {
+            selector_line_candidate(line, kind).then(|| (index, parse_selector_line(line, kind)))
+        }) {
+            let expected_hex = expected_selector_hex(expected_line);
             let fix = replace_selector_line(&block, &lines, index, expected_line);
-            let message = if let Some(actual) = actual {
-                if line.trim() == expected_line {
+            let message = if let Some(parsed) = parsed {
+                if parsed.hex == expected_hex {
+                    if parsed.canonical && block.style == NatSpecStyle::TripleSlash {
+                        return None;
+                    }
                     format!("Non-canonical @dev {kind} selector format")
                 } else {
                     format!(
                         "Incorrect {kind} selector: expected `{}`, found `{}`",
-                        expected_selector_hex(expected_line),
-                        actual
+                        expected_hex, parsed.hex
                     )
                 }
             } else {
@@ -326,9 +322,42 @@ fn replace_selector_line(
     )
 }
 
-fn selector_line_matches(line: &str, kind: &str) -> bool {
-    let lowered = line.to_ascii_lowercase();
-    lowered.contains(&format!("{} selector:", kind.to_ascii_lowercase()))
+#[derive(Debug, Clone)]
+struct ParsedSelectorLine {
+    hex: String,
+    canonical: bool,
+}
+
+fn selector_line_candidate(line: &str, kind: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('@') {
+        return false;
+    }
+
+    let mut parts = trimmed.split_whitespace();
+    let _tag = parts.next();
+    let actual_kind = parts.next();
+    let selector = parts.next();
+
+    matches!(
+        (actual_kind, selector),
+        (Some(actual_kind), Some(selector))
+            if actual_kind.eq_ignore_ascii_case(kind)
+                && selector.eq_ignore_ascii_case("selector:")
+    )
+}
+
+fn parse_selector_line(line: &str, kind: &str) -> Option<ParsedSelectorLine> {
+    if !selector_line_candidate(line, kind) {
+        return None;
+    }
+
+    let trimmed = line.trim();
+    let hex = extract_hex(trimmed)?;
+    Some(ParsedSelectorLine {
+        canonical: trimmed == selector_tag_line(kind, hex.clone()),
+        hex,
+    })
 }
 
 fn selector_tag_line(kind: &str, hex: String) -> String {
