@@ -1,5 +1,6 @@
 /target
 node_modules/
+.pnpm-store/
 .vscode-test/
 editors/vscode/out/
 editors/vscode/.vscode-test/

@@ -98,6 +98,24 @@ async function waitForWorkspaceSymbol(
   throw new Error(`Timed out waiting for workspace symbol ${expectedName}`);
 }
 
+async function waitForCodeLens(
+  client: TestLspClient,
+  uri: string,
+  predicate: (lens: CodeLens) => boolean,
+  description: string
+): Promise<{ lens: CodeLens; lenses: CodeLens[] }> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const lenses = (await requestCodeLenses(client, uri)) ?? [];
+    const lens = lenses.find(predicate);
+    if (lens) {
+      return { lens, lenses };
+    }
+    await sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for code lens: ${description}`);
+}
+
 describe("LSP Navigation", () => {
   let client: TestLspClient;
 
@@ -661,10 +679,17 @@ contract Token {
     openDocument(client, uri, source);
     await waitForDiagnostics(client, uri).catch(() => {});
 
-    const lenses = (await requestCodeLenses(client, uri)) ?? [];
-    expect(
-      lenses.some((lens: CodeLens) => lens.command?.title === "2 references")
-    ).toBe(true);
+    const { lens: referenceLens, lenses } = await waitForCodeLens(
+      client,
+      uri,
+      (lens: CodeLens) => lens.command?.title === "2 references",
+      "2 references"
+    );
+    expect(referenceLens?.command?.command).toBe("solgrid.showReferences");
+    expect(referenceLens?.command?.arguments?.[0]).toMatchObject({
+      position: { character: 13, line: 3 },
+      uri,
+    });
     expect(
       lenses.some(
         (lens: CodeLens) =>
@@ -686,6 +711,65 @@ contract Token {
           lens.command.command === "solgrid.graph.show"
       )
     ).toBe(false);
+  });
+
+  it("does not show zero reference counts while the workspace index is warming", async () => {
+    const dir = tempWorkspace();
+    const libPath = path.join(dir, "Lib.sol");
+    const usePath = path.join(dir, "Use.sol");
+    const libSource = `pragma solidity ^0.8.0;
+
+library Lib {
+    function requireNamer(address account, address namer) internal view {}
+}
+`;
+    fs.writeFileSync(libPath, libSource);
+    fs.writeFileSync(
+      usePath,
+      `pragma solidity ^0.8.0;
+import {Lib} from "./Lib.sol";
+
+contract Use {
+    function run(address account, address namer) public view {
+        Lib.requireNamer(account, namer);
+    }
+}
+`
+    );
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const codeLensRefresh = client.waitForRequest(
+        "workspace/codeLens/refresh",
+        undefined,
+        10000
+      );
+      await initializeServer(client, toUri(dir));
+
+      const uri = toUri(libPath);
+      openDocument(client, uri, libSource);
+      await waitForDiagnostics(client, uri).catch(() => {});
+
+      const warmingLenses = (await requestCodeLenses(client, uri)) ?? [];
+      expect(
+        warmingLenses.some(
+          (lens: CodeLens) => lens.command?.title === "0 references"
+        )
+      ).toBe(false);
+
+      await codeLensRefresh;
+      const refreshedLenses = (await requestCodeLenses(client, uri)) ?? [];
+      expect(
+        refreshedLenses.some(
+          (lens: CodeLens) => lens.command?.title === "1 reference"
+        )
+      ).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("builds an imports graph for the active file", async () => {

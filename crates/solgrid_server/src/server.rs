@@ -13,6 +13,7 @@ use solgrid_project::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
@@ -109,6 +110,8 @@ pub struct SolgridServer {
     published_diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
     /// Shared project index for workspace-wide navigation and remapping state.
     project_index: Arc<RwLock<ProjectIndex>>,
+    /// False while the initial workspace-wide index is still being built.
+    project_index_ready: Arc<AtomicBool>,
 }
 
 impl SolgridServer {
@@ -125,6 +128,7 @@ impl SolgridServer {
             config_cache: Arc::new(RwLock::new(ServerConfigCache::default())),
             published_diagnostics: Arc::new(RwLock::new(HashMap::new())),
             project_index: Arc::new(RwLock::new(ProjectIndex::new(None))),
+            project_index_ready: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -210,6 +214,8 @@ impl SolgridServer {
         }
 
         *self.project_index.write().await = rebuilt;
+        self.project_index_ready.store(true, Ordering::SeqCst);
+        let _ = self.client.code_lens_refresh().await;
     }
 
     async fn set_pending_save_document(&self, uri: &Uri, source: Option<String>) {
@@ -547,12 +553,17 @@ impl LanguageServer for SolgridServer {
                 }
 
                 *self.project_index.write().await = ProjectIndex::new(Some(root_path.clone()));
+                self.project_index_ready.store(false, Ordering::SeqCst);
 
                 // Build the full project index in the background.
                 let project_index = self.project_index.clone();
+                let project_index_ready = self.project_index_ready.clone();
+                let client = self.client.clone();
                 tokio::spawn(async move {
                     let built = ProjectIndex::build(&root_path);
                     *project_index.write().await = built;
+                    project_index_ready.store(true, Ordering::SeqCst);
+                    let _ = client.code_lens_refresh().await;
                 });
             }
         } else if let Some(settings) = &init_settings {
@@ -561,6 +572,7 @@ impl LanguageServer for SolgridServer {
                 *config_path_slot = Some(resolve_config_path(config_path, None));
             }
             *self.project_index.write().await = ProjectIndex::new(None);
+            self.project_index_ready.store(true, Ordering::SeqCst);
         }
 
         Ok(InitializeResult {
@@ -655,6 +667,9 @@ impl LanguageServer for SolgridServer {
         self.client
             .log_message(MessageType::INFO, "solgrid LSP server initialized")
             .await;
+        if self.project_index_ready.load(Ordering::SeqCst) {
+            let _ = self.client.code_lens_refresh().await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -1755,7 +1770,11 @@ impl LanguageServer for SolgridServer {
 
         let path = uri_to_path(uri);
         let project_index = self.project_index.read().await;
-        let mut lenses = project_index.code_lenses(&path, &source, &get_source);
+        let mut lenses = if self.project_index_ready.load(Ordering::SeqCst) {
+            project_index.code_lenses(&path, &source, &get_source)
+        } else {
+            Vec::new()
+        };
         lenses.extend(
             project_index
                 .graph_lenses(&path, &source)

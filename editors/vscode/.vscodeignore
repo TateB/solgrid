@@ -2,8 +2,12 @@
 .vscode-test/**
 src/**
 test/**
+out/**
+!out/extension.js
+scripts/**
 node_modules/**
 .gitignore
+esbuild.mjs
 tsconfig.json
 tsconfig.test.json
 vitest.config.ts

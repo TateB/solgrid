@@ -1,4 +1,13 @@
-import { commands, ExtensionContext, languages, window, workspace } from "vscode";
+import {
+  commands,
+  ExtensionContext,
+  languages,
+  Location,
+  Position,
+  Uri,
+  window,
+  workspace,
+} from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
@@ -38,6 +47,14 @@ import {
 } from "./graphPreview";
 
 let client: LanguageClient | undefined;
+
+interface ReferenceLensArgs {
+  position?: {
+    character: number;
+    line: number;
+  };
+  uri?: string;
+}
 
 export async function activate(context: ExtensionContext): Promise<void> {
   const solgridConfig = readVSCodeConfig();
@@ -168,6 +185,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand("solgrid.securityOverview.applyFix", applyFindingFix),
     commands.registerCommand("solgrid.securityOverview.applyGroupFixes", applyGroupFixes),
     commands.registerCommand("solgrid.graph.show", (args) => showGraph(client, args)),
+    commands.registerCommand("solgrid.showReferences", showReferences),
     commands.registerCommand("solgrid.graph.showImports", async () => {
       const args = activeImportsGraphArgs();
       if (args) {
@@ -345,6 +363,38 @@ export async function deactivate(): Promise<void> {
     await client.stop();
     client = undefined;
   }
+}
+
+async function showReferences(args?: ReferenceLensArgs): Promise<void> {
+  const activeEditor = window.activeTextEditor;
+  const uri = typeof args?.uri === "string" ? Uri.parse(args.uri) : activeEditor?.document.uri;
+  const position =
+    args?.position &&
+    Number.isInteger(args.position.line) &&
+    Number.isInteger(args.position.character)
+      ? new Position(args.position.line, args.position.character)
+      : activeEditor?.selection.active;
+
+  if (!uri || !position) {
+    void window.showWarningMessage(
+      "Open a Solidity file before requesting solgrid references."
+    );
+    return;
+  }
+
+  const locations =
+    (await commands.executeCommand<Location[]>(
+      "vscode.executeReferenceProvider",
+      uri,
+      position
+    )) ?? [];
+
+  if (locations.length === 0) {
+    void window.showInformationMessage("solgrid found no references for this symbol.");
+    return;
+  }
+
+  await commands.executeCommand("editor.action.showReferences", uri, position, locations);
 }
 
 /**

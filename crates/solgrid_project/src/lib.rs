@@ -5,6 +5,7 @@
 //! navigation features used by the language server.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use solgrid_ast::resolve::ImportResolver;
 use solgrid_ast::symbols::{self, ImportedSymbols, SymbolDef, SymbolKind, SymbolTable, TypePath};
 use solgrid_parser::solar_ast::{
@@ -725,12 +726,19 @@ impl<B: NavBackend> ProjectIndex<B> {
                         get_source,
                     )
                     .len();
+                let range = span_to_range(source, &def.name_span);
+                let arguments = path_to_uri(&snapshot.path).map(|uri| {
+                    vec![json!({
+                        "position": range.start,
+                        "uri": uri,
+                    })]
+                });
                 CodeLens {
-                    range: span_to_range(source, &def.name_span),
+                    range,
                     command: Some(Command {
                         title: reference_count_title(count),
                         command: "solgrid.showReferences".to_string(),
-                        arguments: None,
+                        arguments,
                     }),
                     data: None,
                 }

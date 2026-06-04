@@ -172,6 +172,38 @@ export class TestLspClient extends EventEmitter {
   }
 
   /**
+   * Wait for a server-initiated request.
+   */
+  waitForRequest(
+    method: string,
+    filter?: (params: unknown) => boolean,
+    timeoutMs = 15000
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.removeListener("request", handler);
+        reject(
+          new Error(
+            `Timeout waiting for request "${method}" after ${timeoutMs}ms`
+          )
+        );
+      }, timeoutMs);
+
+      const handler = (msg: { method: string; params: unknown }) => {
+        if (msg.method === method) {
+          if (!filter || filter(msg.params)) {
+            clearTimeout(timer);
+            this.removeListener("request", handler);
+            resolve(msg.params);
+          }
+        }
+      };
+
+      this.on("request", handler);
+    });
+  }
+
+  /**
    * Send shutdown request followed by exit notification.
    */
   async shutdown(): Promise<void> {
@@ -278,6 +310,10 @@ export class TestLspClient extends EventEmitter {
       });
     } else if (message.method && message.id !== undefined) {
       // Server-initiated request (e.g., workspace/configuration)
+      this.emit("request", {
+        method: message.method,
+        params: message.params,
+      });
       // Respond with empty result
       this.send({
         jsonrpc: "2.0",

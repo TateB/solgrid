@@ -2533,6 +2533,7 @@ version = "0.0.12"
 dependencies = [
  "ignore",
  "serde",
+ "serde_json",
  "solgrid_ast",
  "solgrid_config",
  "solgrid_parser",
