@@ -35,140 +35,176 @@
       {
         "command": "solgrid.securityOverview.refresh",
         "title": "solgrid: Rerun Security Analysis",
+        "icon": "$(refresh)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByFile",
         "title": "solgrid: Group Security Overview by File",
+        "icon": "$(files)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupBySeverity",
         "title": "solgrid: Group Security Overview by Severity",
+        "icon": "$(warning)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByConfidence",
         "title": "solgrid: Group Security Overview by Confidence",
+        "icon": "$(shield)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByFinding",
         "title": "solgrid: Group Security Overview by Finding",
+        "icon": "$(symbol-key)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showSecurity",
         "title": "solgrid: Security Overview Filter Security Focus",
+        "icon": "$(shield)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showAll",
         "title": "solgrid: Security Overview Show All",
+        "icon": "$(list-flat)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showCompiler",
         "title": "solgrid: Security Overview Show Compiler",
+        "icon": "$(tools)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showDetectors",
         "title": "solgrid: Security Overview Show Detectors",
+        "icon": "$(search)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.openFinding",
         "title": "solgrid: Open Security Finding",
+        "icon": "$(go-to-file)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.openHelp",
         "title": "solgrid: Open Finding Documentation",
+        "icon": "$(book)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.suppressNextLine",
         "title": "solgrid: Suppress Finding on Next Line",
+        "icon": "$(circle-slash)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.applyFix",
         "title": "solgrid: Apply Finding Fix",
+        "icon": "$(wrench)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.suppressGroupNextLine",
         "title": "solgrid: Suppress Group Findings on Next Line",
+        "icon": "$(circle-slash)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.applyGroupFixes",
         "title": "solgrid: Apply Group Fixes",
+        "icon": "$(wrench)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.ignoreFinding",
         "title": "solgrid: Ignore Finding in Security Overview",
+        "icon": "$(eye-closed)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.restoreFinding",
         "title": "solgrid: Restore Ignored Finding in Security Overview",
+        "icon": "$(eye)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.ignoreGroup",
         "title": "solgrid: Ignore Group in Security Overview",
+        "icon": "$(eye-closed)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.restoreGroup",
         "title": "solgrid: Restore Ignored Group in Security Overview",
+        "icon": "$(eye)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.toggleShowIgnored",
         "title": "solgrid: Toggle Ignored Security Findings",
+        "icon": "$(eye)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.clearIgnoredBaselines",
         "title": "solgrid: Clear Ignored Security Baselines",
+        "icon": "$(trash)",
         "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.graph.showImports",
         "title": "solgrid: Show Imports Graph",
-        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
+        "icon": "$(references)",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive && editorLangId == solidity && resourceScheme == file"
       },
       {
         "command": "solgrid.coverage.refresh",
-        "title": "solgrid: Refresh Coverage"
+        "title": "solgrid: Refresh Coverage",
+        "icon": "$(refresh)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.run",
-        "title": "solgrid: Run Coverage"
+        "title": "solgrid: Run Coverage",
+        "icon": "$(play)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.runFoundryLcov",
-        "title": "solgrid: Run Foundry Coverage (LCOV)"
+        "title": "solgrid: Run Foundry Coverage (LCOV)",
+        "icon": "$(terminal)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.runHardhatLcov",
-        "title": "solgrid: Run Hardhat Coverage (LCOV)"
+        "title": "solgrid: Run Hardhat Coverage (LCOV)",
+        "icon": "$(terminal)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.runCustom",
-        "title": "solgrid: Run Custom Coverage Command"
+        "title": "solgrid: Run Custom Coverage Command",
+        "icon": "$(terminal)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.showActionable",
-        "title": "solgrid: Coverage Show Actionable"
+        "title": "solgrid: Coverage Show Actionable",
+        "icon": "$(list-filter)",
+        "enablement": "config.solgrid.coverage.enable"
       },
       {
         "command": "solgrid.coverage.showAll",
-        "title": "solgrid: Coverage Show All Files"
+        "title": "solgrid: Coverage Show All Files",
+        "icon": "$(list-flat)",
+        "enablement": "config.solgrid.coverage.enable"
       }
     ],
     "configuration": {
@@ -267,7 +303,7 @@
         {
           "id": "solgridSecurityOverview",
           "name": "solgrid Security",
-          "when": "config.solgrid.enable && solgrid.languageServerActive"
+          "when": "config.solgrid.enable"
         },
         {
           "id": "solgridCoverageOverview",
@@ -281,114 +317,201 @@
         {
           "command": "solgrid.securityOverview.refresh",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "solgrid.securityOverview.showSecurity",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation@1"
+          "group": "filter@1"
         },
         {
           "command": "solgrid.securityOverview.showAll",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation@2"
+          "group": "filter@2"
+        },
+        {
+          "command": "solgrid.securityOverview.showCompiler",
+          "when": "view == solgridSecurityOverview",
+          "group": "filter@3"
+        },
+        {
+          "command": "solgrid.securityOverview.showDetectors",
+          "when": "view == solgridSecurityOverview",
+          "group": "filter@4"
         },
         {
           "command": "solgrid.securityOverview.groupByFile",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation@3"
+          "group": "grouping@1"
+        },
+        {
+          "command": "solgrid.securityOverview.groupBySeverity",
+          "when": "view == solgridSecurityOverview",
+          "group": "grouping@2"
+        },
+        {
+          "command": "solgrid.securityOverview.groupByConfidence",
+          "when": "view == solgridSecurityOverview",
+          "group": "grouping@3"
+        },
+        {
+          "command": "solgrid.securityOverview.groupByFinding",
+          "when": "view == solgridSecurityOverview",
+          "group": "grouping@4"
         },
         {
           "command": "solgrid.securityOverview.toggleShowIgnored",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation@4"
+          "group": "ignored@1"
         },
         {
           "command": "solgrid.securityOverview.clearIgnoredBaselines",
           "when": "view == solgridSecurityOverview",
-          "group": "navigation@5"
+          "group": "ignored@2"
         },
         {
           "command": "solgrid.coverage.refresh",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "solgrid.coverage.run",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "solgrid.coverage.runFoundryLcov",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@2"
+          "group": "provider@1"
         },
         {
           "command": "solgrid.coverage.runHardhatLcov",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@3"
+          "group": "provider@2"
         },
         {
           "command": "solgrid.coverage.runCustom",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@4"
+          "group": "provider@3"
         },
         {
           "command": "solgrid.coverage.showActionable",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@4"
+          "group": "filter@1"
         },
         {
           "command": "solgrid.coverage.showAll",
           "when": "view == solgridCoverageOverview",
-          "group": "navigation@5"
+          "group": "filter@2"
         }
       ],
       "view/item/context": [
         {
           "command": "solgrid.securityOverview.openHelp",
           "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )help( |$)/",
-          "group": "inline"
-        },
-        {
-          "command": "solgrid.securityOverview.suppressNextLine",
-          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "solgrid.securityOverview.applyFix",
           "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )fixable( |$)/",
-          "group": "inline"
-        },
-        {
-          "command": "solgrid.securityOverview.ignoreFinding",
-          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )ignorable( |$)/",
-          "group": "inline"
-        },
-        {
-          "command": "solgrid.securityOverview.restoreFinding",
-          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )restorable( |$)/",
-          "group": "inline"
-        },
-        {
-          "command": "solgrid.securityOverview.suppressGroupNextLine",
-          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
-          "group": "inline"
+          "group": "inline@2"
         },
         {
           "command": "solgrid.securityOverview.applyGroupFixes",
           "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )fixable( |$)/",
-          "group": "inline"
+          "group": "inline@1"
+        },
+        {
+          "command": "solgrid.securityOverview.openFinding",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "solgrid.securityOverview.openHelp",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )help( |$)/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "solgrid.securityOverview.applyFix",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )fixable( |$)/",
+          "group": "1_fix@1"
+        },
+        {
+          "command": "solgrid.securityOverview.applyGroupFixes",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )fixable( |$)/",
+          "group": "1_fix@1"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressNextLine",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
+          "group": "2_suppress@1"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressGroupNextLine",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )suppressible( |$)/",
+          "group": "2_suppress@1"
+        },
+        {
+          "command": "solgrid.securityOverview.ignoreFinding",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )ignorable( |$)/",
+          "group": "3_baseline@1"
+        },
+        {
+          "command": "solgrid.securityOverview.restoreFinding",
+          "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityFinding( |$)/ && viewItem =~ /(^| )restorable( |$)/",
+          "group": "3_baseline@2"
         },
         {
           "command": "solgrid.securityOverview.ignoreGroup",
           "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )ignorable( |$)/",
-          "group": "inline"
+          "group": "3_baseline@1"
         },
         {
           "command": "solgrid.securityOverview.restoreGroup",
           "when": "view == solgridSecurityOverview && viewItem =~ /(^| )solgridSecurityGroup( |$)/ && viewItem =~ /(^| )restorable( |$)/",
-          "group": "inline"
+          "group": "3_baseline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "solgrid.securityOverview.openFinding",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.openHelp",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressNextLine",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.applyFix",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.suppressGroupNextLine",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.applyGroupFixes",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.ignoreFinding",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.restoreFinding",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.ignoreGroup",
+          "when": "false"
+        },
+        {
+          "command": "solgrid.securityOverview.restoreGroup",
+          "when": "false"
         }
       ]
     }

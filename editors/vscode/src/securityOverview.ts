@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import * as vscode from "vscode";
 import {
   buildOverviewTree,
@@ -16,6 +17,7 @@ import {
   SecurityOverviewFindingNode,
   SecurityOverviewGroupMode,
   SecurityOverviewGroupNode,
+  shouldExpandSecurityGroup,
   summarizeOverview,
 } from "./securityOverviewModel";
 
@@ -35,6 +37,22 @@ export type SecurityOverviewNode =
   | SecurityOverviewGroupNode
   | SecurityOverviewFindingNode;
 
+type SecurityAnalysisState = "waiting" | "running" | "complete" | "error";
+
+export const SECURITY_ANALYSIS_PENDING_MESSAGE =
+  "Waiting for security analysis results…";
+
+export function securityOverviewPresentationMessage(
+  summaryMessage: string | undefined,
+  analysisComplete: boolean,
+  analysisError?: string
+): string | undefined {
+  if (analysisError) {
+    return analysisError;
+  }
+  return analysisComplete ? summaryMessage : SECURITY_ANALYSIS_PENDING_MESSAGE;
+}
+
 export class SecurityOverviewProvider
   implements vscode.TreeDataProvider<SecurityOverviewNode>
 {
@@ -50,6 +68,8 @@ export class SecurityOverviewProvider
   private groupMode: SecurityOverviewGroupMode = "file";
   private filterMode: SecurityOverviewFilterMode = "security";
   private showIgnoredBaselines = false;
+  private analysisState: SecurityAnalysisState = "waiting";
+  private analysisError: string | undefined;
   private view: vscode.TreeView<SecurityOverviewNode> | undefined;
 
   constructor(private readonly storage: vscode.Memento) {
@@ -70,12 +90,51 @@ export class SecurityOverviewProvider
     } else {
       this.findingsByUri.set(params.uri, findings);
     }
+    if (this.analysisState === "waiting") {
+      this.analysisState = "complete";
+      this.analysisError = undefined;
+    }
+    this.refresh();
+  }
+
+  beginAnalysis(): void {
+    if (this.analysisState === "running") {
+      return;
+    }
+    this.analysisState = "running";
+    this.analysisError = undefined;
+    this.refresh();
+  }
+
+  completeAnalysis(): void {
+    if (this.analysisState === "complete") {
+      return;
+    }
+    this.analysisState = "complete";
+    this.analysisError = undefined;
+    this.refresh();
+  }
+
+  failAnalysis(message: string): void {
+    const normalized = message.trim() || "Security analysis failed.";
+    if (
+      this.analysisState === "error" &&
+      this.analysisError === normalized
+    ) {
+      return;
+    }
+    this.analysisState = "error";
+    this.analysisError = normalized;
     this.refresh();
   }
 
   refresh(): void {
     this.updatePresentation();
     this.onDidChangeTreeDataEmitter.fire(undefined);
+  }
+
+  refreshTreeData(): void {
+    this.refresh();
   }
 
   setGroupMode(mode: SecurityOverviewGroupMode): void {
@@ -161,6 +220,11 @@ export class SecurityOverviewProvider
       this.showIgnoredBaselines = false;
       changed = true;
     }
+    if (this.analysisState !== "waiting") {
+      this.analysisState = "waiting";
+      this.analysisError = undefined;
+      changed = true;
+    }
     if (this.ignoredFindingKeys.size > 0) {
       this.ignoredFindingKeys.clear();
       await this.persistIgnoredFindingKeys();
@@ -204,10 +268,15 @@ export class SecurityOverviewProvider
     if (element.kind === "group") {
       const item = new vscode.TreeItem(
         element.label,
-        vscode.TreeItemCollapsibleState.Expanded
+        shouldExpandSecurityGroup(element.children.length)
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed
       );
       item.description = element.description;
-      item.tooltip = `${element.label}\n${element.description}`;
+      item.tooltip = groupTooltip(element);
+      item.accessibilityInformation = {
+        label: securityGroupAccessibilityLabel(element),
+      };
       item.contextValue = groupContextValue(
         element.children.map((child) => child.finding),
         this.ignoredFindingKeys
@@ -224,6 +293,12 @@ export class SecurityOverviewProvider
       ? `${element.description} • ignored`
       : element.description;
     item.tooltip = findingTooltip(element.finding, element.ignored);
+    item.accessibilityInformation = {
+      label: securityFindingAccessibilityLabel(
+        element.finding,
+        element.ignored
+      ),
+    };
     item.contextValue = findingContextValue(element.finding, element.ignored);
     item.iconPath = new vscode.ThemeIcon(
       element.ignored ? "eye-closed" : severityIcon(element.finding.meta.severity)
@@ -270,12 +345,18 @@ export class SecurityOverviewProvider
       this.showIgnoredBaselines
     );
     this.view.description = summary.description;
-    this.view.message = summary.message;
+    this.view.message = securityOverviewPresentationMessage(
+      summary.message,
+      this.analysisState === "complete",
+      this.analysisError
+    );
     this.view.badge =
       summary.count > 0
         ? {
             value: summary.count,
-            tooltip: `${summary.count} findings`,
+            tooltip: `${summary.count} ${
+              summary.count === 1 ? "finding" : "findings"
+            }`,
           }
         : undefined;
   }
@@ -313,6 +394,33 @@ export class SecurityOverviewProvider
       Array.from(this.ignoredFindingKeys).sort()
     );
   }
+}
+
+const CLEAR_IGNORED_BASELINES_ACTION = "Clear Ignored Baselines";
+
+type IgnoredBaselineClearConfirmation = () => Promise<boolean>;
+
+export async function clearIgnoredBaselinesWithConfirmation(
+  provider: Pick<SecurityOverviewProvider, "clearIgnoredBaselines">,
+  confirm: IgnoredBaselineClearConfirmation = confirmIgnoredBaselineClear
+): Promise<boolean> {
+  if (!(await confirm())) {
+    return false;
+  }
+  await provider.clearIgnoredBaselines();
+  return true;
+}
+
+async function confirmIgnoredBaselineClear(): Promise<boolean> {
+  const selected = await vscode.window.showWarningMessage(
+    "Clear all ignored security baselines?",
+    {
+      modal: true,
+      detail: "Previously ignored findings will appear again. This cannot be undone.",
+    },
+    CLEAR_IGNORED_BASELINES_ACTION
+  );
+  return selected === CLEAR_IGNORED_BASELINES_ACTION;
 }
 
 export async function openSecurityFinding(
@@ -460,9 +568,136 @@ function severityIcon(severity: "error" | "warning" | "info"): string {
 }
 
 function findingTooltip(finding: SecurityFinding, ignored: boolean): string {
-  const helpLine = finding.meta.helpUrl ? `\n${finding.meta.helpUrl}` : "";
-  const ignoredLine = ignored ? "\nIgnored in the security overview" : "";
-  return `${finding.message}\n${finding.code} • ${finding.meta.kind}${helpLine}${ignoredLine}`;
+  const lines = [
+    finding.message,
+    `Rule: ${finding.code}`,
+    `Severity: ${titleCase(finding.meta.severity)}`,
+    `Confidence: ${titleCase(finding.meta.confidence ?? "unknown")}`,
+    `Type: ${titleCase(finding.meta.kind)}`,
+    `Category: ${finding.meta.category}`,
+    `Location: ${findingLocation(finding)}`,
+    `State: ${ignored ? "Ignored in the security overview" : "Active"}`,
+    `Automatic fix: ${finding.meta.hasFix ? "Available" : "Not available"}`,
+    `Suppression: ${finding.meta.suppressible ? "Available" : "Not available"}`,
+  ];
+  if (finding.meta.helpUrl) {
+    lines.push(`Documentation: ${finding.meta.helpUrl}`);
+  }
+  return lines.join("\n");
+}
+
+export function securityFindingAccessibilityLabel(
+  finding: SecurityFinding,
+  ignored: boolean
+): string {
+  return [
+    finding.meta.title || finding.message,
+    `${finding.meta.severity} severity`,
+    `${finding.meta.confidence ?? "unknown"} confidence`,
+    `${finding.meta.kind} type`,
+    `${finding.meta.category} category`,
+    `rule ${finding.code}`,
+    `location ${findingLocation(finding)}`,
+    ignored ? "ignored" : "active",
+    finding.meta.hasFix ? "automatic fix available" : "no automatic fix",
+    finding.meta.suppressible ? "can be suppressed" : "cannot be suppressed",
+  ].join("; ");
+}
+
+export function securityGroupAccessibilityLabel(
+  group: SecurityOverviewGroupNode
+): string {
+  const findings = group.children.map((child) => child.finding);
+  const active = group.children.filter((child) => !child.ignored);
+  const ignoredCount = group.children.length - active.length;
+  const fixableCount = active.filter(
+    (child) => child.finding.meta.hasFix
+  ).length;
+  return [
+    `${group.label} group`,
+    countLabel(group.children.length, "finding"),
+    aggregateFindingProperty(
+      findings.map((finding) => finding.meta.severity),
+      "severity"
+    ),
+    aggregateFindingProperty(
+      findings.map((finding) => finding.meta.confidence ?? "unknown"),
+      "confidence"
+    ),
+    aggregateFindingProperty(
+      findings.map((finding) => finding.meta.kind),
+      "type"
+    ),
+    groupPathSummary(findings),
+    countLabel(ignoredCount, "ignored finding"),
+    countLabel(
+      fixableCount,
+      "active automatic fix",
+      "active automatic fixes"
+    ),
+  ].join("; ");
+}
+
+function groupTooltip(group: SecurityOverviewGroupNode): string {
+  return [
+    group.label,
+    group.description,
+    securityGroupAccessibilityLabel(group),
+  ].join("\n");
+}
+
+function aggregateFindingProperty(
+  values: readonly string[],
+  noun: string
+): string {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  const summary = Array.from(counts.entries())
+    .map(([value, count]) =>
+      countLabel(count, `${value} finding`, `${value} findings`)
+    )
+    .join(", ");
+  return `${noun}: ${summary}`;
+}
+
+function groupPathSummary(findings: readonly SecurityFinding[]): string {
+  const paths = Array.from(
+    new Set(findings.map((finding) => findingPath(finding.uri)))
+  );
+  const visiblePaths = paths.slice(0, 3);
+  const suffix =
+    paths.length > visiblePaths.length
+      ? `, and ${paths.length - visiblePaths.length} more`
+      : "";
+  return `locations ${visiblePaths.join(", ")}${suffix}`;
+}
+
+function findingLocation(finding: SecurityFinding): string {
+  return `${findingPath(finding.uri)}:${finding.range.start.line + 1}:${
+    finding.range.start.character + 1
+  }`;
+}
+
+function findingPath(uri: string): string {
+  try {
+    return fileURLToPath(uri);
+  } catch {
+    return uri;
+  }
+}
+
+function countLabel(
+  count: number,
+  singular: string,
+  plural = `${singular}s`
+): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function findingContextValue(finding: SecurityFinding, ignored: boolean): string {

@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code graph previews to render in a dedicated webview instead of raw markdown/Mermaid output
 - Fixed VS Code graph previews to keep large project graphs contained in the webview with independent scrolling, pan/zoom controls, cleaner light-mode styling, and vertical linearized inheritance rendering
 - Fixed VS Code graph previews to make trackpad pinch zoom more responsive, lay out branch paths as distinct lanes, attach branch labels directly to graph edges, hide synthetic terminal-to-exit edges, and move source actions into graph nodes
+- Fixed VS Code graph previews to expose accessible node, relationship, and source details, remain readable in narrow and high-contrast layouts, preserve manual zoom on resize, and show request-scoped loading, empty, and error states
+- Fixed VS Code security and coverage views with compact action toolbars, stable view registration, truthful loading and failure states, richer accessibility labels, non-color coverage markers, guarded coverage runs, safe source paths, and resilient language-server restart handling
 - Fixed VS Code reference CodeLens actions by wiring `solgrid.showReferences` to the native references peek command and suppressing transient `0 references` counts while the workspace index is warming
 - Fixed VS Code reference CodeLens clicks to reuse precomputed locations instead of rerunning the references provider before opening peek
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH

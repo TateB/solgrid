@@ -5,9 +5,13 @@ import {
   parseCoberturaArtifact,
   parseCoverageArtifact,
   parseLcovArtifact,
+  shouldExpandCoverageFile,
   summarizeCoverageArtifacts,
   summarizeCoverageOverview,
 } from "./coverageOverviewModel";
+
+const fixtureSourceExists = (candidate: string): boolean =>
+  candidate.startsWith("/workspace/") && candidate.endsWith(".sol");
 
 describe("parseLcovArtifact", () => {
   it("parses DA and BRDA entries into normalized file records", () => {
@@ -22,7 +26,8 @@ describe("parseLcovArtifact", () => {
         "end_of_record",
       ].join("\n"),
       "/workspace/coverage/lcov.info",
-      ["/workspace"]
+      ["/workspace"],
+      fixtureSourceExists
     );
 
     expect(records).toHaveLength(1);
@@ -40,7 +45,8 @@ describe("parseLcovArtifact", () => {
     const records = parseLcovArtifact(
       ["SF:/workspace/src/Vault.sol", "DA:7,1"].join("\n"),
       "/workspace/lcov.info",
-      ["/workspace"]
+      ["/workspace"],
+      fixtureSourceExists
     );
 
     expect(records).toHaveLength(1);
@@ -66,7 +72,8 @@ describe("parseCoberturaArtifact", () => {
         "</coverage>",
       ].join("\n"),
       "/workspace/coverage/cobertura.xml",
-      ["/workspace"]
+      ["/workspace"],
+      fixtureSourceExists
     );
 
     expect(records).toHaveLength(1);
@@ -90,7 +97,8 @@ describe("parseCoberturaArtifact", () => {
         "</coverage>",
       ].join("\n"),
       "/workspace/coverage/coverage.xml",
-      ["/workspace"]
+      ["/workspace"],
+      fixtureSourceExists
     );
 
     expect(records).toHaveLength(1);
@@ -132,7 +140,8 @@ describe("parseCoberturaArtifact", () => {
         "</coverage>",
       ].join("\n"),
       "/workspace/coverage/cobertura.xml",
-      ["/workspace"]
+      ["/workspace"],
+      fixtureSourceExists
     );
 
     expect(records[0]?.branchHits.get(11)).toMatchObject({ found: 2, hit: 1 });
@@ -161,7 +170,8 @@ describe("summarizeCoverageArtifacts", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/coverage/lcov.info",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
       ...parseLcovArtifact(
         [
@@ -171,7 +181,8 @@ describe("summarizeCoverageArtifacts", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/coverage/integration.lcov",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
     ];
 
@@ -214,7 +225,8 @@ describe("summarizeCoverageArtifacts", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/coverage/unit.lcov",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
       ...parseLcovArtifact(
         [
@@ -225,7 +237,8 @@ describe("summarizeCoverageArtifacts", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/coverage/integration.lcov",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
     ];
 
@@ -248,7 +261,8 @@ describe("summarizeCoverageArtifacts", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/coverage/lcov.info",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
       ...parseCoberturaArtifact(
         [
@@ -264,7 +278,8 @@ describe("summarizeCoverageArtifacts", () => {
           "</coverage>",
         ].join("\n"),
         "/workspace/coverage/cobertura.xml",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
     ];
 
@@ -290,6 +305,38 @@ describe("summarizeCoverageArtifacts", () => {
       ],
     });
   });
+
+  it("adds shortest unique root context when multi-root display paths collide", () => {
+    const filePaths = [
+      "/workspace/one/app/src/Vault.sol",
+      "/workspace/two/app/src/Vault.sol",
+      "/workspace/one/app/src/Token.sol",
+    ];
+    const summary = summarizeCoverageArtifacts(
+      filePaths.map((filePath, index) => ({
+        filePath,
+        artifactPath: `/workspace/coverage/${index}.lcov`,
+        format: "lcov" as const,
+        lineHits: new Map([[1, 0]]),
+        branchHits: new Map(),
+      })),
+      ["/workspace/two/app", "/workspace/one/app"]
+    );
+    const labelsByPath = Object.fromEntries(
+      summary.files.map((file) => [file.filePath, file.displayPath])
+    );
+
+    expect(labelsByPath).toEqual({
+      "/workspace/one/app/src/Token.sol": "src/Token.sol",
+      "/workspace/one/app/src/Vault.sol": "one/app/src/Vault.sol",
+      "/workspace/two/app/src/Vault.sol": "two/app/src/Vault.sol",
+    });
+    expect(buildCoverageTree(summary, "all").map((file) => file.label)).toEqual([
+      "one/app/src/Vault.sol",
+      "src/Token.sol",
+      "two/app/src/Vault.sol",
+    ]);
+  });
 });
 
 describe("coverage source path resolution", () => {
@@ -297,7 +344,8 @@ describe("coverage source path resolution", () => {
     const records = parseLcovArtifact(
       ["SF:src/Vault.sol", "DA:7,1", "end_of_record"].join("\n"),
       "/workspace/beta/coverage/lcov.info",
-      ["/workspace/alpha", "/workspace/beta"]
+      ["/workspace/alpha", "/workspace/beta"],
+      fixtureSourceExists
     );
 
     expect(records[0]?.filePath).toBe("/workspace/beta/src/Vault.sol");
@@ -314,6 +362,43 @@ describe("coverage source path resolution", () => {
 
     expect(records[0]?.filePath).toBe(expected);
   });
+
+  it("rejects absolute source paths outside every workspace root", () => {
+    const records = parseLcovArtifact(
+      ["SF:/other-project/src/Vault.sol", "DA:7,1", "end_of_record"].join(
+        "\n"
+      ),
+      "/workspace/coverage/lcov.info",
+      ["/workspace"],
+      () => true
+    );
+
+    expect(records).toEqual([]);
+  });
+
+  it("rejects nonexistent absolute source paths inside the workspace", () => {
+    const records = parseLcovArtifact(
+      ["SF:/workspace/src/Missing.sol", "DA:7,1", "end_of_record"].join(
+        "\n"
+      ),
+      "/workspace/coverage/lcov.info",
+      ["/workspace"],
+      () => false
+    );
+
+    expect(records).toEqual([]);
+  });
+
+  it("does not fabricate a relative source path when no candidate exists", () => {
+    const records = parseLcovArtifact(
+      ["SF:src/Missing.sol", "DA:7,1", "end_of_record"].join("\n"),
+      "/workspace/coverage/lcov.info",
+      ["/workspace"],
+      () => false
+    );
+
+    expect(records).toEqual([]);
+  });
 });
 
 describe("buildCoverageTree", () => {
@@ -328,7 +413,8 @@ describe("buildCoverageTree", () => {
             "end_of_record",
           ].join("\n"),
           "/workspace/lcov.info",
-          ["/workspace"]
+          ["/workspace"],
+          fixtureSourceExists
         ),
         ...parseLcovArtifact(
           [
@@ -337,7 +423,8 @@ describe("buildCoverageTree", () => {
             "end_of_record",
           ].join("\n"),
           "/workspace/lcov.info",
-          ["/workspace"]
+          ["/workspace"],
+          fixtureSourceExists
         ),
       ],
       ["/workspace"]
@@ -355,6 +442,42 @@ describe("buildCoverageTree", () => {
     const allTree = buildCoverageTree(summary, "all");
     expect(allTree).toHaveLength(2);
   });
+
+  it("uses singular grammar and omits zero-valued status counts", () => {
+    const [file] = buildCoverageTree(
+      {
+        artifactCount: 1,
+        files: [
+          {
+            filePath: "/workspace/src/Vault.sol",
+            displayPath: "src/Vault.sol",
+            artifactPaths: ["/workspace/lcov.info"],
+            linesFound: 1,
+            linesHit: 1,
+            branchesFound: 1,
+            branchesHit: 0,
+            actionableLines: [
+              {
+                line: 7,
+                status: "partial",
+                hits: 1,
+                branchesFound: 1,
+                branchesHit: 0,
+              },
+            ],
+          },
+        ],
+      },
+      "all"
+    );
+
+    expect(file?.description).toBe(
+      "100.0% line coverage • 1/1 line • 0.0% branch coverage • 1 partial line"
+    );
+    expect(file?.children[0]?.description).toBe(
+      "partial • 1 hit • 0/1 branch"
+    );
+  });
 });
 
 describe("summarizeCoverageOverview", () => {
@@ -368,14 +491,15 @@ describe("summarizeCoverageOverview", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/lcov.info",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
       ["/workspace"]
     );
 
     expect(summarizeCoverageOverview(summary, "actionable")).toEqual({
       count: 1,
-      description: "actionable • 50.0% lines • 1 artifacts",
+      description: "actionable • 50.0% line coverage • 1 artifact",
       message: undefined,
     });
   });
@@ -407,6 +531,13 @@ describe("summarizeCoverageOverview", () => {
   });
 });
 
+describe("coverage tree expansion", () => {
+  it("collapses files only after the default child limit", () => {
+    expect(shouldExpandCoverageFile(20)).toBe(true);
+    expect(shouldExpandCoverageFile(21)).toBe(false);
+  });
+});
+
 describe("actionableDecorationPlan", () => {
   it("splits uncovered and partial lines for editor decorations", () => {
     const summary = summarizeCoverageArtifacts(
@@ -420,7 +551,8 @@ describe("actionableDecorationPlan", () => {
           "end_of_record",
         ].join("\n"),
         "/workspace/lcov.info",
-        ["/workspace"]
+        ["/workspace"],
+        fixtureSourceExists
       ),
       ["/workspace"]
     );

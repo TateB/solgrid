@@ -25,6 +25,36 @@ export interface CoverageProviderAvailability {
   hasCustomCommand: boolean;
 }
 
+export type CoverageRunExitOutcome = "success" | "failed" | "cancelled";
+
+export class CoverageRunGuard {
+  private activeRunLabel: string | undefined;
+
+  get activeLabel(): string | undefined {
+    return this.activeRunLabel;
+  }
+
+  acquire(label: string): (() => void) | undefined {
+    if (this.activeRunLabel) {
+      return undefined;
+    }
+
+    this.activeRunLabel = label;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (this.activeRunLabel === label) {
+        this.activeRunLabel = undefined;
+      }
+    };
+  }
+}
+
+const coverageRunGuard = new CoverageRunGuard();
+
 export class TaskCompletionArbiter {
   private fallbackTimer: ReturnType<typeof setTimeout> | undefined;
   private settled = false;
@@ -66,6 +96,15 @@ export class TaskCompletionArbiter {
       this.fallbackTimer = undefined;
     }
   }
+}
+
+export function coverageRunExitOutcome(
+  exitCode: number | undefined
+): CoverageRunExitOutcome {
+  if (exitCode === 0) {
+    return "success";
+  }
+  return exitCode === undefined ? "cancelled" : "failed";
 }
 
 export function coverageRunSpec(
@@ -298,6 +337,14 @@ async function runCoverageSpec(
   config: CoverageExtensionConfig,
   refreshCoverage: () => Promise<void>
 ): Promise<void> {
+  const releaseRun = coverageRunGuard.acquire(spec.label);
+  if (!releaseRun) {
+    void vscode.window.showInformationMessage(
+      `solgrid is already running ${coverageRunGuard.activeLabel ?? "a coverage command"}. Wait for it to finish before starting another coverage command.`
+    );
+    return;
+  }
+
   const task = new vscode.Task(
     {
       type: "solgrid-coverage",
@@ -320,20 +367,43 @@ async function runCoverageSpec(
     focus: false,
   };
 
-  const pending = executeAndWaitForTask(task).then(async (exitCode) => {
-    if (exitCode === 0 || exitCode === undefined) {
-      if (config.autoRefreshAfterRun) {
-        await refreshCoverage();
-      }
+  try {
+    const pending = executeAndWaitForTask(task);
+    void vscode.window.setStatusBarMessage(
+      `solgrid: running ${spec.label}`,
+      pending
+    );
+
+    let exitCode: number | undefined;
+    try {
+      exitCode = await pending;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(
+        `Could not start coverage command "${spec.label}": ${detail}`
+      );
       return;
     }
 
-    void vscode.window.showWarningMessage(
-      `Coverage command "${spec.label}" exited with code ${exitCode}.`
-    );
-  });
-  void vscode.window.setStatusBarMessage(`solgrid: running ${spec.label}`, pending);
-  await pending;
+    switch (coverageRunExitOutcome(exitCode)) {
+      case "success":
+        if (config.autoRefreshAfterRun) {
+          await refreshCoverage();
+        }
+        return;
+      case "cancelled":
+        void vscode.window.showWarningMessage(
+          `Coverage command "${spec.label}" did not complete successfully. It may have been cancelled.`
+        );
+        return;
+      case "failed":
+        void vscode.window.showWarningMessage(
+          `Coverage command "${spec.label}" exited with code ${exitCode}.`
+        );
+    }
+  } finally {
+    releaseRun();
+  }
 }
 
 function executeAndWaitForTask(task: vscode.Task): Promise<number | undefined> {

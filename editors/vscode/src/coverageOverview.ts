@@ -1,13 +1,14 @@
 import * as vscode from "vscode";
 import {
-  actionableDecorationPlan,
   buildCoverageTree,
   CoverageFileSummary,
+  CoverageLineDetail,
   CoverageOverviewFileNode,
   CoverageOverviewFilterMode,
   CoverageOverviewLineNode,
   CoverageWorkspaceSummary,
   parseCoverageArtifact,
+  shouldExpandCoverageFile,
   summarizeCoverageArtifacts,
   summarizeCoverageOverview,
 } from "./coverageOverviewModel";
@@ -23,6 +24,34 @@ export interface CoverageConfig {
 export type CoverageOverviewNode =
   | CoverageOverviewFileNode
   | CoverageOverviewLineNode;
+
+export const COVERAGE_WAITING_MESSAGE = "Waiting to load coverage artifacts…";
+export const COVERAGE_REFRESHING_MESSAGE = "Refreshing coverage artifacts…";
+
+export function coverageOverviewPresentationMessage(
+  summaryMessage: string | undefined,
+  refreshInProgress: boolean,
+  hasCompletedRefresh: boolean,
+  refreshIssue?: string
+): string | undefined {
+  if (refreshInProgress) {
+    return COVERAGE_REFRESHING_MESSAGE;
+  }
+  if (refreshIssue) {
+    return refreshIssue;
+  }
+  return hasCompletedRefresh ? summaryMessage : COVERAGE_WAITING_MESSAGE;
+}
+
+export function coverageRefreshFailureMessage(
+  error: unknown,
+  hasStaleCoverage: boolean
+): string {
+  const suffix = hasStaleCoverage
+    ? " Previously loaded coverage is still shown and may be stale."
+    : " No new coverage data was applied.";
+  return `Coverage refresh failed: ${errorDetail(error)}.${suffix}`;
+}
 
 export function normalizeCoverageConfig(config: CoverageConfig): CoverageConfig {
   return {
@@ -51,6 +80,17 @@ export class CoverageOverviewFeature
       overviewRulerLane: vscode.OverviewRulerLane.Right,
       backgroundColor: new vscode.ThemeColor("editorError.background"),
       overviewRulerColor: new vscode.ThemeColor("editorError.foreground"),
+      borderColor: new vscode.ThemeColor("editorError.foreground"),
+      borderStyle: "solid",
+      borderWidth: "0 0 0 3px",
+      gutterIconPath: coverageGutterIcon("uncovered", "#888888"),
+      gutterIconSize: "contain",
+      light: {
+        gutterIconPath: coverageGutterIcon("uncovered", "#a1260d"),
+      },
+      dark: {
+        gutterIconPath: coverageGutterIcon("uncovered", "#f48771"),
+      },
     });
   private readonly partialDecorationType =
     vscode.window.createTextEditorDecorationType({
@@ -58,6 +98,17 @@ export class CoverageOverviewFeature
       overviewRulerLane: vscode.OverviewRulerLane.Right,
       backgroundColor: new vscode.ThemeColor("editorWarning.background"),
       overviewRulerColor: new vscode.ThemeColor("editorWarning.foreground"),
+      borderColor: new vscode.ThemeColor("editorWarning.foreground"),
+      borderStyle: "dashed",
+      borderWidth: "0 0 0 3px",
+      gutterIconPath: coverageGutterIcon("partial", "#888888"),
+      gutterIconSize: "contain",
+      light: {
+        gutterIconPath: coverageGutterIcon("partial", "#7a6400"),
+      },
+      dark: {
+        gutterIconPath: coverageGutterIcon("partial", "#cca700"),
+      },
     });
   private readonly disposables: vscode.Disposable[] = [];
 
@@ -72,6 +123,9 @@ export class CoverageOverviewFeature
   private filterMode: CoverageOverviewFilterMode = "actionable";
   private watchers: vscode.FileSystemWatcher[] = [];
   private refreshGeneration = 0;
+  private refreshInProgress = false;
+  private hasCompletedRefresh = false;
+  private refreshIssue: string | undefined;
   private disposed = false;
   private readonly refreshQueue = new AsyncRefreshQueue(() =>
     this.performRefresh(this.refreshGeneration)
@@ -100,6 +154,9 @@ export class CoverageOverviewFeature
       return;
     }
     this.refreshGeneration += 1;
+    this.refreshInProgress = false;
+    this.hasCompletedRefresh = false;
+    this.refreshIssue = undefined;
     this.config = normalizeCoverageConfig(config);
     this.rebuildWatchers();
     if (!this.config.enable) {
@@ -126,20 +183,56 @@ export class CoverageOverviewFeature
       return;
     }
 
-    await this.refreshQueue.run();
+    const generation = this.refreshGeneration;
+    this.refreshInProgress = true;
+    this.refreshIssue = undefined;
+    this.updatePresentation();
+    let completed = false;
+    try {
+      await this.refreshQueue.run();
+      completed = true;
+    } catch (error) {
+      if (!this.disposed && generation === this.refreshGeneration) {
+        this.refreshIssue = coverageRefreshFailureMessage(
+          error,
+          this.summary !== undefined
+        );
+      }
+    } finally {
+      if (!this.disposed && generation === this.refreshGeneration) {
+        this.refreshInProgress = false;
+        if (completed) {
+          this.hasCompletedRefresh = true;
+        }
+        this.updatePresentation();
+      }
+    }
+  }
+
+  refreshTreeData(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.updatePresentation();
+    this.onDidChangeTreeDataEmitter.fire(undefined);
   }
 
   getTreeItem(element: CoverageOverviewNode): vscode.TreeItem {
     if (element.kind === "file") {
       const item = new vscode.TreeItem(
         element.label,
-        vscode.TreeItemCollapsibleState.Expanded
+        shouldExpandCoverageFile(element.children.length)
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed
       );
       item.description = element.description;
       item.tooltip = fileTooltip(element.summary);
       item.iconPath = new vscode.ThemeIcon(
         element.summary.actionableLines.length > 0 ? "graph-line" : "pass"
       );
+      item.accessibilityInformation = {
+        label: coverageFileAccessibilityLabel(element.summary),
+      };
       item.command = {
         command: "solgrid.coverage.openNode",
         title: "Open Coverage File",
@@ -153,10 +246,13 @@ export class CoverageOverviewFeature
       vscode.TreeItemCollapsibleState.None
     );
     item.description = element.description;
-    item.tooltip = `${element.label}\n${element.description}`;
+    item.tooltip = coverageLineTooltip(element.filePath, element.detail);
     item.iconPath = new vscode.ThemeIcon(
       element.detail.status === "uncovered" ? "error" : "warning"
     );
+    item.accessibilityInformation = {
+      label: coverageLineAccessibilityLabel(element.filePath, element.detail),
+    };
     item.command = {
       command: "solgrid.coverage.openNode",
       title: "Open Coverage Line",
@@ -233,6 +329,7 @@ export class CoverageOverviewFeature
 
     const decoder = new TextDecoder("utf-8");
     const records = [];
+    const artifactFailures: string[] = [];
     for (const artifactUri of artifactUris) {
       try {
         const bytes = await vscode.workspace.fs.readFile(artifactUri);
@@ -240,24 +337,37 @@ export class CoverageOverviewFeature
         records.push(
           ...parseCoverageArtifact(content, artifactUri.fsPath, workspaceRoots)
         );
-      } catch {
-        // Ignore unreadable coverage artifacts and continue with what we can load.
+      } catch (error) {
+        artifactFailures.push(
+          `${artifactUri.fsPath} (${errorDetail(error)})`
+        );
       }
+    }
+
+    if (artifactFailures.length === artifactUris.length) {
+      throw new Error(coverageArtifactFailureDetail(artifactFailures, false));
     }
 
     const summary =
       records.length > 0
         ? summarizeCoverageArtifacts(records, workspaceRoots)
         : {
-            artifactCount: artifactUris.length,
+            artifactCount: artifactUris.length - artifactFailures.length,
             files: [],
           };
-    this.applyRefreshResult(generation, summary);
+    this.applyRefreshResult(
+      generation,
+      summary,
+      artifactFailures.length > 0
+        ? coverageArtifactFailureDetail(artifactFailures, true)
+        : undefined
+    );
   }
 
   private applyRefreshResult(
     generation: number,
-    summary: CoverageWorkspaceSummary | undefined
+    summary: CoverageWorkspaceSummary | undefined,
+    refreshIssue?: string
   ): void {
     if (
       this.disposed ||
@@ -267,11 +377,13 @@ export class CoverageOverviewFeature
       return;
     }
     this.summary = summary;
+    this.refreshIssue = refreshIssue;
     this.refreshTree();
   }
 
   private clearCoverage(): void {
     this.summary = undefined;
+    this.refreshIssue = undefined;
     this.refreshTree();
   }
 
@@ -287,12 +399,19 @@ export class CoverageOverviewFeature
     }
     const summary = summarizeCoverageOverview(this.summary, this.filterMode);
     this.view.description = summary.description;
-    this.view.message = summary.message;
+    this.view.message = coverageOverviewPresentationMessage(
+      summary.message,
+      this.refreshInProgress,
+      this.hasCompletedRefresh,
+      this.refreshIssue
+    );
     this.view.badge =
       summary.count > 0
         ? {
             value: summary.count,
-            tooltip: `${summary.count} actionable coverage lines`,
+            tooltip: `${summary.count} actionable coverage ${
+              summary.count === 1 ? "line" : "lines"
+            }`,
           }
         : undefined;
   }
@@ -320,18 +439,27 @@ export class CoverageOverviewFeature
       return;
     }
 
-    const plan = actionableDecorationPlan(summary);
+    const uncovered = summary.actionableLines.filter(
+      (detail) => detail.status === "uncovered"
+    );
+    const partial = summary.actionableLines.filter(
+      (detail) => detail.status === "partial"
+    );
     editor.setDecorations(
       this.uncoveredDecorationType,
-      plan.uncoveredLines
-        .map((line) => lineRange(editor.document, line))
-        .filter((range): range is vscode.Range => range !== undefined)
+      uncovered
+        .map((detail) => coverageDecoration(editor.document, detail))
+        .filter(
+          (option): option is vscode.DecorationOptions => option !== undefined
+        )
     );
     editor.setDecorations(
       this.partialDecorationType,
-      plan.partialLines
-        .map((line) => lineRange(editor.document, line))
-        .filter((range): range is vscode.Range => range !== undefined)
+      partial
+        .map((detail) => coverageDecoration(editor.document, detail))
+        .filter(
+          (option): option is vscode.DecorationOptions => option !== undefined
+        )
     );
   }
 
@@ -360,7 +488,17 @@ async function discoverCoverageArtifacts(
 ): Promise<vscode.Uri[]> {
   const artifacts = new Map<string, vscode.Uri>();
   for (const pattern of patterns) {
-    const matches = await vscode.workspace.findFiles(pattern, COVERAGE_EXCLUDE_GLOB);
+    let matches: vscode.Uri[];
+    try {
+      matches = await vscode.workspace.findFiles(
+        pattern,
+        COVERAGE_EXCLUDE_GLOB
+      );
+    } catch (error) {
+      throw new Error(
+        `Could not search for coverage artifacts matching "${pattern}": ${errorDetail(error)}`
+      );
+    }
     for (const uri of matches) {
       if (uri.scheme === "file") {
         artifacts.set(normalizePath(uri.fsPath), uri);
@@ -372,10 +510,133 @@ async function discoverCoverageArtifacts(
   );
 }
 
+function coverageArtifactFailureDetail(
+  failures: readonly string[],
+  partial: boolean
+): string {
+  const count = failures.length;
+  const shown = failures.slice(0, 3).join("; ");
+  const omitted = count > 3 ? `; and ${count - 3} more` : "";
+  const noun = count === 1 ? "artifact" : "artifacts";
+  return partial
+    ? `Coverage results may be incomplete: could not read or parse ${count} ${noun}: ${shown}${omitted}.`
+    : `Could not read or parse ${count} coverage ${noun}: ${shown}${omitted}`;
+}
+
+function errorDetail(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim().replace(/[.!]+$/, "");
+  }
+  const detail = String(error).trim().replace(/[.!]+$/, "");
+  return detail || "unknown error";
+}
+
 function fileTooltip(summary: CoverageFileSummary): string {
-  const artifactList = summary.artifactPaths.map((artifact) => `- ${artifact}`).join("\n");
-  const header = `${summary.displayPath}\n${summary.linesHit}/${summary.linesFound} lines covered`;
+  const artifactList = summary.artifactPaths
+    .map((artifact) => `- ${artifact}`)
+    .join("\n");
+  const header = [
+    summary.displayPath,
+    `Source: ${summary.filePath}`,
+    `${summary.linesHit}/${summary.linesFound} ${
+      summary.linesFound === 1 ? "line" : "lines"
+    } covered`,
+    `${summary.branchesHit}/${summary.branchesFound} ${
+      summary.branchesFound === 1 ? "branch" : "branches"
+    } covered`,
+    `${summary.actionableLines.length} actionable ${
+      summary.actionableLines.length === 1 ? "line" : "lines"
+    }`,
+  ].join("\n");
   return artifactList ? `${header}\nArtifacts:\n${artifactList}` : header;
+}
+
+export function coverageFileAccessibilityLabel(
+  summary: CoverageFileSummary
+): string {
+  return [
+    summary.displayPath,
+    `source ${summary.filePath}`,
+    `${summary.linesHit} of ${summary.linesFound} ${
+      summary.linesFound === 1 ? "line" : "lines"
+    } covered`,
+    `${summary.branchesHit} of ${summary.branchesFound} ${
+      summary.branchesFound === 1 ? "branch" : "branches"
+    } covered`,
+    `${summary.actionableLines.length} actionable ${
+      summary.actionableLines.length === 1 ? "line" : "lines"
+    }`,
+  ].join("; ");
+}
+
+export function coverageLineAccessibilityLabel(
+  filePath: string,
+  detail: CoverageLineDetail
+): string {
+  return [
+    `${detail.status} coverage`,
+    `line ${detail.line}`,
+    `source ${filePath}`,
+    `${detail.hits} ${detail.hits === 1 ? "hit" : "hits"}`,
+    `${detail.branchesHit} of ${detail.branchesFound} ${
+      detail.branchesFound === 1 ? "branch" : "branches"
+    } covered`,
+  ].join("; ");
+}
+
+export function coverageLineHoverMessage(detail: CoverageLineDetail): string {
+  if (detail.status === "uncovered") {
+    const branchDetail =
+      detail.branchesFound > 0
+        ? `; ${detail.branchesHit} of ${detail.branchesFound} ${
+            detail.branchesFound === 1 ? "branch" : "branches"
+          } covered`
+        : "";
+    return `Coverage: line ${detail.line} is uncovered (0 hits${branchDetail}).`;
+  }
+  return `Coverage: line ${detail.line} is partially covered (${detail.hits} ${
+    detail.hits === 1 ? "hit" : "hits"
+  }; ${detail.branchesHit} of ${detail.branchesFound} ${
+    detail.branchesFound === 1 ? "branch" : "branches"
+  } covered).`;
+}
+
+function coverageLineTooltip(
+  filePath: string,
+  detail: CoverageLineDetail
+): string {
+  return `${coverageLineHoverMessage(detail)}\nSource: ${filePath}`;
+}
+
+function coverageDecoration(
+  document: vscode.TextDocument,
+  detail: CoverageLineDetail
+): vscode.DecorationOptions | undefined {
+  const range = lineRange(document, detail.line);
+  return range
+    ? {
+        range,
+        hoverMessage: coverageLineHoverMessage(detail),
+      }
+    : undefined;
+}
+
+function coverageGutterIcon(
+  status: "uncovered" | "partial",
+  color: string
+): vscode.Uri {
+  const mark =
+    status === "uncovered"
+      ? `<path d="M3 3l10 10M13 3L3 13" fill="none" stroke="${color}" stroke-linecap="round" stroke-width="2.5"/>`
+      : [
+          `<path d="M2 2h12v12H2z" fill="none" stroke="${color}" stroke-width="2"/>`,
+          `<path d="M2 14L14 2v12z" fill="${color}"/>`,
+        ].join("");
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"',
+    ` viewBox="0 0 16 16">${mark}</svg>`,
+  ].join("");
+  return vscode.Uri.parse(`data:image/svg+xml,${encodeURIComponent(svg)}`);
 }
 
 function lineRange(

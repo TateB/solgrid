@@ -15,6 +15,12 @@ export type SecurityOverviewFilterMode =
   | "compiler"
   | "detector";
 
+export const DEFAULT_EXPANDED_SECURITY_FINDING_LIMIT = 20;
+
+export function shouldExpandSecurityGroup(childCount: number): boolean {
+  return childCount <= DEFAULT_EXPANDED_SECURITY_FINDING_LIMIT;
+}
+
 export interface PositionLike {
   line: number;
   character: number;
@@ -150,13 +156,22 @@ export function buildOverviewTree(
     ignoredFindingKeys,
     showIgnoredBaselines
   ).sort(compareFindings);
+  const displayFileLabels = shortestUniqueFileLabels(
+    filtered.map((finding) => finding.uri)
+  );
   const groups = new Map<
     string,
     { label: string; description: string; findings: SecurityFinding[] }
   >();
 
   for (const finding of filtered) {
-    const { key, label, description } = groupDescriptor(finding, groupMode);
+    const displayFileLabel =
+      displayFileLabels.get(finding.uri) ?? fileLabel(finding.uri);
+    const { key, label, description } = groupDescriptor(
+      finding,
+      groupMode,
+      displayFileLabel
+    );
     const bucket = groups.get(key);
     if (bucket) {
       bucket.findings.push(finding);
@@ -179,8 +194,8 @@ export function buildOverviewTree(
       label: group.label,
       description:
         groupMode === "file"
-          ? `${group.findings.length} findings • ${group.description}`
-          : `${group.description} • ${group.findings.length} findings`,
+          ? `${findingCountLabel(group.findings.length)} • ${group.description}`
+          : `${group.description} • ${findingCountLabel(group.findings.length)}`,
       children: group.findings.map((finding) => ({
         kind: "finding",
         key: findingFingerprint(finding),
@@ -188,7 +203,7 @@ export function buildOverviewTree(
           finding.meta.kind === "compiler"
             ? finding.message
             : finding.meta.title || finding.message,
-        description: `${fileLabel(finding.uri)}:${finding.range.start.line + 1} • ${finding.code}`,
+        description: `${displayFileLabels.get(finding.uri) ?? fileLabel(finding.uri)}:${finding.range.start.line + 1} • ${finding.code}`,
         ignored: ignoredFindingKeys.has(findingFingerprint(finding)),
         finding,
       })),
@@ -217,8 +232,8 @@ export function summarizeOverview(
     ignoredCount === 0
       ? null
       : showIgnoredBaselines
-        ? `${ignoredCount} ignored shown`
-        : `${ignoredCount} ignored hidden`;
+        ? `${ignoredFindingCountLabel(ignoredCount)} shown`
+        : `${ignoredFindingCountLabel(ignoredCount)} hidden`;
   const description = [
     `${filterModeLabel(filterMode)} • by ${groupModeLabel(groupMode)}`,
     ignoredDescription,
@@ -430,13 +445,14 @@ function rangesEqual(left?: RangeLike, right?: RangeLike): boolean {
 
 function groupDescriptor(
   finding: SecurityFinding,
-  groupMode: SecurityOverviewGroupMode
+  groupMode: SecurityOverviewGroupMode,
+  displayFileLabel: string
 ): { key: string; label: string; description: string } {
   switch (groupMode) {
     case "file":
       return {
         key: finding.uri,
-        label: fileLabel(finding.uri),
+        label: displayFileLabel,
         description: filePathLabel(finding.uri),
       };
     case "severity":
@@ -562,6 +578,53 @@ function compareFixableOrSuppressibleFindings(
 
 function fileLabel(uri: string): string {
   return path.basename(filePathLabel(uri));
+}
+
+function shortestUniqueFileLabels(uris: readonly string[]): Map<string, string> {
+  const entries = Array.from(new Set(uris)).map((uri) => ({
+    uri,
+    parts: filePathLabel(uri).split(/[\\/]+/u).filter(Boolean),
+  }));
+  const labels = new Map<string, string>();
+
+  for (const entry of entries) {
+    const fallback = fileLabel(entry.uri);
+    for (let depth = 1; depth <= entry.parts.length; depth += 1) {
+      const suffix = entry.parts.slice(-depth);
+      const isUnique = entries.every(
+        (other) =>
+          other.uri === entry.uri || !hasPathSuffix(other.parts, suffix)
+      );
+      if (isUnique) {
+        labels.set(entry.uri, suffix.join("/"));
+        break;
+      }
+    }
+    if (!labels.has(entry.uri)) {
+      labels.set(entry.uri, fallback);
+    }
+  }
+
+  return labels;
+}
+
+function hasPathSuffix(
+  parts: readonly string[],
+  suffix: readonly string[]
+): boolean {
+  if (suffix.length > parts.length) {
+    return false;
+  }
+  const offset = parts.length - suffix.length;
+  return suffix.every((part, index) => parts[offset + index] === part);
+}
+
+function findingCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "finding" : "findings"}`;
+}
+
+function ignoredFindingCountLabel(count: number): string {
+  return `${count} ignored ${count === 1 ? "finding" : "findings"}`;
 }
 
 function filePathLabel(uri: string): string {

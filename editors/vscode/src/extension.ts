@@ -7,6 +7,7 @@ import {
   Range,
   StatusBarAlignment,
   StatusBarItem,
+  ThemeColor,
   Uri,
   window,
   workspace,
@@ -18,6 +19,7 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
+  State as LanguageClientState,
 } from "vscode-languageclient/node";
 import {
   CoverageExtensionConfig,
@@ -37,6 +39,7 @@ import {
   applyGroupFixes,
   applyFindingFix,
   applyFindingFixForTests,
+  clearIgnoredBaselinesWithConfirmation,
   openFindingHelp,
   openSecurityFinding,
   previewFindingFix,
@@ -52,6 +55,15 @@ import {
   getGraphPreviewSnapshot,
   showGraph,
 } from "./graphPreview";
+import {
+  LanguageServerLifecycle,
+  LanguageServerLifecycleUpdate,
+} from "./languageServerLifecycle";
+import {
+  requestSecurityAnalysisRerun,
+  SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE,
+} from "./securityAnalysisRerun";
+import { refreshTreeWhenVisible } from "./treeVisibility";
 
 let client: LanguageClient | undefined;
 
@@ -102,6 +114,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(
     coverageOverview,
     coverageOverviewView,
+    coverageOverviewView.onDidChangeVisibility((event) =>
+      refreshTreeWhenVisible(event.visible, coverageOverview)
+    ),
     commands.registerCommand("solgrid.coverage.refresh", () =>
       coverageOverview.refresh()
     ),
@@ -154,7 +169,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   await commands.executeCommand(
     "setContext",
     "solgrid.languageServerActive",
-    activatedWithLanguageServer
+    false
   );
   let enableReloadPromptOpen = false;
   context.subscriptions.push(
@@ -206,6 +221,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(...fileWatchers);
 
   const securityOverview = new SecurityOverviewProvider(context.workspaceState);
+  securityOverview.beginAnalysis();
   const securityOverviewView = window.createTreeView<SecurityOverviewNode>(
     "solgridSecurityOverview",
     {
@@ -214,7 +230,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }
   );
   securityOverview.attachView(securityOverviewView);
-  context.subscriptions.push(securityOverviewView);
+  context.subscriptions.push(
+    securityOverviewView,
+    securityOverviewView.onDidChangeVisibility((event) =>
+      refreshTreeWhenVisible(event.visible, securityOverview)
+    )
+  );
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "solidity" }],
@@ -319,9 +340,41 @@ export async function activate(context: ExtensionContext): Promise<void> {
   projectIndexStatus.show();
   context.subscriptions.push(projectIndexStatus);
 
+  const languageServerLifecycle = new LanguageServerLifecycle();
   client.onNotification("solgrid/projectIndexStatus", (status: ProjectIndexStatus) => {
+    if (!languageServerLifecycle.recordProjectIndexStatus()) {
+      return;
+    }
+    if (status.state === "building") {
+      securityOverview.beginAnalysis();
+    } else {
+      securityOverview.completeAnalysis();
+    }
     updateProjectIndexStatus(projectIndexStatus, status);
   });
+
+  context.subscriptions.push(
+    client.onDidChangeState((event) => {
+      const update = languageServerLifecycle.stateChanged(
+        event.newState === LanguageClientState.Starting
+          ? "starting"
+          : event.newState === LanguageClientState.Running
+            ? "running"
+            : "stopped"
+      );
+      applyLanguageServerLifecycleUpdate(
+        update,
+        projectIndexStatus,
+        securityOverview
+      );
+      if (update.status === "unavailable") {
+        updateLanguageServerUnavailableStatus(
+          projectIndexStatus,
+          "The solgrid language server stopped. Click to check the configured binary, then reload VS Code."
+        );
+      }
+    })
+  );
 
   context.subscriptions.push(
     languages.onDidChangeDiagnostics((event) => {
@@ -453,7 +506,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       securityOverview.toggleShowIgnoredBaselines()
     ),
     commands.registerCommand("solgrid.securityOverview.clearIgnoredBaselines", () =>
-      securityOverview.clearIgnoredBaselines()
+      clearIgnoredBaselinesWithConfirmation(securityOverview)
     ),
     commands.registerCommand(
       "solgrid.securityOverview.suppressNextLine",
@@ -484,11 +537,48 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   try {
     await client.start();
-  } catch (error) {
-    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
-    window.showErrorMessage(
-      `Failed to start solgrid language server: ${error}`
+    if (!client.isRunning()) {
+      throw new Error("the language client stopped before startup completed");
+    }
+    applyLanguageServerLifecycleUpdate(
+      languageServerLifecycle.initialStartSucceeded(),
+      projectIndexStatus,
+      securityOverview
     );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
+    const failedClient = client;
+    applyLanguageServerLifecycleUpdate(
+      languageServerLifecycle.initialStartFailed(),
+      projectIndexStatus,
+      securityOverview
+    );
+    setSecurityCodeActionResolver(undefined);
+    updateLanguageServerUnavailableStatus(
+      projectIndexStatus,
+      `Failed to start the solgrid language server at ${serverPath}: ${detail}. Click to configure solgrid.path, then reload VS Code.`
+    );
+    await disposeFailedLanguageClient(failedClient);
+    if (client === failedClient) {
+      client = undefined;
+    }
+    void window
+      .showErrorMessage(
+        `Failed to start solgrid language server: ${detail}`,
+        "Open Settings",
+        "Reload Window"
+      )
+      .then(async (action) => {
+        if (action === "Open Settings") {
+          await commands.executeCommand(
+            "workbench.action.openSettings",
+            "solgrid.path"
+          );
+        } else if (action === "Reload Window") {
+          await commands.executeCommand("workbench.action.reloadWindow");
+        }
+      });
   }
 }
 
@@ -581,6 +671,8 @@ function updateProjectIndexStatus(
       : "";
 
   if (status.state === "building") {
+    statusBar.backgroundColor = undefined;
+    statusBar.command = undefined;
     statusBar.text = "$(sync~spin) solgrid: indexing";
     statusBar.tooltip =
       files > 0
@@ -590,11 +682,52 @@ function updateProjectIndexStatus(
     return;
   }
 
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
   statusBar.text = "$(check) solgrid";
   statusBar.tooltip =
     files > 0
       ? `Workspace index ready for ${fileLabel}${duration}.`
       : "Workspace index ready.";
+  statusBar.show();
+}
+
+function updateLanguageServerReadyStatus(statusBar: StatusBarItem): void {
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
+  statusBar.text = "$(check) solgrid";
+  statusBar.tooltip =
+    "solgrid language server is ready. Waiting for workspace index status.";
+  statusBar.show();
+}
+
+function updateLanguageServerStartingStatus(
+  statusBar: StatusBarItem,
+  restarting: boolean
+): void {
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
+  statusBar.text = restarting
+    ? "$(sync~spin) solgrid: restarting"
+    : "$(sync~spin) solgrid: starting";
+  statusBar.tooltip = restarting
+    ? "Restarting the solgrid language server."
+    : "Starting the solgrid language server.";
+  statusBar.show();
+}
+
+function updateLanguageServerUnavailableStatus(
+  statusBar: StatusBarItem,
+  tooltip: string
+): void {
+  statusBar.text = "$(error) solgrid: unavailable";
+  statusBar.tooltip = tooltip;
+  statusBar.backgroundColor = new ThemeColor("statusBarItem.errorBackground");
+  statusBar.command = {
+    command: "workbench.action.openSettings",
+    title: "Configure solgrid language server",
+    arguments: ["solgrid.path"],
+  };
   statusBar.show();
 }
 
@@ -694,24 +827,89 @@ function fallbackFormattingOptions(uri: Uri): {
 async function rerunSecurityAnalysis(
   securityOverview: SecurityOverviewProvider
 ): Promise<void> {
-  if (!client) {
-    securityOverview.refresh();
+  securityOverview.beginAnalysis();
+  const activeClient = client;
+  if (!activeClient) {
+    securityOverview.failAnalysis(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
+    void window.showErrorMessage(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
     return;
   }
 
-  try {
-    await client.sendRequest("workspace/executeCommand", {
-      command: "solgrid.workspace.rerunSecurityAnalysis",
-      arguments: [],
-    });
-  } catch {
-    const config = readVSCodeConfig();
-    const editorSaveConfig = readEditorSaveConfig();
-    await client.sendNotification("workspace/didChangeConfiguration", {
-      settings: getSettings(config, editorSaveConfig),
-    });
+  const result = await requestSecurityAnalysisRerun(
+    async () => {
+      await activeClient.sendRequest("workspace/executeCommand", {
+        command: "solgrid.workspace.rerunSecurityAnalysis",
+        arguments: [],
+      });
+    },
+    async () => {
+      const config = readVSCodeConfig();
+      const editorSaveConfig = readEditorSaveConfig();
+      await activeClient.sendNotification("workspace/didChangeConfiguration", {
+        settings: getSettings(config, editorSaveConfig),
+      });
+    }
+  );
+
+  if (result.status === "complete") {
+    securityOverview.completeAnalysis();
+    return;
   }
-  securityOverview.refresh();
+
+  securityOverview.failAnalysis(result.message);
+  if (result.status === "unconfirmed") {
+    void window.showWarningMessage(result.message);
+  } else {
+    void window.showErrorMessage(result.message);
+  }
+}
+
+function applyLanguageServerLifecycleUpdate(
+  update: LanguageServerLifecycleUpdate,
+  statusBar: StatusBarItem,
+  securityOverview: SecurityOverviewProvider
+): void {
+  if (update.active !== undefined) {
+    void commands.executeCommand(
+      "setContext",
+      "solgrid.languageServerActive",
+      update.active
+    );
+  }
+
+  switch (update.status) {
+    case "none":
+      return;
+    case "starting":
+      securityOverview.beginAnalysis();
+      updateLanguageServerStartingStatus(statusBar, true);
+      return;
+    case "ready":
+      securityOverview.beginAnalysis();
+      updateLanguageServerReadyStatus(statusBar);
+      return;
+    case "unavailable":
+      securityOverview.failAnalysis(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
+      return;
+  }
+}
+
+async function disposeFailedLanguageClient(
+  failedClient: LanguageClient
+): Promise<void> {
+  try {
+    if (failedClient.needsStop()) {
+      await failedClient.stop();
+    }
+  } catch (cleanupError) {
+    console.error("[solgrid] Failed to stop the partially started client:", cleanupError);
+  }
+
+  try {
+    await failedClient.dispose();
+  } catch (cleanupError) {
+    console.error("[solgrid] Failed to dispose the failed client:", cleanupError);
+  }
 }
 
 interface SecurityOverviewFindingCriteria {

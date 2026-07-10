@@ -1,26 +1,43 @@
-/** Coalesces overlapping refresh requests while making every caller await the drain. */
+interface RefreshWaiter {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+/** Coalesces overlapping requests while each caller awaits its covering iteration. */
 export class AsyncRefreshQueue {
-  private running: Promise<void> | undefined;
-  private queued = false;
+  private draining = false;
+  private pending: RefreshWaiter[] = [];
 
   constructor(private readonly refresh: () => Promise<void>) {}
 
   run(): Promise<void> {
-    this.queued = true;
-    if (!this.running) {
-      this.running = this.drain();
+    const completion = new Promise<void>((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+    });
+    if (!this.draining) {
+      this.draining = true;
+      void this.drain();
     }
-    return this.running;
+    return completion;
   }
 
   private async drain(): Promise<void> {
     try {
-      while (this.queued) {
-        this.queued = false;
-        await this.refresh();
+      while (this.pending.length > 0) {
+        const waiters = this.pending.splice(0);
+        try {
+          await this.refresh();
+          for (const waiter of waiters) {
+            waiter.resolve();
+          }
+        } catch (error) {
+          for (const waiter of waiters) {
+            waiter.reject(error);
+          }
+        }
       }
     } finally {
-      this.running = undefined;
+      this.draining = false;
     }
   }
 }

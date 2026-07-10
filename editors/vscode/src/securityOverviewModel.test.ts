@@ -10,6 +10,7 @@ import {
   extractSecurityFindings,
   groupContextValue,
   pickPreferredCodeActionForFinding,
+  shouldExpandSecurityGroup,
   summarizeOverview,
 } from "./securityOverviewModel";
 
@@ -149,6 +150,55 @@ describe("buildOverviewTree", () => {
     ]);
     expect(groups[1].children[0].description).toContain("A.sol:6");
   });
+
+  it("uses singular finding grammar for one-item groups", () => {
+    const groups = buildOverviewTree(findings, "file", "compiler");
+
+    expect(groups[0]?.description).toContain("1 finding •");
+  });
+
+  it("disambiguates duplicate filenames with the shortest unique path", () => {
+    const diagnostics = [
+      {
+        range: {
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 4 },
+        },
+        severity: 1,
+        code: "security/tx-origin",
+        source: "solgrid",
+        message: "Avoid using tx.origin",
+      },
+    ];
+    const duplicateNames = [
+      ...extractSecurityFindings({
+        uri: "file:///workspace/alpha/src/Test.sol",
+        diagnostics,
+      }),
+      ...extractSecurityFindings({
+        uri: "file:///workspace/beta/src/Test.sol",
+        diagnostics,
+      }),
+    ];
+
+    const fileGroups = buildOverviewTree(duplicateNames, "file", "all");
+    expect(fileGroups.map((group) => group.label)).toEqual([
+      "alpha/src/Test.sol",
+      "beta/src/Test.sol",
+    ]);
+
+    const severityGroups = buildOverviewTree(
+      duplicateNames,
+      "severity",
+      "all"
+    );
+    expect(
+      severityGroups[0]?.children.map((child) => child.description)
+    ).toEqual([
+      "alpha/src/Test.sol:2 • security/tx-origin",
+      "beta/src/Test.sol:2 • security/tx-origin",
+    ]);
+  });
 });
 
 describe("summarizeOverview", () => {
@@ -194,6 +244,14 @@ describe("summarizeOverview", () => {
     expect(summary.message).toBe(
       "No visible findings in the current workspace. 1 ignored baseline is hidden."
     );
+    expect(summary.description).toContain("1 ignored finding hidden");
+  });
+});
+
+describe("security tree expansion", () => {
+  it("collapses groups only after the default child limit", () => {
+    expect(shouldExpandSecurityGroup(20)).toBe(true);
+    expect(shouldExpandSecurityGroup(21)).toBe(false);
   });
 });
 

@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("vscode", () => ({}));
 import {
   availableCoverageRunSpecs,
+  CoverageRunGuard,
+  coverageRunExitOutcome,
   coverageRunSpec,
   preferredCoverageRunSpec,
   preferredCoverageWorkspaceFolder,
@@ -146,6 +148,41 @@ describe("preferredCoverageWorkspaceFolder", () => {
       () => undefined
     );
     expect(selected).toBeUndefined();
+  });
+});
+
+describe("coverageRunExitOutcome", () => {
+  it("only treats an explicit zero exit code as success", () => {
+    expect(coverageRunExitOutcome(0)).toBe("success");
+    expect(coverageRunExitOutcome(1)).toBe("failed");
+    expect(coverageRunExitOutcome(-1)).toBe("failed");
+  });
+
+  it("treats a task without a process exit as cancelled", () => {
+    expect(coverageRunExitOutcome(undefined)).toBe("cancelled");
+  });
+});
+
+describe("CoverageRunGuard", () => {
+  it("rejects a concurrent run and reports the active label", () => {
+    const guard = new CoverageRunGuard();
+    const release = guard.acquire("Foundry Coverage (LCOV)");
+
+    expect(release).toBeTypeOf("function");
+    expect(guard.activeLabel).toBe("Foundry Coverage (LCOV)");
+    expect(guard.acquire("Hardhat Coverage (LCOV)")).toBeUndefined();
+  });
+
+  it("releases on cleanup and makes release idempotent", () => {
+    const guard = new CoverageRunGuard();
+    const release = guard.acquire("Foundry Coverage (LCOV)");
+    expect(release).toBeTypeOf("function");
+
+    release?.();
+    release?.();
+
+    expect(guard.activeLabel).toBeUndefined();
+    expect(guard.acquire("Hardhat Coverage (LCOV)")).toBeTypeOf("function");
   });
 });
 

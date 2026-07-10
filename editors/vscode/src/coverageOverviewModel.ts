@@ -5,6 +5,12 @@ export type CoverageOverviewFilterMode = "actionable" | "all";
 export type CoverageLineStatus = "uncovered" | "partial";
 export type CoverageArtifactFormat = "lcov" | "cobertura";
 
+export const DEFAULT_EXPANDED_COVERAGE_LINE_LIMIT = 20;
+
+export function shouldExpandCoverageFile(childCount: number): boolean {
+  return childCount <= DEFAULT_EXPANDED_COVERAGE_LINE_LIMIT;
+}
+
 export interface CoverageArtifactRecord {
   filePath: string;
   artifactPath: string;
@@ -335,8 +341,8 @@ export function summarizeCoverageArtifacts(
     files.set(record.filePath, bucket);
   }
 
-  const summaries = Array.from(files.entries())
-    .map(([filePath, bucket]): CoverageFileSummary => {
+  const summaries = Array.from(files.entries()).map(
+    ([filePath, bucket]): CoverageFileSummary => {
       const lcov = bucket.formats.get("lcov");
       const cobertura = bucket.formats.get("cobertura");
       const lineNumbers = Array.from(
@@ -415,12 +421,14 @@ export function summarizeCoverageArtifacts(
         branchesHit,
         actionableLines,
       };
-    })
-    .sort(compareCoverageFiles);
+    }
+  );
+  const uniquelyLabelledSummaries = disambiguateCoverageDisplayPaths(summaries);
+  uniquelyLabelledSummaries.sort(compareCoverageFiles);
 
   return {
     artifactCount: new Set(records.map((record) => record.artifactPath)).size,
-    files: summaries,
+    files: uniquelyLabelledSummaries,
   };
 }
 
@@ -458,7 +466,7 @@ export function summarizeCoverageOverview(
   if (!summary) {
     return {
       count: 0,
-      description: `${filterModeLabel(filterMode)} • 0 artifacts`,
+      description: `${filterModeLabel(filterMode)} • ${artifactCountLabel(0)}`,
       message:
         "No supported coverage artifacts found. Generate LCOV or Cobertura coverage and refresh.",
     };
@@ -467,7 +475,9 @@ export function summarizeCoverageOverview(
   if (summary.files.length === 0) {
     return {
       count: 0,
-      description: `${filterModeLabel(filterMode)} • ${summary.artifactCount} artifacts`,
+      description: `${filterModeLabel(filterMode)} • ${artifactCountLabel(
+        summary.artifactCount
+      )}`,
       message:
         "Coverage artifacts were found, but none mapped to Solidity source files in this workspace.",
     };
@@ -487,7 +497,7 @@ export function summarizeCoverageOverview(
     description: `${filterModeLabel(filterMode)} • ${formatPercent(
       totals.linesHit,
       totals.linesFound
-    )} lines • ${summary.artifactCount} artifacts`,
+    )} line coverage • ${artifactCountLabel(summary.artifactCount)}`,
     message:
       visibleFiles.length === 0
         ? "Coverage is fully exercised for the loaded Solidity files."
@@ -518,18 +528,26 @@ function fileDescription(summary: CoverageFileSummary): string {
     (detail) => detail.status === "partial"
   ).length;
   const parts = [
-    `${formatPercent(summary.linesHit, summary.linesFound)} lines`,
-    `${summary.linesHit}/${summary.linesFound}`,
+    `${formatPercent(summary.linesHit, summary.linesFound)} line coverage`,
+    `${summary.linesHit}/${summary.linesFound} ${
+      summary.linesFound === 1 ? "line" : "lines"
+    }`,
   ];
   if (summary.branchesFound > 0) {
     parts.push(
-      `${formatPercent(summary.branchesHit, summary.branchesFound)} branches`
+      `${formatPercent(summary.branchesHit, summary.branchesFound)} branch coverage`
     );
   }
   if (actionable > 0) {
-    parts.push(`${uncovered} uncovered`);
+    if (uncovered > 0) {
+      parts.push(
+        `${uncovered} uncovered ${uncovered === 1 ? "line" : "lines"}`
+      );
+    }
     if (partial > 0) {
-      parts.push(`${partial} partial`);
+      parts.push(
+        `${partial} partial ${partial === 1 ? "line" : "lines"}`
+      );
     }
   } else {
     parts.push("fully covered");
@@ -540,10 +558,22 @@ function fileDescription(summary: CoverageFileSummary): string {
 function lineDescription(detail: CoverageLineDetail): string {
   if (detail.status === "uncovered") {
     return detail.branchesFound > 0
-      ? `uncovered • 0 hits • ${detail.branchesHit}/${detail.branchesFound} branches`
+      ? `uncovered • 0 hits • ${branchCountFraction(detail)}`
       : "uncovered • 0 hits";
   }
-  return `partial • ${detail.hits} hits • ${detail.branchesHit}/${detail.branchesFound} branches`;
+  return `partial • ${detail.hits} ${
+    detail.hits === 1 ? "hit" : "hits"
+  } • ${branchCountFraction(detail)}`;
+}
+
+function artifactCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "artifact" : "artifacts"}`;
+}
+
+function branchCountFraction(detail: CoverageLineDetail): string {
+  return `${detail.branchesHit}/${detail.branchesFound} ${
+    detail.branchesFound === 1 ? "branch" : "branches"
+  }`;
 }
 
 function summarizeWorkspacePercentages(files: readonly CoverageFileSummary[]): {
@@ -579,12 +609,16 @@ function resolveCoverageSourcePath(
     return null;
   }
 
+  const roots = workspaceRoots.map(normalizePath);
+  const isUsableSource = (candidate: string): boolean =>
+    roots.some((root) => isPathInside(candidate, root)) && pathExists(candidate);
+
   if (path.isAbsolute(rawSourcePath)) {
-    return normalizePath(rawSourcePath);
+    const absoluteSource = normalizePath(rawSourcePath);
+    return isUsableSource(absoluteSource) ? absoluteSource : null;
   }
 
   const normalizedArtifact = normalizePath(artifactPath);
-  const roots = workspaceRoots.map(normalizePath);
   const owningRoots = roots
     .filter((root) => isPathInside(normalizedArtifact, root))
     .sort((left, right) => right.length - left.length);
@@ -616,7 +650,7 @@ function resolveCoverageSourcePath(
     : [...sourceRootCandidates, ...rootRelative, artifactRelative];
   const uniqueCandidates = Array.from(new Set(candidates.map(normalizePath)));
 
-  return uniqueCandidates.find(pathExists) ?? uniqueCandidates[0] ?? null;
+  return uniqueCandidates.find(isUsableSource) ?? null;
 }
 
 function branchCoverage(
@@ -637,15 +671,91 @@ function isPathInside(candidate: string, root: string): boolean {
   );
 }
 
-function displayPathForFile(filePath: string, workspaceRoots: readonly string[]): string {
+function displayPathForFile(
+  filePath: string,
+  workspaceRoots: readonly string[]
+): string {
   const normalized = normalizePath(filePath);
-  for (const root of workspaceRoots.map(normalizePath)) {
+  const roots = workspaceRoots
+    .map(normalizePath)
+    .sort(
+      (left, right) => right.length - left.length || left.localeCompare(right)
+    );
+  for (const root of roots) {
     const relative = path.relative(root, normalized);
     if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
       return relative;
     }
   }
   return path.basename(normalized);
+}
+
+function disambiguateCoverageDisplayPaths(
+  summaries: readonly CoverageFileSummary[]
+): CoverageFileSummary[] {
+  const displayPathCounts = new Map<string, number>();
+  for (const summary of summaries) {
+    const key = normalizeDisplayPath(summary.displayPath);
+    displayPathCounts.set(key, (displayPathCounts.get(key) ?? 0) + 1);
+  }
+
+  const uniquePathLabels = shortestUniquePathLabels(
+    summaries.map((summary) => summary.filePath)
+  );
+  return summaries.map((summary) => {
+    const key = normalizeDisplayPath(summary.displayPath);
+    if ((displayPathCounts.get(key) ?? 0) <= 1) {
+      return summary;
+    }
+    return {
+      ...summary,
+      displayPath: uniquePathLabels.get(summary.filePath) ?? summary.displayPath,
+    };
+  });
+}
+
+function shortestUniquePathLabels(paths: readonly string[]): Map<string, string> {
+  const entries = paths.map((filePath) => ({
+    filePath,
+    parts: normalizePath(filePath).split(/[\\/]+/u).filter(Boolean),
+  }));
+  const labels = new Map<string, string>();
+
+  for (const entry of entries) {
+    for (let depth = 1; depth <= entry.parts.length; depth += 1) {
+      const suffix = entry.parts.slice(-depth);
+      if (
+        entries.every(
+          (other) =>
+            other.filePath === entry.filePath ||
+            !hasPathSuffix(other.parts, suffix)
+        )
+      ) {
+        labels.set(entry.filePath, suffix.join("/"));
+        break;
+      }
+    }
+    if (!labels.has(entry.filePath)) {
+      labels.set(entry.filePath, normalizeDisplayPath(entry.filePath));
+    }
+  }
+
+  return labels;
+}
+
+function hasPathSuffix(
+  parts: readonly string[],
+  suffix: readonly string[]
+): boolean {
+  if (suffix.length > parts.length) {
+    return false;
+  }
+  const offset = parts.length - suffix.length;
+  return suffix.every((part, index) => parts[offset + index] === part);
+}
+
+function normalizeDisplayPath(value: string): string {
+  return value.replace(/\\/gu, "/");
 }
 
 function normalizePath(value: string): string {
