@@ -174,17 +174,32 @@ pub fn hover_for_symbol(
         }
     }
 
-    // 2c. Try Solidity global function (keccak256, require, etc.)
+    // 2c. Try unqualified inherited members from base contracts/interfaces.
+    if let Some(tbl) = &table {
+        if let Some(cross) = definition::resolve_inherited_member_symbol(
+            source, offset, &name, uri, tbl, get_source, resolver,
+        ) {
+            let hover_range = convert::span_to_range(source, &ident_range);
+            return Some(hover_for_cross_file_symbol(
+                &cross.source,
+                &cross.def,
+                &cross.table,
+                hover_range,
+            ));
+        }
+    }
+
+    // 2d. Try Solidity global function (keccak256, require, etc.)
     if let Some(builtin) = builtins::lookup_solidity_global(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
 
-    // 2d. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
+    // 2e. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
     if let Some(builtin) = builtins::lookup_solidity_namespace(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
 
-    // 2e. Try Yul built-in (only inside assembly blocks)
+    // 2f. Try Yul built-in (only inside assembly blocks)
     if is_inside_assembly(source, offset) {
         if let Some(builtin) = builtins::lookup_yul_builtin(&name) {
             return Some(make_builtin_hover(builtin, source, &ident_range));
@@ -2084,6 +2099,69 @@ contract Vault {
         assert!(
             val.contains("Thrown when the balance is insufficient"),
             "should show NatSpec, got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_inherited_interface_error_natspec() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let interface_path = dir.path().join("IRentPriceOracle.sol");
+        let interface_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IRentPriceOracle {
+    /// @notice Thrown when the rent label is not valid.
+    /// @param label The invalid rent label
+    error NotValid(string label);
+}
+"#;
+        std::fs::write(&interface_path, interface_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {IRentPriceOracle} from "./IRentPriceOracle.sol";
+
+contract StandardRentPriceOracle is IRentPriceOracle {
+    function fail(string calldata label) external {
+        revert NotValid(label);
+    }
+}
+"#;
+        let main_path = dir.path().join("StandardRentPriceOracle.sol");
+        std::fs::write(&main_path, main_source).unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source =
+            |path: &std::path::Path| -> Option<String> { std::fs::read_to_string(path).ok() };
+
+        let offset = main_source.find("revert NotValid").unwrap() + 7;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let hover = hover_for_symbol(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            hover.is_some(),
+            "should resolve inherited interface error hover"
+        );
+
+        let val = match hover.unwrap().contents {
+            ls_types::HoverContents::Markup(m) => m.value,
+            _ => panic!("expected markup"),
+        };
+
+        assert!(
+            val.contains("error NotValid(string label)"),
+            "should show inherited error signature, got: {val}"
+        );
+        assert!(
+            val.contains("Thrown when the rent label is not valid"),
+            "should show inherited error NatSpec, got: {val}"
+        );
+        assert!(
+            val.contains("The invalid rent label"),
+            "should show inherited error param NatSpec, got: {val}"
         );
     }
 

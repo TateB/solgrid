@@ -72,6 +72,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code graph previews to make trackpad pinch zoom more responsive, lay out branch paths as distinct lanes, attach branch labels directly to graph edges, hide synthetic terminal-to-exit edges, and move source actions into graph nodes
 - Fixed VS Code reference CodeLens actions by wiring `solgrid.showReferences` to the native references peek command and suppressing transient `0 references` counts while the workspace index is warming
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH
+- Fixed LSP compiler-style member diagnostics to resolve modifiers, custom errors, and events inherited from imported base contracts/interfaces
+- Fixed hover and go-to-definition for inherited contract/interface members such as custom errors used from derived contracts
 
 ## [0.0.16] - 2026-05-06
 

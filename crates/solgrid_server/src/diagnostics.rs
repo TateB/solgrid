@@ -194,6 +194,17 @@ struct CompilerDiagnosticContext<'a> {
     seen: HashSet<(String, usize, usize)>,
     semantic_files: HashMap<PathBuf, FileSemanticInfo>,
     function_summaries: HashMap<CallableTargetKey, FunctionSinkSummary>,
+    current_contracts: Vec<String>,
+}
+
+fn ast_path_to_type_path(path: &solar_ast::AstPath<'_>) -> TypePath {
+    TypePath {
+        segments: path
+            .segments()
+            .iter()
+            .map(|segment| segment.as_str().to_string())
+            .collect(),
+    }
 }
 
 impl<'a> CompilerDiagnosticContext<'a> {
@@ -212,6 +223,7 @@ impl<'a> CompilerDiagnosticContext<'a> {
             seen: HashSet::new(),
             semantic_files,
             function_summaries,
+            current_contracts: Vec::new(),
         }
     }
 
@@ -274,9 +286,12 @@ impl<'a> CompilerDiagnosticContext<'a> {
                     }
                 }
 
+                self.current_contracts
+                    .push(contract.name.as_str().to_string());
                 for body_item in contract.body.iter() {
                     self.visit_item(body_item);
                 }
+                self.current_contracts.pop();
             }
             ItemKind::Function(function) => {
                 for parameter in function.header.parameters.iter() {
@@ -288,7 +303,7 @@ impl<'a> CompilerDiagnosticContext<'a> {
                 for modifier in function.header.modifiers.iter() {
                     let modifier_name = modifier.name.to_string();
                     let modifier_span = solgrid_ast::span_to_range(modifier.name.span());
-                    if !self.resolve_ast_path(&modifier.name, modifier_span.start) {
+                    if !self.resolve_modifier_path(&modifier.name, modifier_span.start) {
                         self.push(
                             "compiler/unresolved-modifier",
                             "Unresolved modifier",
@@ -461,7 +476,7 @@ impl<'a> CompilerDiagnosticContext<'a> {
             StmtKind::Emit(path, args) => {
                 let event_name = path.to_string();
                 let event_span = solgrid_ast::span_to_range(path.span());
-                if !self.resolve_ast_path(path, event_span.start) {
+                if !self.resolve_member_path(path, event_span.start, &[SymbolKind::Event]) {
                     self.push(
                         "compiler/unresolved-event",
                         "Unresolved event",
@@ -476,7 +491,9 @@ impl<'a> CompilerDiagnosticContext<'a> {
             StmtKind::Revert(path, args) => {
                 let error_name = path.to_string();
                 let error_span = solgrid_ast::span_to_range(path.span());
-                if !is_builtin_error_path(path) && !self.resolve_ast_path(path, error_span.start) {
+                if !is_builtin_error_path(path)
+                    && !self.resolve_member_path(path, error_span.start, &[SymbolKind::Error])
+                {
                     self.push(
                         "compiler/unresolved-error",
                         "Unresolved error",
@@ -660,14 +677,103 @@ impl<'a> CompilerDiagnosticContext<'a> {
     }
 
     fn resolve_ast_path(&self, path: &solar_ast::AstPath<'_>, resolve_offset: usize) -> bool {
-        let path = TypePath {
-            segments: path
-                .segments()
-                .iter()
-                .map(|segment| segment.as_str().to_string())
-                .collect(),
-        };
+        let path = ast_path_to_type_path(path);
         self.resolve_path(&path, resolve_offset)
+    }
+
+    fn resolve_modifier_path(&self, path: &solar_ast::AstPath<'_>, resolve_offset: usize) -> bool {
+        self.resolve_member_path(path, resolve_offset, &[SymbolKind::Modifier])
+    }
+
+    fn resolve_member_path(
+        &self,
+        path: &solar_ast::AstPath<'_>,
+        resolve_offset: usize,
+        accepted_kinds: &[SymbolKind],
+    ) -> bool {
+        let path = ast_path_to_type_path(path);
+        self.resolve_path(&path, resolve_offset)
+            || self.resolve_inherited_member_path(&path, accepted_kinds)
+    }
+
+    fn resolve_inherited_member_path(
+        &self,
+        path: &TypePath,
+        accepted_kinds: &[SymbolKind],
+    ) -> bool {
+        let [member_name] = path.segments.as_slice() else {
+            return false;
+        };
+        let Some(contract_name) = self.current_contracts.last() else {
+            return false;
+        };
+        let Some(file) = self.semantic_files.get(&self.snapshot.path) else {
+            return false;
+        };
+        let context = SinkSummaryContext {
+            semantic_files: &self.semantic_files,
+            resolver: self.resolver,
+            get_source: self.get_source,
+        };
+        let mut visited = HashSet::new();
+        self.contract_hierarchy_declares_member(
+            file,
+            contract_name,
+            member_name,
+            accepted_kinds,
+            &context,
+            &mut visited,
+        )
+    }
+
+    fn contract_hierarchy_declares_member(
+        &self,
+        file: &FileSemanticInfo,
+        contract_name: &str,
+        member_name: &str,
+        accepted_kinds: &[SymbolKind],
+        context: &SinkSummaryContext<'_>,
+        visited: &mut HashSet<(PathBuf, String)>,
+    ) -> bool {
+        if !visited.insert((file.path.clone(), contract_name.to_string())) {
+            return false;
+        }
+
+        if let Some(contract_def) = file.table.resolve(contract_name, 0) {
+            if file
+                .table
+                .resolve_member_all(contract_def, member_name)
+                .into_iter()
+                .any(|def| accepted_kinds.contains(&def.kind))
+            {
+                return true;
+            }
+        }
+
+        let Some(contract) = file.contracts.get(contract_name) else {
+            return false;
+        };
+        for base in &contract.bases {
+            let Some((base_path, base_name)) = resolve_contract_path_target(file, base, context)
+            else {
+                continue;
+            };
+            let Some(base_file) = self.semantic_files.get(&base_path) else {
+                continue;
+            };
+            if self.contract_hierarchy_declares_member(
+                base_file,
+                &base_name,
+                member_name,
+                accepted_kinds,
+                context,
+                visited,
+            ) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn resolve_path(&self, path: &TypePath, resolve_offset: usize) -> bool {
@@ -3222,6 +3328,91 @@ contract Main {
                     "compiler/unresolved-type".into(),
                 ))
         }));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_imported_inherited_modifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("Base.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &base,
+            r#"pragma solidity ^0.8.0;
+contract Base {
+    modifier onlyRootRoles(uint256 roleBitmap) {
+        _;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let source = r#"pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Main is Base {
+    function update() external onlyRootRoles(1) {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&base, &std::fs::read_to_string(&base).unwrap());
+
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic.code
+                    == Some(ls_types::NumberOrString::String(
+                        "compiler/unresolved-modifier".into(),
+                    ))
+            }),
+            "got diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_imported_inherited_error_and_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let interface = dir.path().join("ErrorsAndEvents.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &interface,
+            r#"pragma solidity ^0.8.0;
+interface ErrorsAndEvents {
+    error NotValid(string label);
+    event Checked(address indexed account);
+}
+"#,
+        )
+        .unwrap();
+
+        let source = r#"pragma solidity ^0.8.0;
+import {ErrorsAndEvents} from "./ErrorsAndEvents.sol";
+contract Main is ErrorsAndEvents {
+    function check(string calldata label) external {
+        emit Checked(msg.sender);
+        revert NotValid(label);
+    }
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&interface, &std::fs::read_to_string(&interface).unwrap());
+
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+
+        for code in ["compiler/unresolved-error", "compiler/unresolved-event"] {
+            assert!(
+                !diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code == Some(ls_types::NumberOrString::String(code.into()))
+                }),
+                "got diagnostics for {code}: {diagnostics:?}"
+            );
+        }
     }
 
     #[test]

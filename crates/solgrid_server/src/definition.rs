@@ -2,7 +2,9 @@
 
 use crate::convert;
 use crate::resolve::ImportResolver;
-use crate::symbols::{self, ImportedSymbols, SymbolDef, SymbolTable};
+use crate::symbols::{self, ImportedSymbols, SymbolDef, SymbolKind, SymbolTable, TypePath};
+use solgrid_parser::solar_ast::{self, ItemKind};
+use solgrid_parser::with_parsed_ast_sequential;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
@@ -140,6 +142,19 @@ pub fn goto_definition(
         ));
     }
 
+    if let Some(cross) =
+        resolve_inherited_member_symbol(source, offset, &name, uri, &table, get_source, resolver)
+    {
+        let range = convert::span_to_range(&cross.source, &cross.def.name_span);
+        let target_uri = path_to_uri(&cross.resolved_path)?;
+        return Some(ls_types::GotoDefinitionResponse::Scalar(
+            ls_types::Location {
+                uri: target_uri,
+                range,
+            },
+        ));
+    }
+
     None
 }
 
@@ -171,6 +186,223 @@ fn resolve_cross_file_member(
             range,
         },
     ))
+}
+
+#[derive(Clone)]
+struct ResolvedContainer {
+    source: String,
+    table: SymbolTable,
+    def: SymbolDef,
+    path: PathBuf,
+}
+
+/// Resolve an unqualified member through the containing contract's base chain.
+///
+/// Solidity makes inherited members from base contracts/interfaces available
+/// inside the derived contract body without qualification, including custom
+/// errors, events, modifiers, functions, and state variables. This helper
+/// returns the concrete definition so LSP features can share the same lookup.
+pub(crate) fn resolve_inherited_member_symbol(
+    source: &str,
+    offset: usize,
+    member_name: &str,
+    uri: &ls_types::Uri,
+    table: &SymbolTable,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<CrossFileSymbol> {
+    let current_path = uri_to_path(uri)?;
+    let filename = current_path.to_string_lossy().to_string();
+    let bases = contract_bases_containing_offset(source, &filename, offset)?;
+    let current = ResolvedContainer {
+        source: source.to_string(),
+        table: table.clone(),
+        def: SymbolDef {
+            name: String::new(),
+            kind: SymbolKind::Contract,
+            name_span: 0..0,
+            def_span: 0..source.len(),
+            scope: None,
+            type_info: None,
+            signature: None,
+            visibility: None,
+        },
+        path: current_path,
+    };
+    let mut visited = HashSet::new();
+    let resolved = resolve_inherited_member_from_bases(
+        &current,
+        &bases,
+        member_name,
+        get_source,
+        resolver,
+        &mut visited,
+    )?;
+    Some(CrossFileSymbol {
+        source: resolved.source,
+        table: resolved.table,
+        def: resolved.def,
+        resolved_path: resolved.path,
+    })
+}
+
+fn resolve_inherited_member_from_bases(
+    current: &ResolvedContainer,
+    bases: &[TypePath],
+    member_name: &str,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    visited: &mut HashSet<(PathBuf, usize)>,
+) -> Option<ResolvedContainer> {
+    for base in bases {
+        let Some(container) = resolve_container_path(current, base, get_source, resolver) else {
+            continue;
+        };
+        if !visited.insert((container.path.clone(), container.def.name_span.start)) {
+            continue;
+        }
+
+        if let Some(member_def) = container.table.resolve_member(&container.def, member_name) {
+            return Some(ResolvedContainer {
+                source: container.source.clone(),
+                table: container.table.clone(),
+                def: member_def.clone(),
+                path: container.path.clone(),
+            });
+        }
+
+        let filename = container.path.to_string_lossy().to_string();
+        let base_bases = contract_bases_for_def(&container.source, &filename, &container.def);
+        if let Some(resolved) = resolve_inherited_member_from_bases(
+            &container,
+            &base_bases,
+            member_name,
+            get_source,
+            resolver,
+            visited,
+        ) {
+            return Some(resolved);
+        }
+    }
+
+    None
+}
+
+fn resolve_container_path(
+    current: &ResolvedContainer,
+    path: &TypePath,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<ResolvedContainer> {
+    match path.segments.as_slice() {
+        [] => None,
+        [name] => {
+            if let Some(def) = current.table.resolve(name, 0) {
+                if is_contract_container_symbol(def.kind) {
+                    return Some(ResolvedContainer {
+                        source: current.source.clone(),
+                        table: current.table.clone(),
+                        def: def.clone(),
+                        path: current.path.clone(),
+                    });
+                }
+            }
+
+            let cross = resolve_cross_file_symbol(
+                &current.table,
+                name,
+                &current.path,
+                get_source,
+                resolver,
+            )?;
+            is_contract_container_symbol(cross.def.kind).then_some(ResolvedContainer {
+                source: cross.source,
+                table: cross.table,
+                def: cross.def,
+                path: cross.resolved_path,
+            })
+        }
+        [namespace, member, ..] => {
+            let cross = resolve_cross_file_member_symbol(
+                &current.table,
+                namespace,
+                member,
+                &current.path,
+                get_source,
+                resolver,
+            )?;
+            is_contract_container_symbol(cross.def.kind).then_some(ResolvedContainer {
+                source: cross.source,
+                table: cross.table,
+                def: cross.def,
+                path: cross.resolved_path,
+            })
+        }
+    }
+}
+
+fn contract_bases_containing_offset(
+    source: &str,
+    filename: &str,
+    offset: usize,
+) -> Option<Vec<TypePath>> {
+    with_parsed_ast_sequential(source, filename, |source_unit| {
+        for item in source_unit.items.iter() {
+            let ItemKind::Contract(contract) = &item.kind else {
+                continue;
+            };
+            let item_span = solgrid_ast::span_to_range(item.span);
+            if item_span.contains(&offset) {
+                return Some(ast_bases_to_type_paths(contract.bases.iter()));
+            }
+        }
+        None
+    })
+    .ok()
+    .flatten()
+}
+
+fn contract_bases_for_def(source: &str, filename: &str, def: &SymbolDef) -> Vec<TypePath> {
+    with_parsed_ast_sequential(source, filename, |source_unit| {
+        for item in source_unit.items.iter() {
+            let ItemKind::Contract(contract) = &item.kind else {
+                continue;
+            };
+            if solgrid_ast::span_to_range(contract.name.span) == def.name_span {
+                return ast_bases_to_type_paths(contract.bases.iter());
+            }
+        }
+        Vec::new()
+    })
+    .unwrap_or_default()
+}
+
+fn ast_bases_to_type_paths<'iter, 'ast>(
+    bases: impl Iterator<Item = &'iter solar_ast::Modifier<'ast>>,
+) -> Vec<TypePath>
+where
+    'ast: 'iter,
+{
+    bases
+        .map(|base| ast_path_to_type_path(&base.name))
+        .collect()
+}
+
+fn ast_path_to_type_path(path: &solar_ast::AstPath<'_>) -> TypePath {
+    TypePath {
+        segments: path
+            .segments()
+            .iter()
+            .map(|segment| segment.as_str().to_string())
+            .collect(),
+    }
+}
+
+fn is_contract_container_symbol(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+    )
 }
 
 /// Resolve a symbol name by searching the current file's imports.
@@ -804,6 +1036,58 @@ contract Test {
                 ls_types::Uri::from_file_path(errors_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_goto_definition_inherited_interface_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let interface_path = dir.path().join("IRentPriceOracle.sol");
+        let interface_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IRentPriceOracle {
+    error NotValid(string label);
+}
+"#;
+        fs::write(&interface_path, interface_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {IRentPriceOracle} from "./IRentPriceOracle.sol";
+
+contract StandardRentPriceOracle is IRentPriceOracle {
+    function fail(string calldata label) external {
+        revert NotValid(label);
+    }
+}
+"#;
+        let main_path = dir.path().join("StandardRentPriceOracle.sol");
+        fs::write(&main_path, main_source).unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        let offset = main_source.find("revert NotValid").unwrap() + 7;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "should resolve inherited interface error in revert"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            let expected_uri =
+                ls_types::Uri::from_file_path(interface_path.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            let name_offset = interface_source.find("error NotValid").unwrap() + 6;
+            let expected_pos = convert::offset_to_position(interface_source, name_offset);
+            assert_eq!(loc.range.start, expected_pos);
         } else {
             panic!("expected scalar response");
         }
