@@ -4,7 +4,6 @@ import { CoverageExtensionConfig } from "./config";
 
 export type CoverageRunKind =
   | "foundry-lcov"
-  | "foundry-cobertura"
   | "hardhat-lcov"
   | "custom";
 
@@ -26,6 +25,49 @@ export interface CoverageProviderAvailability {
   hasCustomCommand: boolean;
 }
 
+export class TaskCompletionArbiter {
+  private fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  private settled = false;
+
+  constructor(
+    private readonly settle: (exitCode: number | undefined) => void,
+    private readonly fallbackDelayMs = 250
+  ) {}
+
+  processEnded(exitCode: number | undefined): void {
+    if (this.settled) {
+      return;
+    }
+    this.settled = true;
+    this.clearFallback();
+    this.settle(exitCode);
+  }
+
+  taskEnded(): void {
+    if (this.settled || this.fallbackTimer) {
+      return;
+    }
+    // ProcessExecution normally emits onDidEndTaskProcess. Delay the generic
+    // task-end fallback so a non-zero process exit cannot be masked by ordering.
+    this.fallbackTimer = setTimeout(
+      () => this.processEnded(undefined),
+      this.fallbackDelayMs
+    );
+  }
+
+  dispose(): void {
+    this.settled = true;
+    this.clearFallback();
+  }
+
+  private clearFallback(): void {
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = undefined;
+    }
+  }
+}
+
 export function coverageRunSpec(
   kind: CoverageRunKind,
   config: CoverageExtensionConfig
@@ -38,19 +80,12 @@ export function coverageRunSpec(
         command: "forge",
         args: ["coverage", "--report", "lcov"],
       };
-    case "foundry-cobertura":
-      return {
-        kind,
-        label: "Foundry Coverage (Cobertura)",
-        command: "forge",
-        args: ["coverage", "--report", "cobertura"],
-      };
     case "hardhat-lcov":
       return {
         kind,
         label: "Hardhat Coverage (LCOV)",
         command: "npx",
-        args: ["hardhat", "coverage"],
+        args: ["--no-install", "hardhat", "coverage"],
       };
     case "custom": {
       const [command, ...args] = config.customCommand;
@@ -74,7 +109,6 @@ export function availableCoverageRunSpecs(
   const specs: CoverageRunSpec[] = [];
   if (availability.hasFoundry) {
     specs.push(coverageRunSpec("foundry-lcov", config)!);
-    specs.push(coverageRunSpec("foundry-cobertura", config)!);
   }
   if (availability.hasHardhat) {
     specs.push(coverageRunSpec("hardhat-lcov", config)!);
@@ -286,8 +320,7 @@ async function runCoverageSpec(
     focus: false,
   };
 
-  const execution = await vscode.tasks.executeTask(task);
-  const pending = waitForTaskExecution(execution).then(async (exitCode) => {
+  const pending = executeAndWaitForTask(task).then(async (exitCode) => {
     if (exitCode === 0 || exitCode === undefined) {
       if (config.autoRefreshAfterRun) {
         await refreshCoverage();
@@ -303,10 +336,9 @@ async function runCoverageSpec(
   await pending;
 }
 
-function waitForTaskExecution(
-  execution: vscode.TaskExecution
-): Promise<number | undefined> {
-  return new Promise((resolve) => {
+function executeAndWaitForTask(task: vscode.Task): Promise<number | undefined> {
+  return new Promise((resolve, reject) => {
+    let execution: vscode.TaskExecution | undefined;
     let settled = false;
     const disposables: vscode.Disposable[] = [];
 
@@ -320,18 +352,38 @@ function waitForTaskExecution(
       }
       resolve(exitCode);
     };
+    const arbiter = new TaskCompletionArbiter(settle);
 
     disposables.push(
       vscode.tasks.onDidEndTaskProcess((event) => {
-        if (event.execution === execution) {
-          settle(event.exitCode);
+        if (
+          event.execution === execution ||
+          event.execution.task === task
+        ) {
+          arbiter.processEnded(event.exitCode);
         }
       }),
       vscode.tasks.onDidEndTask((event) => {
-        if (event.execution === execution) {
-          settle(undefined);
+        if (
+          event.execution === execution ||
+          event.execution.task === task
+        ) {
+          arbiter.taskEnded();
         }
       })
+    );
+
+    void vscode.tasks.executeTask(task).then(
+      (startedExecution) => {
+        execution = startedExecution;
+      },
+      (error) => {
+        arbiter.dispose();
+        for (const disposable of disposables) {
+          disposable.dispose();
+        }
+        reject(error);
+      }
     );
   });
 }

@@ -12,6 +12,9 @@ import {
   workspace,
 } from "vscode";
 import {
+  type CodeAction as ProtocolCodeAction,
+  type CodeActionParams,
+  type Command as ProtocolCommand,
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
@@ -39,6 +42,7 @@ import {
   previewFindingFix,
   SecurityOverviewNode,
   SecurityOverviewProvider,
+  setSecurityCodeActionResolver,
   suppressGroupNextLine,
   suppressFindingNextLine,
 } from "./securityOverview";
@@ -85,6 +89,100 @@ export async function activate(context: ExtensionContext): Promise<void> {
   let coverageConfig = readCoverageConfig();
   const editorSaveConfig = readEditorSaveConfig();
 
+  const coverageOverview = new CoverageOverviewFeature();
+  const coverageOverviewView = window.createTreeView<CoverageOverviewNode>(
+    "solgridCoverageOverview",
+    {
+      treeDataProvider: coverageOverview,
+      showCollapseAll: true,
+    }
+  );
+  coverageOverview.attachView(coverageOverviewView);
+  applyCoverageConfig(coverageOverview, coverageConfig);
+  context.subscriptions.push(
+    coverageOverview,
+    coverageOverviewView,
+    commands.registerCommand("solgrid.coverage.refresh", () =>
+      coverageOverview.refresh()
+    ),
+    commands.registerCommand("solgrid.coverage.run", () =>
+      runPreferredCoverageCommand(coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runFoundryLcov", () =>
+      runCoverageCommand("foundry-lcov", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runHardhatLcov", () =>
+      runCoverageCommand("hardhat-lcov", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runCustom", () =>
+      runCoverageCommand("custom", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.showActionable", () =>
+      coverageOverview.setFilterMode("actionable")
+    ),
+    commands.registerCommand("solgrid.coverage.showAll", () =>
+      coverageOverview.setFilterMode("all")
+    ),
+    commands.registerCommand("solgrid.coverage.openNode", (node) =>
+      coverageOverview.openNode(node)
+    ),
+    commands.registerCommand("_solgrid.test.getCoverageOverviewSnapshot", async () =>
+      snapshotCoverageOverview(coverageOverview)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.findCoverageOverviewNode",
+      async (criteria) => findCoverageOverviewNode(coverageOverview, criteria)
+    ),
+    workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("solgrid.coverage")) {
+        return;
+      }
+      coverageConfig = readCoverageConfig();
+      applyCoverageConfig(coverageOverview, coverageConfig);
+    })
+  );
+
+  const activatedWithLanguageServer = solgridConfig.enable;
+  await commands.executeCommand(
+    "setContext",
+    "solgrid.languageServerActive",
+    activatedWithLanguageServer
+  );
+  let enableReloadPromptOpen = false;
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration(async (event) => {
+      if (
+        !event.affectsConfiguration("solgrid.enable") ||
+        readVSCodeConfig().enable === activatedWithLanguageServer ||
+        enableReloadPromptOpen
+      ) {
+        return;
+      }
+      enableReloadPromptOpen = true;
+      try {
+        const action = await window.showInformationMessage(
+          activatedWithLanguageServer
+            ? "Reload VS Code to stop the solgrid language server."
+            : "Reload VS Code to start the solgrid language server.",
+          "Reload Window"
+        );
+        if (action === "Reload Window") {
+          await commands.executeCommand("workbench.action.reloadWindow");
+        }
+      } finally {
+        enableReloadPromptOpen = false;
+      }
+    })
+  );
+
   if (!solgridConfig.enable) {
     return;
   }
@@ -118,18 +216,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
   securityOverview.attachView(securityOverviewView);
   context.subscriptions.push(securityOverviewView);
 
-  const coverageOverview = new CoverageOverviewFeature();
-  const coverageOverviewView = window.createTreeView<CoverageOverviewNode>(
-    "solgridCoverageOverview",
-    {
-      treeDataProvider: coverageOverview,
-      showCollapseAll: true,
-    }
-  );
-  coverageOverview.attachView(coverageOverviewView);
-  await coverageOverview.applyConfig(coverageConfig);
-  context.subscriptions.push(coverageOverview, coverageOverviewView);
-
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "solidity" }],
     synchronize: {
@@ -138,6 +224,25 @@ export async function activate(context: ExtensionContext): Promise<void> {
     },
     initializationOptions: getInitializationOptions(solgridConfig, editorSaveConfig),
     middleware: {
+      provideDocumentFormattingEdits: (document, options, token, next) =>
+        next(
+          document,
+          options ?? fallbackFormattingOptions(document.uri),
+          token
+        ),
+      provideDocumentRangeFormattingEdits: (
+        document,
+        range,
+        options,
+        token,
+        next
+      ) =>
+        next(
+          document,
+          range,
+          options ?? fallbackFormattingOptions(document.uri),
+          token
+        ),
       workspace: {
         configuration: async (params, token, next) => {
           const result = await next(params, token);
@@ -153,6 +258,54 @@ export async function activate(context: ExtensionContext): Promise<void> {
     serverOptions,
     clientOptions
   );
+
+  setSecurityCodeActionResolver(async (finding) => {
+    if (!client) {
+      return [];
+    }
+    const uri = Uri.parse(finding.uri);
+    const range = new Range(
+      new Position(finding.range.start.line, finding.range.start.character),
+      new Position(finding.range.end.line, finding.range.end.character)
+    );
+    const diagnostic = languages.getDiagnostics(uri).find((candidate) => {
+      const code =
+        typeof candidate.code === "object" && candidate.code !== null
+          ? candidate.code.value
+          : candidate.code;
+      return (
+        candidate.source === finding.source &&
+        String(code) === finding.code &&
+        candidate.range.isEqual(range)
+      );
+    });
+    if (!diagnostic) {
+      return [];
+    }
+
+    const params: CodeActionParams = {
+      textDocument: { uri: finding.uri },
+      range: client.code2ProtocolConverter.asRange(range),
+      context: {
+        diagnostics: [client.code2ProtocolConverter.asDiagnostic(diagnostic)],
+        only: ["quickfix"],
+        triggerKind: 1,
+      },
+    };
+    try {
+      const protocolActions = await client.sendRequest<
+        Array<ProtocolCodeAction | ProtocolCommand> | null
+      >(
+        "textDocument/codeAction",
+        params
+      );
+      return protocolActions
+        ? await client.protocol2CodeConverter.asCodeActionResult(protocolActions)
+        : [];
+    } catch {
+      return [];
+    }
+  });
 
   client.outputChannel.appendLine(`Using solgrid binary: ${serverPath}`);
 
@@ -233,43 +386,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand("_solgrid.test.getGraphPreviewSnapshot", () =>
       getGraphPreviewSnapshot()
     ),
-    commands.registerCommand("solgrid.coverage.refresh", () =>
-      coverageOverview.refresh()
-    ),
-    commands.registerCommand("solgrid.coverage.run", () =>
-      runPreferredCoverageCommand(coverageConfig, () =>
-        coverageOverview.refresh()
-      )
-    ),
-    commands.registerCommand("solgrid.coverage.runFoundryLcov", () =>
-      runCoverageCommand("foundry-lcov", coverageConfig, () =>
-        coverageOverview.refresh()
-      )
-    ),
-    commands.registerCommand("solgrid.coverage.runFoundryCobertura", () =>
-      runCoverageCommand("foundry-cobertura", coverageConfig, () =>
-        coverageOverview.refresh()
-      )
-    ),
-    commands.registerCommand("solgrid.coverage.runHardhatLcov", () =>
-      runCoverageCommand("hardhat-lcov", coverageConfig, () =>
-        coverageOverview.refresh()
-      )
-    ),
-    commands.registerCommand("solgrid.coverage.runCustom", () =>
-      runCoverageCommand("custom", coverageConfig, () =>
-        coverageOverview.refresh()
-      )
-    ),
-    commands.registerCommand("solgrid.coverage.showActionable", () =>
-      coverageOverview.setFilterMode("actionable")
-    ),
-    commands.registerCommand("solgrid.coverage.showAll", () =>
-      coverageOverview.setFilterMode("all")
-    ),
-    commands.registerCommand("solgrid.coverage.openNode", (node) =>
-      coverageOverview.openNode(node)
-    ),
     commands.registerCommand("_solgrid.test.getSecurityOverviewSnapshot", async () =>
       snapshotSecurityOverview(securityOverview)
     ),
@@ -321,13 +437,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
       "_solgrid.test.applySecurityOverviewFix",
       applyFindingFixForTests
     ),
-    commands.registerCommand("_solgrid.test.getCoverageOverviewSnapshot", async () =>
-      snapshotCoverageOverview(coverageOverview)
-    ),
-    commands.registerCommand(
-      "_solgrid.test.findCoverageOverviewNode",
-      async (criteria) => findCoverageOverviewNode(coverageOverview, criteria)
-    ),
     commands.registerCommand("solgrid.securityOverview.ignoreFinding", (node) =>
       securityOverview.ignoreFinding(node)
     ),
@@ -365,24 +474,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
         e.affectsConfiguration("[solidity]")
       ) {
         const newConfig = readVSCodeConfig();
-        const newCoverageConfig = readCoverageConfig();
         const newEditorSaveConfig = readEditorSaveConfig();
-        coverageConfig = newCoverageConfig;
-        void coverageOverview.applyConfig(newCoverageConfig);
         client?.sendNotification("workspace/didChangeConfiguration", {
           settings: getSettings(newConfig, newEditorSaveConfig),
         });
       }
-    })
-  );
-
-  // Register willSaveTextDocument for fix-on-save and format-on-save
-  context.subscriptions.push(
-    workspace.onWillSaveTextDocument((e) => {
-      if (e.document.languageId !== "solidity") {
-        return;
-      }
-      // The LSP server handles willSaveWaitUntil for fix-on-save + format-on-save
     })
   );
 
@@ -397,6 +493,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+  setSecurityCodeActionResolver(undefined);
+  await commands.executeCommand(
+    "setContext",
+    "solgrid.languageServerActive",
+    false
+  );
   if (client) {
     await client.stop();
     client = undefined;
@@ -509,11 +611,18 @@ function formatDuration(milliseconds: number): string {
  */
 function readVSCodeConfig(): SolgridConfig {
   const config = workspace.getConfiguration("solgrid");
+  const unsafeFixes = config.inspect<boolean>("unsafeFixesOnSave");
+  const explicitlyConfiguredUnsafeFixes =
+    unsafeFixes?.workspaceFolderValue ??
+    unsafeFixes?.workspaceValue ??
+    unsafeFixes?.globalValue;
   return {
     enable: config.get<boolean>("enable", true),
     path: config.get<string | null>("path", null),
     fixOnSave: config.get<boolean>("fixOnSave", true),
-    fixOnSaveUnsafe: config.get<boolean>("fixOnSave.unsafeFixes", false),
+    fixOnSaveUnsafe:
+      explicitlyConfiguredUnsafeFixes ??
+      config.get<boolean>("fixOnSave.unsafeFixes", false),
     formatOnSave: config.get<boolean>("formatOnSave", true),
     configPath: config.get<string | null>("configPath", null),
   };
@@ -541,6 +650,15 @@ function readCoverageConfig(): CoverageExtensionConfig {
   };
 }
 
+function applyCoverageConfig(
+  coverageOverview: CoverageOverviewFeature,
+  coverageConfig: CoverageExtensionConfig
+): void {
+  void coverageOverview.applyConfig(coverageConfig).catch((error) => {
+    console.error("[solgrid] Failed to load coverage artifacts:", error);
+  });
+}
+
 function readEditorSaveConfig(): EditorSaveConfig {
   const editorConfig = workspace.getConfiguration("editor");
   const solidityOverrides =
@@ -559,6 +677,17 @@ function readEditorSaveConfig(): EditorSaveConfig {
   return {
     formatOnSave,
     defaultFormatter,
+  };
+}
+
+function fallbackFormattingOptions(uri: Uri): {
+  tabSize: number;
+  insertSpaces: boolean;
+} {
+  const editorConfig = workspace.getConfiguration("editor", uri);
+  return {
+    tabSize: editorConfig.get<number>("tabSize", 4),
+    insertSpaces: editorConfig.get<boolean>("insertSpaces", true),
   };
 }
 

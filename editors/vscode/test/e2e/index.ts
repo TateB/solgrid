@@ -10,7 +10,12 @@ import * as path from "path";
 import Mocha from "mocha";
 
 export function run(): Promise<void> {
-  const mocha = new Mocha({ ui: "bdd", color: true, timeout: 60000 });
+  const mocha = new Mocha({
+    ui: "bdd",
+    color: true,
+    timeout: 60000,
+    grep: process.env.SOLGRID_E2E_GREP,
+  });
 
   const testsRoot = path.resolve(__dirname);
 

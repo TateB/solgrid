@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGraphPreviewSnapshot,
+  isGraphDocumentLike,
   renderGraphWebviewHtml,
 } from "./graphPreviewRender";
 
@@ -49,6 +50,12 @@ describe("renderGraphWebviewHtml", () => {
     expect(html).toContain("Vault");
     expect(html).toContain("Ownable");
     expect(html).toContain("marker-end=\"url(#arrow)\"");
+    expect(html).toContain(
+      "--panel-bg: var(--vscode-editor-background);\n        --panel-bg: color-mix"
+    );
+    expect(html).toContain(
+      "background: var(--vscode-editor-background);\n        background: color-mix"
+    );
     expect(html).not.toContain("```mermaid");
   });
 
@@ -310,5 +317,70 @@ describe("renderGraphWebviewHtml", () => {
 
     expect(snapshot.nodeLabels).toEqual(["Entry", "revert"]);
     expect(snapshot.edgeCount).toBe(1);
+  });
+});
+
+describe("isGraphDocumentLike", () => {
+  const validGraph = {
+    kind: "imports",
+    title: "Imports",
+    focusNodeId: "main",
+    nodes: [
+      {
+        id: "main",
+        label: "Main.sol",
+        detail: "Source file",
+        kind: "file",
+      },
+      {
+        id: "dep",
+        label: "Dep.sol",
+        detail: "Source file",
+        kind: "file",
+      },
+    ],
+    edges: [{ from: "main", to: "dep", label: "imports", kind: "imports" }],
+  };
+
+  it("accepts a complete graph with declared optional fields", () => {
+    expect(isGraphDocumentLike(validGraph)).toBe(true);
+  });
+
+  it("rejects malformed optional labels and arbitrary edge kinds", () => {
+    expect(
+      isGraphDocumentLike({
+        ...validGraph,
+        edges: [{ from: "main", to: "dep", label: { unsafe: true } }],
+      })
+    ).toBe(false);
+    expect(
+      isGraphDocumentLike({
+        ...validGraph,
+        edges: [{ from: "main", to: "dep", kind: 'normal\" onclick=\"x' }],
+      })
+    ).toBe(false);
+  });
+
+  it("rejects unknown node kinds, duplicate nodes, and dangling edges", () => {
+    expect(
+      isGraphDocumentLike({
+        ...validGraph,
+        nodes: [{ ...validGraph.nodes[0], kind: "unknown" }],
+        edges: [],
+      })
+    ).toBe(false);
+    expect(
+      isGraphDocumentLike({
+        ...validGraph,
+        nodes: [validGraph.nodes[0], validGraph.nodes[0]],
+        edges: [],
+      })
+    ).toBe(false);
+    expect(
+      isGraphDocumentLike({
+        ...validGraph,
+        edges: [{ from: "main", to: "missing" }],
+      })
+    ).toBe(false);
   });
 });

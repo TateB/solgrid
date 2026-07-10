@@ -331,6 +331,76 @@ contract Delta {
     }
   });
 
+  it("invalidates semantic token deltas when an unsaved imported type changes", async () => {
+    const dir = tempWorkspace();
+    const depPath = path.join(dir, "Types.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const depUri = toUri(depPath);
+    const mainUri = toUri(mainPath);
+    const depSource = `pragma solidity ^0.8.0;
+contract Token {}
+`;
+    const unsavedDepSource = `pragma solidity ^0.8.0;
+enum Token { Value }
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import {Token} from "./Types.sol";
+contract Main {
+    Token private token;
+}
+`;
+
+    fs.writeFileSync(depPath, depSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const init = await initializeServer(client, toUri(dir));
+      const legend = init.capabilities.semanticTokensProvider?.legend;
+      expect(legend).toBeDefined();
+
+      openDocument(client, depUri, depSource);
+      openDocument(client, mainUri, mainSource);
+
+      const initial = await requestSemanticTokens(client, mainUri);
+      expect(initial?.resultId).toBeDefined();
+      const initialEntries = decodeSemanticTokens(initial!, legend!).map((token) => ({
+        ...token,
+        text: tokenText(mainSource, token.line, token.startChar, token.length),
+      }));
+      expect(initialEntries).toContainEqual(
+        expect.objectContaining({ text: "Token", tokenType: "class" })
+      );
+
+      changeDocument(client, depUri, unsavedDepSource);
+      const changed = await requestSemanticTokensFullDelta(
+        client,
+        mainUri,
+        initial!.resultId!
+      );
+
+      expect(changed).toBeDefined();
+      expect("data" in changed!).toBe(true);
+      if (changed && "data" in changed) {
+        expect(changed.resultId).not.toBe(initial!.resultId);
+        expect(changed.data).not.toEqual(initial!.data);
+        const changedEntries = decodeSemanticTokens(changed, legend!).map((token) => ({
+          ...token,
+          text: tokenText(mainSource, token.line, token.startChar, token.length),
+        }));
+        expect(changedEntries).toContainEqual(
+          expect.objectContaining({ text: "Token", tokenType: "enum" })
+        );
+      }
+      expect(fs.readFileSync(depPath, "utf8")).toBe(depSource);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns namespace and imported type tokens for namespace-qualified references", async () => {
     const dir = tempWorkspace();
     const depPath = path.join(dir, "Lib.sol");

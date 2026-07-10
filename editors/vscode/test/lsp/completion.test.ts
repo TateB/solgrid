@@ -43,7 +43,7 @@ describe("LSP Completion", () => {
     const content = "// sol\ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -51,13 +51,11 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-
-    if (items.length > 0) {
-      const labels = items.map((i) => i.label);
-      expect(labels).toContain("solgrid-disable-next-line");
-      expect(labels).toContain("solgrid-disable");
-      expect(labels).toContain("solgrid-enable");
-    }
+    expect(items.length).toBeGreaterThan(0);
+    const labels = items.map((i) => i.label);
+    expect(labels).toContain("solgrid-disable-next-line");
+    expect(labels).toContain("solgrid-disable");
+    expect(labels).toContain("solgrid-enable");
   });
 
   it("returns rule ID completions after directive prefix", async () => {
@@ -66,7 +64,7 @@ describe("LSP Completion", () => {
       "// solgrid-disable-next-line \ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -74,11 +72,9 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-
-    if (items.length > 0) {
-      const labels = items.map((i) => i.label);
-      expect(labels).toContain("security/tx-origin");
-    }
+    expect(items.length).toBeGreaterThan(0);
+    const labels = items.map((i) => i.label);
+    expect(labels).toContain("security/tx-origin");
   });
 
   it("rule ID completions include descriptions", async () => {
@@ -87,7 +83,7 @@ describe("LSP Completion", () => {
       "// solgrid-disable-next-line \ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -95,12 +91,10 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-
-    if (items.length > 0) {
-      // At least some items should have a detail/description
-      const withDetail = items.filter((i) => i.detail);
-      expect(withDetail.length).toBeGreaterThan(0);
-    }
+    expect(items.length).toBeGreaterThan(0);
+    // At least some items should have a detail/description.
+    const withDetail = items.filter((i) => i.detail);
+    expect(withDetail.length).toBeGreaterThan(0);
   });
 
   it("returns no suppression directives in non-comment context", async () => {
@@ -108,7 +102,7 @@ describe("LSP Completion", () => {
     const content = "contract Test { uint256 x; }\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -129,7 +123,7 @@ describe("LSP Completion", () => {
     const content = "// sol\ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -141,12 +135,10 @@ describe("LSP Completion", () => {
     const directives = items.filter((i) =>
       i.label.startsWith("solgrid-")
     );
-
+    expect(directives.length).toBeGreaterThan(0);
     for (const item of directives) {
       // CompletionItemKind.Snippet = 15
-      if (item.kind !== undefined) {
-        expect(item.kind).toBe(15);
-      }
+      expect(item.kind).toBe(15);
     }
   });
 
@@ -156,7 +148,7 @@ describe("LSP Completion", () => {
       "// solgrid-disable-next-line \ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -164,12 +156,10 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-
+    expect(items.length).toBeGreaterThan(0);
     for (const item of items) {
       // CompletionItemKind.Value = 12
-      if (item.kind !== undefined) {
-        expect(item.kind).toBe(12);
-      }
+      expect(item.kind).toBe(12);
     }
   });
 
@@ -178,7 +168,7 @@ describe("LSP Completion", () => {
     const content = "// \ncontract Test {}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 0,
@@ -186,11 +176,9 @@ describe("LSP Completion", () => {
     });
 
     const items = normalizeCompletionResult(result);
-
-    if (items.length > 0) {
-      const labels = items.map((i) => i.label);
-      expect(labels).toContain("solgrid-disable-next-line");
-    }
+    expect(items.length).toBeGreaterThan(0);
+    const labels = items.map((i) => i.label);
+    expect(labels).toContain("solgrid-disable-next-line");
   });
 });
 
@@ -217,7 +205,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
     const content = "pragma solidity ^0.8.0;\n\ncontract Test {\n  \n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 3,
@@ -239,7 +227,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
     const content = "pragma solidity ^0.8.0;\n\ncontract Test {\n  \n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 3,
@@ -260,7 +248,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
     const content = "pragma solidity ^0.8.0;\n\ncontract Test {\n  \n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 3,
@@ -280,7 +268,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
     const content = "pragma solidity ^0.8.0;\n\ncontract Test {\n  \n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 3,
@@ -301,7 +289,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    \n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -321,7 +309,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    \n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -362,7 +350,7 @@ describe("LSP Completion — Dot Completions", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    msg.\n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -383,7 +371,7 @@ describe("LSP Completion — Dot Completions", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    block.\n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -403,7 +391,7 @@ describe("LSP Completion — Dot Completions", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    tx.\n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -423,7 +411,7 @@ describe("LSP Completion — Dot Completions", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    msg.\n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -444,7 +432,7 @@ describe("LSP Completion — Dot Completions", () => {
       "pragma solidity ^0.8.0;\n\ncontract Test {\n  function f() public {\n    msg.\n  }\n}\n";
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -485,7 +473,7 @@ describe("LSP Completion — Dot Completions", () => {
     ].join("\n");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 16,
@@ -529,7 +517,7 @@ describe("LSP Completion — Dot Completions", () => {
     ].join("\n");
 
     openDocument(client, uri, callContent);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const fromCall = normalizeCompletionResult(
       await requestCompletion(client, uri, {
@@ -564,7 +552,7 @@ describe("LSP Completion — Dot Completions", () => {
     ].join("\n");
 
     openDocument(client, indexUri, indexContent);
-    await waitForDiagnostics(client, indexUri).catch(() => {});
+    await waitForDiagnostics(client, indexUri);
 
     const fromIndex = normalizeCompletionResult(
       await requestCompletion(client, indexUri, {
@@ -613,7 +601,7 @@ describe("LSP Completion — In-Scope Symbols", () => {
     ].join("\n");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 7,
@@ -641,7 +629,7 @@ describe("LSP Completion — In-Scope Symbols", () => {
     ].join("\n");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 4,
@@ -670,7 +658,7 @@ describe("LSP Completion — In-Scope Symbols", () => {
     ].join("\n");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 5,
@@ -708,13 +696,13 @@ describe("LSP Completion — Auto-Import", () => {
     const importableUri = fixtureUri("importable.sol");
     const importableContent = readFixture("importable.sol");
     openDocument(client, importableUri, importableContent);
-    await waitForDiagnostics(client, importableUri).catch(() => {});
+    await waitForDiagnostics(client, importableUri);
 
     // Now open a file that doesn't import Importable
     const uri = fixtureUri("completion.sol");
     const content = readFixture("completion.sol");
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 5,
@@ -734,12 +722,12 @@ describe("LSP Completion — Auto-Import", () => {
     const importableUri = fixtureUri("importable.sol");
     const importableContent = readFixture("importable.sol");
     openDocument(client, importableUri, importableContent);
-    await waitForDiagnostics(client, importableUri).catch(() => {});
+    await waitForDiagnostics(client, importableUri);
 
     const uri = fixtureUri("completion.sol");
     const content = readFixture("completion.sol");
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const result = await requestCompletion(client, uri, {
       line: 5,
@@ -751,18 +739,17 @@ describe("LSP Completion — Auto-Import", () => {
       (i) => i.detail && i.detail.startsWith("Auto import")
     );
 
-    if (autoImportItems.length > 0) {
-      // Auto-import items should have additionalTextEdits to insert the import statement
-      const withEdits = autoImportItems.filter(
-        (i) =>
-          i.additionalTextEdits && i.additionalTextEdits.length > 0
-      );
-      expect(withEdits.length).toBeGreaterThan(0);
+    expect(autoImportItems.length).toBeGreaterThan(0);
+    // Auto-import items should have additionalTextEdits to insert the import statement.
+    const withEdits = autoImportItems.filter(
+      (i) =>
+        i.additionalTextEdits && i.additionalTextEdits.length > 0
+    );
+    expect(withEdits.length).toBeGreaterThan(0);
 
-      // The edit should contain an import statement
-      const edit = withEdits[0].additionalTextEdits![0];
-      expect(edit.newText).toContain("import");
-    }
+    // The edit should contain an import statement.
+    const edit = withEdits[0].additionalTextEdits![0];
+    expect(edit.newText).toContain("import");
   });
 });
 

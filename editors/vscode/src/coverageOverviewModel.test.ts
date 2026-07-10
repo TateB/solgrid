@@ -29,7 +29,11 @@ describe("parseLcovArtifact", () => {
     expect(records[0]?.filePath).toBe("/workspace/src/Vault.sol");
     expect(records[0]?.lineHits.get(10)).toBe(0);
     expect(records[0]?.lineHits.get(11)).toBe(4);
-    expect(records[0]?.branchHits.get(11)).toEqual({ found: 2, hit: 1 });
+    expect(records[0]?.branchHits.get(11)).toMatchObject({ found: 2, hit: 1 });
+    expect(Array.from(records[0]?.branchHits.get(11)?.identities ?? [])).toEqual([
+      ["0:0", 4],
+      ["0:1", 0],
+    ]);
   });
 
   it("flushes the final record without a trailing end_of_record", () => {
@@ -69,7 +73,7 @@ describe("parseCoberturaArtifact", () => {
     expect(records[0]?.filePath).toBe("/workspace/src/Vault.sol");
     expect(records[0]?.lineHits.get(10)).toBe(0);
     expect(records[0]?.lineHits.get(11)).toBe(4);
-    expect(records[0]?.branchHits.get(11)).toEqual({ found: 2, hit: 1 });
+    expect(records[0]?.branchHits.get(11)).toMatchObject({ found: 2, hit: 1 });
   });
 
   it("dispatches XML artifacts through the generic parser", () => {
@@ -90,7 +94,57 @@ describe("parseCoberturaArtifact", () => {
     );
 
     expect(records).toHaveLength(1);
-    expect(records[0]?.branchHits.get(8)).toEqual({ found: 2, hit: 2 });
+    expect(records[0]?.branchHits.get(8)).toMatchObject({ found: 2, hit: 2 });
+  });
+
+  it("resolves class filenames relative to Cobertura source roots", () => {
+    const expected = "/workspace/packages/vault/src/Vault.sol";
+    const records = parseCoberturaArtifact(
+      [
+        "<coverage>",
+        "  <sources><source>../packages/vault</source></sources>",
+        '  <packages><package name="contracts"><classes>',
+        '    <class name="Vault" filename="src/Vault.sol">',
+        '      <lines><line number="8" hits="1" /></lines>',
+        "    </class>",
+        "  </classes></package></packages>",
+        "</coverage>",
+      ].join("\n"),
+      "/workspace/reports/coverage.xml",
+      ["/workspace"],
+      (candidate) => candidate === expected
+    );
+
+    expect(records[0]?.filePath).toBe(expected);
+  });
+
+  it("uses line-level branch counts for nested Cobertura conditions", () => {
+    const records = parseCoberturaArtifact(
+      [
+        "<coverage>",
+        '  <packages><package name="contracts"><classes>',
+        '    <class name="Vault" filename="/workspace/src/Vault.sol">',
+        '      <lines><line number="11" hits="1" branch="true" condition-coverage="50% (1/2)">',
+        '        <conditions><condition number="0" type="jump" coverage="50%" /></conditions>',
+        "      </line></lines>",
+        "    </class>",
+        "  </classes></package></packages>",
+        "</coverage>",
+      ].join("\n"),
+      "/workspace/coverage/cobertura.xml",
+      ["/workspace"]
+    );
+
+    expect(records[0]?.branchHits.get(11)).toMatchObject({ found: 2, hit: 1 });
+    const summary = summarizeCoverageArtifacts(records, ["/workspace"]);
+    expect(summary.files[0]?.actionableLines).toEqual([
+      expect.objectContaining({
+        line: 11,
+        status: "partial",
+        branchesFound: 2,
+        branchesHit: 1,
+      }),
+    ]);
   });
 });
 
@@ -147,6 +201,118 @@ describe("summarizeCoverageArtifacts", () => {
         branchesHit: 0,
       },
     ]);
+  });
+
+  it("unions branch identities across complementary LCOV artifacts", () => {
+    const records = [
+      ...parseLcovArtifact(
+        [
+          "SF:/workspace/src/Vault.sol",
+          "DA:11,1",
+          "BRDA:11,0,0,1",
+          "BRDA:11,0,1,0",
+          "end_of_record",
+        ].join("\n"),
+        "/workspace/coverage/unit.lcov",
+        ["/workspace"]
+      ),
+      ...parseLcovArtifact(
+        [
+          "SF:/workspace/src/Vault.sol",
+          "DA:11,1",
+          "BRDA:11,0,0,0",
+          "BRDA:11,0,1,1",
+          "end_of_record",
+        ].join("\n"),
+        "/workspace/coverage/integration.lcov",
+        ["/workspace"]
+      ),
+    ];
+
+    const summary = summarizeCoverageArtifacts(records, ["/workspace"]);
+    expect(summary.files[0]).toMatchObject({
+      branchesFound: 2,
+      branchesHit: 2,
+      actionableLines: [],
+    });
+  });
+
+  it("deduplicates mixed-format line hits and prefers LCOV branches per line", () => {
+    const records = [
+      ...parseLcovArtifact(
+        [
+          "SF:/workspace/src/Vault.sol",
+          "DA:11,1",
+          "BRDA:11,0,0,1",
+          "BRDA:11,0,1,0",
+          "end_of_record",
+        ].join("\n"),
+        "/workspace/coverage/lcov.info",
+        ["/workspace"]
+      ),
+      ...parseCoberturaArtifact(
+        [
+          "<coverage>",
+          '  <packages><package name="contracts"><classes>',
+          '    <class name="Vault" filename="/workspace/src/Vault.sol">',
+          "      <lines>",
+          '        <line number="11" hits="1" branch="true" condition-coverage="100% (2/2)" />',
+          '        <line number="12" hits="1" branch="true" condition-coverage="50% (1/2)" />',
+          "      </lines>",
+          "    </class>",
+          "  </classes></package></packages>",
+          "</coverage>",
+        ].join("\n"),
+        "/workspace/coverage/cobertura.xml",
+        ["/workspace"]
+      ),
+    ];
+
+    const summary = summarizeCoverageArtifacts(records, ["/workspace"]);
+    expect(summary.files[0]).toMatchObject({
+      branchesFound: 4,
+      branchesHit: 2,
+      actionableLines: [
+        {
+          line: 11,
+          status: "partial",
+          hits: 1,
+          branchesFound: 2,
+          branchesHit: 1,
+        },
+        {
+          line: 12,
+          status: "partial",
+          hits: 1,
+          branchesFound: 2,
+          branchesHit: 1,
+        },
+      ],
+    });
+  });
+});
+
+describe("coverage source path resolution", () => {
+  it("uses the workspace root that owns the artifact in a multi-root workspace", () => {
+    const records = parseLcovArtifact(
+      ["SF:src/Vault.sol", "DA:7,1", "end_of_record"].join("\n"),
+      "/workspace/beta/coverage/lcov.info",
+      ["/workspace/alpha", "/workspace/beta"]
+    );
+
+    expect(records[0]?.filePath).toBe("/workspace/beta/src/Vault.sol");
+  });
+
+  it("prefers an existing artifact-relative source path", () => {
+    const expected = "/workspace/packages/vault/src/Vault.sol";
+    const records = parseLcovArtifact(
+      ["SF:../src/Vault.sol", "DA:7,1", "end_of_record"].join("\n"),
+      "/workspace/packages/vault/coverage/lcov.info",
+      ["/workspace"],
+      (candidate) => candidate === expected
+    );
+
+    expect(records[0]?.filePath).toBe(expected);
   });
 });
 

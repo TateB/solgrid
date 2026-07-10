@@ -1,13 +1,22 @@
 import * as path from "node:path";
+import { existsSync } from "node:fs";
 
 export type CoverageOverviewFilterMode = "actionable" | "all";
 export type CoverageLineStatus = "uncovered" | "partial";
+export type CoverageArtifactFormat = "lcov" | "cobertura";
 
 export interface CoverageArtifactRecord {
   filePath: string;
   artifactPath: string;
+  format: CoverageArtifactFormat;
   lineHits: ReadonlyMap<number, number>;
-  branchHits: ReadonlyMap<number, { found: number; hit: number }>;
+  branchHits: ReadonlyMap<number, CoverageBranchHits>;
+}
+
+export interface CoverageBranchHits {
+  found: number;
+  hit: number;
+  identities: ReadonlyMap<string, number>;
 }
 
 export interface CoverageLineDetail {
@@ -55,25 +64,32 @@ export interface CoverageOverviewLineNode {
 export function parseCoverageArtifact(
   content: string,
   artifactPath: string,
-  workspaceRoots: readonly string[]
+  workspaceRoots: readonly string[],
+  pathExists: (candidate: string) => boolean = existsSync
 ): CoverageArtifactRecord[] {
   const extension = path.extname(artifactPath).toLowerCase();
   if (extension === ".xml") {
-    return parseCoberturaArtifact(content, artifactPath, workspaceRoots);
+    return parseCoberturaArtifact(
+      content,
+      artifactPath,
+      workspaceRoots,
+      pathExists
+    );
   }
-  return parseLcovArtifact(content, artifactPath, workspaceRoots);
+  return parseLcovArtifact(content, artifactPath, workspaceRoots, pathExists);
 }
 
 export function parseLcovArtifact(
   content: string,
   artifactPath: string,
-  workspaceRoots: readonly string[]
+  workspaceRoots: readonly string[],
+  pathExists: (candidate: string) => boolean = existsSync
 ): CoverageArtifactRecord[] {
   const records: CoverageArtifactRecord[] = [];
   let current: {
     rawSourcePath: string;
     lineHits: Map<number, number>;
-    branchHits: Map<number, { found: number; hit: number }>;
+    branchHits: Map<number, CoverageBranchHits>;
   } | null = null;
 
   const flush = (): void => {
@@ -83,12 +99,14 @@ export function parseLcovArtifact(
     const resolvedPath = resolveCoverageSourcePath(
       current.rawSourcePath,
       artifactPath,
-      workspaceRoots
+      workspaceRoots,
+      pathExists
     );
     if (resolvedPath) {
       records.push({
         filePath: resolvedPath,
         artifactPath: normalizePath(artifactPath),
+        format: "lcov",
         lineHits: new Map(current.lineHits),
         branchHits: new Map(current.branchHits),
       });
@@ -127,19 +145,23 @@ export function parseLcovArtifact(
     }
 
     if (rawLine.startsWith("BRDA:")) {
-      const [lineValue, _block, _branch, takenValue] = rawLine
+      const [lineValue, blockValue, branchValue, takenValue] = rawLine
         .slice(5)
         .split(",", 4);
       const line = Number.parseInt(lineValue ?? "", 10);
       if (!Number.isInteger(line) || line <= 0) {
         continue;
       }
-      const branch = current.branchHits.get(line) ?? { found: 0, hit: 0 };
-      branch.found += 1;
-      if (takenValue !== "-" && Number.parseInt(takenValue ?? "", 10) > 0) {
-        branch.hit += 1;
-      }
-      current.branchHits.set(line, branch);
+      const identities = new Map(
+        current.branchHits.get(line)?.identities ?? []
+      );
+      const identity = `${blockValue ?? ""}:${branchValue ?? ""}`;
+      const taken =
+        takenValue === "-"
+          ? 0
+          : Math.max(0, Number.parseInt(takenValue ?? "0", 10) || 0);
+      identities.set(identity, (identities.get(identity) ?? 0) + taken);
+      current.branchHits.set(line, branchCoverage(identities));
     }
   }
 
@@ -150,14 +172,20 @@ export function parseLcovArtifact(
 export function parseCoberturaArtifact(
   content: string,
   artifactPath: string,
-  workspaceRoots: readonly string[]
+  workspaceRoots: readonly string[],
+  pathExists: (candidate: string) => boolean = existsSync
 ): CoverageArtifactRecord[] {
+  const sourceRoots = Array.from(
+    content.matchAll(/<source\b[^>]*>([\s\S]*?)<\/source>/giu)
+  )
+    .map((match) => decodeXmlText((match[1] ?? "").trim()))
+    .filter(Boolean);
   const records = new Map<
     string,
     {
       artifactPath: string;
       lineHits: Map<number, number>;
-      branchHits: Map<number, { found: number; hit: number }>;
+      branchHits: Map<number, CoverageBranchHits>;
     }
   >();
 
@@ -169,7 +197,9 @@ export function parseCoberturaArtifact(
     const filePath = resolveCoverageSourcePath(
       rawFilename,
       artifactPath,
-      workspaceRoots
+      workspaceRoots,
+      pathExists,
+      sourceRoots
     );
     if (!filePath) {
       continue;
@@ -178,10 +208,12 @@ export function parseCoberturaArtifact(
     const record = records.get(filePath) ?? {
       artifactPath: normalizePath(artifactPath),
       lineHits: new Map<number, number>(),
-      branchHits: new Map<number, { found: number; hit: number }>(),
+      branchHits: new Map<number, CoverageBranchHits>(),
     };
 
-    for (const lineMatch of (classMatch[2] ?? "").matchAll(/<line\b([^>]*)\/?>/giu)) {
+    for (const lineMatch of (classMatch[2] ?? "").matchAll(
+      /<line\b([^>]*?)(?:\/>|>([\s\S]*?)<\/line>)/giu
+    )) {
       const lineNumber = parseCoverageInt(xmlAttr(lineMatch[1] ?? "", "number"));
       const hits = parseCoverageInt(xmlAttr(lineMatch[1] ?? "", "hits"));
       if (!Number.isInteger(lineNumber) || lineNumber <= 0 || !Number.isFinite(hits)) {
@@ -192,19 +224,55 @@ export function parseCoberturaArtifact(
       if (!xmlBoolAttr(lineMatch[1] ?? "", "branch")) {
         continue;
       }
-      const branch = record.branchHits.get(lineNumber) ?? { found: 0, hit: 0 };
+      const identities = new Map(
+        record.branchHits.get(lineNumber)?.identities ?? []
+      );
+      const conditions = Array.from(
+        (lineMatch[2] ?? "").matchAll(/<condition\b([^>]*)\/?>/giu)
+      );
       const coverage = xmlAttr(lineMatch[1] ?? "", "condition-coverage");
       const counts = coverage?.match(/\((\d+)\s*\/\s*(\d+)\)/u);
       if (counts) {
-        branch.hit += Number.parseInt(counts[1] ?? "0", 10);
-        branch.found += Number.parseInt(counts[2] ?? "0", 10);
-      } else {
-        branch.found += 1;
-        if (hits > 0) {
-          branch.hit += 1;
+        // The line-level numerator/denominator is authoritative. Individual
+        // condition elements often describe a two-outcome jump as one item.
+        const hit = Number.parseInt(counts[1] ?? "0", 10);
+        const found = Number.parseInt(counts[2] ?? "0", 10);
+        for (let index = 0; index < found; index += 1) {
+          const identity = `cobertura:${index}`;
+          identities.set(
+            identity,
+            Math.max(identities.get(identity) ?? 0, index < hit ? 1 : 0)
+          );
         }
+      } else if (conditions.length > 0) {
+        for (const [index, condition] of conditions.entries()) {
+          const conditionNumber =
+            xmlAttr(condition[1] ?? "", "number") ?? String(index);
+          const percent = Number.parseFloat(
+            xmlAttr(condition[1] ?? "", "coverage") ?? "0"
+          );
+          const outcomesHit = Math.max(
+            0,
+            Math.min(2, Math.round((percent / 100) * 2))
+          );
+          for (let outcome = 0; outcome < 2; outcome += 1) {
+            const identity = `cobertura:${conditionNumber}:${outcome}`;
+            identities.set(
+              identity,
+              Math.max(
+                identities.get(identity) ?? 0,
+                outcome < outcomesHit ? 1 : 0
+              )
+            );
+          }
+        }
+      } else {
+        identities.set(
+          "cobertura:0",
+          Math.max(identities.get("cobertura:0") ?? 0, hits > 0 ? 1 : 0)
+        );
       }
-      record.branchHits.set(lineNumber, branch);
+      record.branchHits.set(lineNumber, branchCoverage(identities));
     }
 
     records.set(filePath, record);
@@ -213,6 +281,7 @@ export function parseCoberturaArtifact(
   return Array.from(records.entries()).map(([filePath, record]) => ({
     filePath,
     artifactPath: record.artifactPath,
+    format: "cobertura" as const,
     lineHits: record.lineHits,
     branchHits: record.branchHits,
   }));
@@ -222,12 +291,16 @@ export function summarizeCoverageArtifacts(
   records: readonly CoverageArtifactRecord[],
   workspaceRoots: readonly string[]
 ): CoverageWorkspaceSummary {
+  interface FormatBucket {
+    lineHits: Map<number, number>;
+    branchHits: Map<number, Map<string, number>>;
+  }
+
   const files = new Map<
     string,
     {
       artifactPaths: Set<string>;
-      lineHits: Map<number, number>;
-      branchHits: Map<number, { found: number; hit: number }>;
+      formats: Map<CoverageArtifactFormat, FormatBucket>;
     }
   >();
 
@@ -237,29 +310,73 @@ export function summarizeCoverageArtifacts(
     }
     const bucket = files.get(record.filePath) ?? {
       artifactPaths: new Set<string>(),
+      formats: new Map<CoverageArtifactFormat, FormatBucket>(),
+    };
+    const formatBucket = bucket.formats.get(record.format) ?? {
       lineHits: new Map<number, number>(),
-      branchHits: new Map<number, { found: number; hit: number }>(),
+      branchHits: new Map<number, Map<string, number>>(),
     };
     bucket.artifactPaths.add(record.artifactPath);
     for (const [line, hits] of record.lineHits) {
-      bucket.lineHits.set(line, (bucket.lineHits.get(line) ?? 0) + hits);
+      formatBucket.lineHits.set(
+        line,
+        (formatBucket.lineHits.get(line) ?? 0) + hits
+      );
     }
     for (const [line, branchHits] of record.branchHits) {
-      const branch = bucket.branchHits.get(line) ?? { found: 0, hit: 0 };
-      branch.found += branchHits.found;
-      branch.hit += branchHits.hit;
-      bucket.branchHits.set(line, branch);
+      const identities =
+        formatBucket.branchHits.get(line) ?? new Map<string, number>();
+      for (const [identity, hits] of branchHits.identities) {
+        identities.set(identity, Math.max(identities.get(identity) ?? 0, hits));
+      }
+      formatBucket.branchHits.set(line, identities);
     }
+    bucket.formats.set(record.format, formatBucket);
     files.set(record.filePath, bucket);
   }
 
   const summaries = Array.from(files.entries())
     .map(([filePath, bucket]): CoverageFileSummary => {
-      const lineNumbers = Array.from(bucket.lineHits.keys()).sort((left, right) => left - right);
+      const lcov = bucket.formats.get("lcov");
+      const cobertura = bucket.formats.get("cobertura");
+      const lineNumbers = Array.from(
+        new Set([
+          ...(lcov?.lineHits.keys() ?? []),
+          ...(cobertura?.lineHits.keys() ?? []),
+        ])
+      ).sort((left, right) => left - right);
+      const lineHits = new Map(
+        lineNumbers.map((line) => [
+          line,
+          // Runs from the same format are complementary and are summed above.
+          // Across formats, use the larger total so duplicate reports do not
+          // inflate the displayed execution count.
+          Math.max(
+            lcov?.lineHits.get(line) ?? 0,
+            cobertura?.lineHits.get(line) ?? 0
+          ),
+        ])
+      );
+      const branchLineNumbers = new Set([
+        ...(lcov?.branchHits.keys() ?? []),
+        ...(cobertura?.branchHits.keys() ?? []),
+      ]);
+      const branchHits = new Map<number, Map<string, number>>();
+      for (const line of branchLineNumbers) {
+        // LCOV exposes stable block/branch identities. Prefer it only on lines
+        // where it has branch data, retaining Cobertura-only branch lines.
+        const identities =
+          lcov?.branchHits.get(line) ?? cobertura?.branchHits.get(line);
+        if (identities) {
+          branchHits.set(line, identities);
+        }
+      }
       const actionableLines = lineNumbers
         .map((line): CoverageLineDetail | null => {
-          const hits = bucket.lineHits.get(line) ?? 0;
-          const branch = bucket.branchHits.get(line) ?? { found: 0, hit: 0 };
+          const hits = lineHits.get(line) ?? 0;
+          const branch = branchCoverage(
+            branchHits.get(line) ?? new Map<string, number>()
+          );
           if (hits <= 0) {
             return {
               line,
@@ -283,8 +400,8 @@ export function summarizeCoverageArtifacts(
         .filter((detail): detail is CoverageLineDetail => detail !== null);
 
       const linesFound = lineNumbers.length;
-      const linesHit = lineNumbers.filter((line) => (bucket.lineHits.get(line) ?? 0) > 0).length;
-      const branches = Array.from(bucket.branchHits.values());
+      const linesHit = lineNumbers.filter((line) => (lineHits.get(line) ?? 0) > 0).length;
+      const branches = Array.from(branchHits.values()).map(branchCoverage);
       const branchesFound = branches.reduce((sum, branch) => sum + branch.found, 0);
       const branchesHit = branches.reduce((sum, branch) => sum + branch.hit, 0);
 
@@ -454,20 +571,70 @@ function compareCoverageFiles(left: CoverageFileSummary, right: CoverageFileSumm
 function resolveCoverageSourcePath(
   rawSourcePath: string,
   artifactPath: string,
-  workspaceRoots: readonly string[]
+  workspaceRoots: readonly string[],
+  pathExists: (candidate: string) => boolean,
+  sourceRoots: readonly string[] = []
 ): string | null {
   if (!rawSourcePath) {
     return null;
   }
 
-  const candidates = path.isAbsolute(rawSourcePath)
-    ? [rawSourcePath]
-    : [
-        ...workspaceRoots.map((root) => path.resolve(root, rawSourcePath)),
-        path.resolve(path.dirname(artifactPath), rawSourcePath),
-      ];
+  if (path.isAbsolute(rawSourcePath)) {
+    return normalizePath(rawSourcePath);
+  }
 
-  return normalizePath(candidates[0]);
+  const normalizedArtifact = normalizePath(artifactPath);
+  const roots = workspaceRoots.map(normalizePath);
+  const owningRoots = roots
+    .filter((root) => isPathInside(normalizedArtifact, root))
+    .sort((left, right) => right.length - left.length);
+  const remainingRoots = roots.filter((root) => !owningRoots.includes(root));
+  const artifactDirectory = path.dirname(normalizedArtifact);
+  const sourceRootCandidates = sourceRoots.flatMap((sourceRoot) => {
+    if (path.isAbsolute(sourceRoot)) {
+      return [path.resolve(sourceRoot, rawSourcePath)];
+    }
+    return [
+      path.resolve(artifactDirectory, sourceRoot, rawSourcePath),
+      ...owningRoots.map((root) =>
+        path.resolve(root, sourceRoot, rawSourcePath)
+      ),
+      ...remainingRoots.map((root) =>
+        path.resolve(root, sourceRoot, rawSourcePath)
+      ),
+    ];
+  });
+  const artifactRelative = path.resolve(
+    artifactDirectory,
+    rawSourcePath
+  );
+  const rootRelative = [...owningRoots, ...remainingRoots].map((root) =>
+    path.resolve(root, rawSourcePath)
+  );
+  const candidates = rawSourcePath.startsWith(".")
+    ? [...sourceRootCandidates, artifactRelative, ...rootRelative]
+    : [...sourceRootCandidates, ...rootRelative, artifactRelative];
+  const uniqueCandidates = Array.from(new Set(candidates.map(normalizePath)));
+
+  return uniqueCandidates.find(pathExists) ?? uniqueCandidates[0] ?? null;
+}
+
+function branchCoverage(
+  identities: ReadonlyMap<string, number>
+): CoverageBranchHits {
+  return {
+    found: identities.size,
+    hit: Array.from(identities.values()).filter((hits) => hits > 0).length,
+    identities: new Map(identities),
+  };
+}
+
+function isPathInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function displayPathForFile(filePath: string, workspaceRoots: readonly string[]): string {

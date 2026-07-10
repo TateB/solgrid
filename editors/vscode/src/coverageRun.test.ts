@@ -6,6 +6,7 @@ import {
   coverageRunSpec,
   preferredCoverageRunSpec,
   preferredCoverageWorkspaceFolder,
+  TaskCompletionArbiter,
 } from "./coverageRun";
 import { DEFAULT_COVERAGE_CONFIG } from "./config";
 
@@ -19,21 +20,12 @@ describe("coverageRunSpec", () => {
     });
   });
 
-  it("builds the built-in Foundry Cobertura command", () => {
-    expect(coverageRunSpec("foundry-cobertura", DEFAULT_COVERAGE_CONFIG)).toEqual({
-      kind: "foundry-cobertura",
-      label: "Foundry Coverage (Cobertura)",
-      command: "forge",
-      args: ["coverage", "--report", "cobertura"],
-    });
-  });
-
   it("builds the built-in Hardhat LCOV command", () => {
     expect(coverageRunSpec("hardhat-lcov", DEFAULT_COVERAGE_CONFIG)).toEqual({
       kind: "hardhat-lcov",
       label: "Hardhat Coverage (LCOV)",
       command: "npx",
-      args: ["hardhat", "coverage"],
+      args: ["--no-install", "hardhat", "coverage"],
     });
   });
 
@@ -56,13 +48,13 @@ describe("coverageRunSpec", () => {
 });
 
 describe("availableCoverageRunSpecs", () => {
-  it("returns both Foundry built-ins when Foundry is available", () => {
+  it("returns the supported Foundry LCOV command when Foundry is available", () => {
     expect(
       availableCoverageRunSpecs(
         { hasFoundry: true, hasHardhat: false, hasCustomCommand: false },
         DEFAULT_COVERAGE_CONFIG
       ).map((spec) => spec.kind)
-    ).toEqual(["foundry-lcov", "foundry-cobertura"]);
+    ).toEqual(["foundry-lcov"]);
   });
 
   it("returns the Hardhat provider when Hardhat is available", () => {
@@ -83,7 +75,7 @@ describe("availableCoverageRunSpecs", () => {
           customCommand: ["pnpm", "run", "coverage"],
         }
       ).map((spec) => spec.kind)
-    ).toEqual(["foundry-lcov", "foundry-cobertura", "hardhat-lcov", "custom"]);
+    ).toEqual(["foundry-lcov", "hardhat-lcov", "custom"]);
   });
 });
 
@@ -154,5 +146,44 @@ describe("preferredCoverageWorkspaceFolder", () => {
       () => undefined
     );
     expect(selected).toBeUndefined();
+  });
+});
+
+describe("TaskCompletionArbiter", () => {
+  it("keeps a later non-zero process exit authoritative over task-end order", () => {
+    vi.useFakeTimers();
+    try {
+      const settled: Array<number | undefined> = [];
+      const arbiter = new TaskCompletionArbiter(
+        (exitCode) => settled.push(exitCode),
+        100
+      );
+
+      arbiter.taskEnded();
+      arbiter.processEnded(7);
+      vi.advanceTimersByTime(100);
+
+      expect(settled).toEqual([7]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses task-end only as a delayed no-process fallback", () => {
+    vi.useFakeTimers();
+    try {
+      const settled: Array<number | undefined> = [];
+      const arbiter = new TaskCompletionArbiter(
+        (exitCode) => settled.push(exitCode),
+        100
+      );
+
+      arbiter.taskEnded();
+      expect(settled).toEqual([]);
+      vi.advanceTimersByTime(100);
+      expect(settled).toEqual([undefined]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

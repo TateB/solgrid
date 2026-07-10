@@ -15,5 +15,7 @@ vitest.config.ts
 **/.eslintrc*
 
 # Include the bundled binary for platform-specific VSIX
+bin/**
 !bin/
-!bin/**
+!bin/solgrid
+!bin/solgrid.exe

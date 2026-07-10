@@ -11,6 +11,7 @@ import {
   summarizeCoverageArtifacts,
   summarizeCoverageOverview,
 } from "./coverageOverviewModel";
+import { AsyncRefreshQueue } from "./asyncRefreshQueue";
 
 export interface CoverageConfig {
   enable: boolean;
@@ -22,6 +23,18 @@ export interface CoverageConfig {
 export type CoverageOverviewNode =
   | CoverageOverviewFileNode
   | CoverageOverviewLineNode;
+
+export function normalizeCoverageConfig(config: CoverageConfig): CoverageConfig {
+  return {
+    enable: config.enable,
+    artifacts: Array.from(
+      new Set(config.artifacts.map((pattern) => pattern.trim()).filter(Boolean))
+    ),
+    autoRefreshAfterRun: config.autoRefreshAfterRun,
+    // argv is ordered data. Repeated values can be meaningful to the command.
+    customCommand: [...config.customCommand],
+  };
+}
 
 const COVERAGE_EXCLUDE_GLOB = "{**/node_modules/**,**/target/**,**/.git/**,**/out/**}";
 
@@ -58,8 +71,11 @@ export class CoverageOverviewFeature
   private view: vscode.TreeView<CoverageOverviewNode> | undefined;
   private filterMode: CoverageOverviewFilterMode = "actionable";
   private watchers: vscode.FileSystemWatcher[] = [];
-  private refreshPromise: Promise<void> | undefined;
-  private refreshQueued = false;
+  private refreshGeneration = 0;
+  private disposed = false;
+  private readonly refreshQueue = new AsyncRefreshQueue(() =>
+    this.performRefresh(this.refreshGeneration)
+  );
 
   constructor() {
     this.disposables.push(
@@ -80,16 +96,11 @@ export class CoverageOverviewFeature
   }
 
   async applyConfig(config: CoverageConfig): Promise<void> {
-    this.config = {
-      enable: config.enable,
-      artifacts: Array.from(
-        new Set(config.artifacts.map((pattern) => pattern.trim()).filter(Boolean))
-      ),
-      autoRefreshAfterRun: config.autoRefreshAfterRun,
-      customCommand: Array.from(
-        new Set(config.customCommand.map((part) => part.trim()).filter(Boolean))
-      ),
-    };
+    if (this.disposed) {
+      return;
+    }
+    this.refreshGeneration += 1;
+    this.config = normalizeCoverageConfig(config);
     this.rebuildWatchers();
     if (!this.config.enable) {
       this.clearCoverage();
@@ -107,27 +118,15 @@ export class CoverageOverviewFeature
   }
 
   async refresh(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (!this.config.enable) {
       this.clearCoverage();
       return;
     }
 
-    if (this.refreshPromise) {
-      this.refreshQueued = true;
-      await this.refreshPromise;
-      return;
-    }
-
-    this.refreshPromise = this.performRefresh();
-    try {
-      await this.refreshPromise;
-    } finally {
-      this.refreshPromise = undefined;
-      if (this.refreshQueued) {
-        this.refreshQueued = false;
-        await this.refresh();
-      }
-    }
+    await this.refreshQueue.run();
   }
 
   getTreeItem(element: CoverageOverviewNode): vscode.TreeItem {
@@ -204,6 +203,11 @@ export class CoverageOverviewFeature
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.refreshGeneration += 1;
     for (const watcher of this.watchers) {
       watcher.dispose();
     }
@@ -213,19 +217,17 @@ export class CoverageOverviewFeature
     }
   }
 
-  private async performRefresh(): Promise<void> {
+  private async performRefresh(generation: number): Promise<void> {
     const workspaceRoots =
       vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
     if (workspaceRoots.length === 0 || this.config.artifacts.length === 0) {
-      this.summary = undefined;
-      this.refreshTree();
+      this.applyRefreshResult(generation, undefined);
       return;
     }
 
     const artifactUris = await discoverCoverageArtifacts(this.config.artifacts);
     if (artifactUris.length === 0) {
-      this.summary = undefined;
-      this.refreshTree();
+      this.applyRefreshResult(generation, undefined);
       return;
     }
 
@@ -243,13 +245,28 @@ export class CoverageOverviewFeature
       }
     }
 
-    this.summary =
+    const summary =
       records.length > 0
         ? summarizeCoverageArtifacts(records, workspaceRoots)
         : {
             artifactCount: artifactUris.length,
             files: [],
           };
+    this.applyRefreshResult(generation, summary);
+  }
+
+  private applyRefreshResult(
+    generation: number,
+    summary: CoverageWorkspaceSummary | undefined
+  ): void {
+    if (
+      this.disposed ||
+      generation !== this.refreshGeneration ||
+      !this.config.enable
+    ) {
+      return;
+    }
+    this.summary = summary;
     this.refreshTree();
   }
 

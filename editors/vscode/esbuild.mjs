@@ -11,7 +11,7 @@ const buildOptions = {
   external: ["vscode"],
   format: "cjs",
   platform: "node",
-  target: "node20",
+  target: "node18",
   sourcemap: !production,
   minify: production,
 };

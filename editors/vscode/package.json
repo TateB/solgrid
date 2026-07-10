@@ -14,7 +14,7 @@
     "url": "https://github.com/TateB/solgrid"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Linters",
@@ -34,91 +34,113 @@
     "commands": [
       {
         "command": "solgrid.securityOverview.refresh",
-        "title": "solgrid: Rerun Security Analysis"
+        "title": "solgrid: Rerun Security Analysis",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByFile",
-        "title": "solgrid: Group Security Overview by File"
+        "title": "solgrid: Group Security Overview by File",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupBySeverity",
-        "title": "solgrid: Group Security Overview by Severity"
+        "title": "solgrid: Group Security Overview by Severity",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByConfidence",
-        "title": "solgrid: Group Security Overview by Confidence"
+        "title": "solgrid: Group Security Overview by Confidence",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.groupByFinding",
-        "title": "solgrid: Group Security Overview by Finding"
+        "title": "solgrid: Group Security Overview by Finding",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showSecurity",
-        "title": "solgrid: Security Overview Filter Security Focus"
+        "title": "solgrid: Security Overview Filter Security Focus",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showAll",
-        "title": "solgrid: Security Overview Show All"
+        "title": "solgrid: Security Overview Show All",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showCompiler",
-        "title": "solgrid: Security Overview Show Compiler"
+        "title": "solgrid: Security Overview Show Compiler",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.showDetectors",
-        "title": "solgrid: Security Overview Show Detectors"
+        "title": "solgrid: Security Overview Show Detectors",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.openFinding",
-        "title": "solgrid: Open Security Finding"
+        "title": "solgrid: Open Security Finding",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.openHelp",
-        "title": "solgrid: Open Finding Documentation"
+        "title": "solgrid: Open Finding Documentation",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.suppressNextLine",
-        "title": "solgrid: Suppress Finding on Next Line"
+        "title": "solgrid: Suppress Finding on Next Line",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.applyFix",
-        "title": "solgrid: Apply Finding Fix"
+        "title": "solgrid: Apply Finding Fix",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.suppressGroupNextLine",
-        "title": "solgrid: Suppress Group Findings on Next Line"
+        "title": "solgrid: Suppress Group Findings on Next Line",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.applyGroupFixes",
-        "title": "solgrid: Apply Group Fixes"
+        "title": "solgrid: Apply Group Fixes",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.ignoreFinding",
-        "title": "solgrid: Ignore Finding in Security Overview"
+        "title": "solgrid: Ignore Finding in Security Overview",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.restoreFinding",
-        "title": "solgrid: Restore Ignored Finding in Security Overview"
+        "title": "solgrid: Restore Ignored Finding in Security Overview",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.ignoreGroup",
-        "title": "solgrid: Ignore Group in Security Overview"
+        "title": "solgrid: Ignore Group in Security Overview",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.restoreGroup",
-        "title": "solgrid: Restore Ignored Group in Security Overview"
+        "title": "solgrid: Restore Ignored Group in Security Overview",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.toggleShowIgnored",
-        "title": "solgrid: Toggle Ignored Security Findings"
+        "title": "solgrid: Toggle Ignored Security Findings",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.securityOverview.clearIgnoredBaselines",
-        "title": "solgrid: Clear Ignored Security Baselines"
+        "title": "solgrid: Clear Ignored Security Baselines",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.graph.showImports",
-        "title": "solgrid: Show Imports Graph"
+        "title": "solgrid: Show Imports Graph",
+        "enablement": "config.solgrid.enable && solgrid.languageServerActive"
       },
       {
         "command": "solgrid.coverage.refresh",
@@ -131,10 +153,6 @@
       {
         "command": "solgrid.coverage.runFoundryLcov",
         "title": "solgrid: Run Foundry Coverage (LCOV)"
-      },
-      {
-        "command": "solgrid.coverage.runFoundryCobertura",
-        "title": "solgrid: Run Foundry Coverage (Cobertura)"
       },
       {
         "command": "solgrid.coverage.runHardhatLcov",
@@ -159,7 +177,7 @@
         "solgrid.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable solgrid linting and formatting."
+          "description": "Enable solgrid linting and formatting. Reload the VS Code window after changing this setting."
         },
         "solgrid.path": {
           "type": [
@@ -174,10 +192,10 @@
           "default": true,
           "description": "Auto-fix safe lint issues on save."
         },
-        "solgrid.fixOnSave.unsafeFixes": {
+        "solgrid.unsafeFixesOnSave": {
           "type": "boolean",
           "default": false,
-          "description": "Also apply suggestion-level (unsafe) fixes on save."
+          "description": "Also apply suggestion-level (unsafe) fixes on save. Replaces the legacy solgrid.fixOnSave.unsafeFixes setting."
         },
         "solgrid.formatOnSave": {
           "type": "boolean",
@@ -248,11 +266,13 @@
       "explorer": [
         {
           "id": "solgridSecurityOverview",
-          "name": "solgrid Security"
+          "name": "solgrid Security",
+          "when": "config.solgrid.enable && solgrid.languageServerActive"
         },
         {
           "id": "solgridCoverageOverview",
-          "name": "solgrid Coverage"
+          "name": "solgrid Coverage",
+          "when": "config.solgrid.coverage.enable"
         }
       ]
     },
@@ -388,7 +408,7 @@
     "lint": "eslint src --ext ts",
     "package": "pnpm run compile && node scripts/package-vsix.cjs",
     "package:target": "pnpm run compile && node scripts/package-vsix.cjs --target",
-    "publish": "vsce publish"
+    "publish": "pnpm run compile && node scripts/package-vsix.cjs --publish"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -396,8 +416,8 @@
   "devDependencies": {
     "@types/mocha": "^10.0.0",
     "mocha": "^10.0.0",
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.75.0",
+    "@types/node": "18.15.0",
+    "@types/vscode": "1.82.0",
     "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.25.0",

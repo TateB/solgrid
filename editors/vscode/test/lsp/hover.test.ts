@@ -61,17 +61,13 @@ describe("LSP Hover", () => {
     const txOriginDiag = diagResult.diagnostics.find(
       (d) => d.code === "security/tx-origin"
     );
-
-    if (!txOriginDiag) {
-      // If the rule didn't fire, skip
-      return;
-    }
+    expect(txOriginDiag).toBeDefined();
 
     // Hover in the middle of the diagnostic range
-    const hoverLine = txOriginDiag.range.start.line;
+    const hoverLine = txOriginDiag!.range.start.line;
     const hoverChar = Math.floor(
-      (txOriginDiag.range.start.character +
-        txOriginDiag.range.end.character) /
+      (txOriginDiag!.range.start.character +
+        txOriginDiag!.range.end.character) /
         2
     );
 
@@ -92,20 +88,19 @@ describe("LSP Hover", () => {
 
     // Find any diagnostic and verify hover shows its rule ID
     const diag = diagResult.diagnostics[0];
-    if (!diag) return;
+    expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag.range.start.line,
-      character: diag.range.start.character,
+      line: diag!.range.start.line,
+      character: diag!.range.start.character,
     });
 
-    if (hover) {
-      const hoverContent = extractHoverText(hover);
-      // The hover content should contain the rule ID from the diagnostic
-      const ruleId = diag.code as string;
-      const ruleName = ruleId.split("/")[1];
-      expect(hoverContent).toContain(ruleName);
-    }
+    expect(hover).not.toBeNull();
+    const hoverContent = extractHoverText(hover!);
+    // The hover content should contain the rule ID from the diagnostic
+    const ruleId = diag!.code as string;
+    const ruleName = ruleId.split("/")[1];
+    expect(hoverContent).toContain(ruleName);
   });
 
   it("hover content contains disable instruction", async () => {
@@ -118,17 +113,16 @@ describe("LSP Hover", () => {
     const diag = diagResult.diagnostics.find(
       (d) => d.code === "security/tx-origin"
     );
-    if (!diag) return;
+    expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag.range.start.line,
-      character: diag.range.start.character,
+      line: diag!.range.start.line,
+      character: diag!.range.start.character,
     });
 
-    if (hover) {
-      const hoverContent = extractHoverText(hover);
-      expect(hoverContent).toContain("solgrid-disable-next-line");
-    }
+    expect(hover).not.toBeNull();
+    const hoverContent = extractHoverText(hover!);
+    expect(hoverContent).toContain("solgrid-disable-next-line");
   });
 
   it("hover content is markdown", async () => {
@@ -141,23 +135,18 @@ describe("LSP Hover", () => {
     const diag = diagResult.diagnostics.find(
       (d) => d.code === "security/tx-origin"
     );
-    if (!diag) return;
+    expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag.range.start.line,
-      character: diag.range.start.character,
+      line: diag!.range.start.line,
+      character: diag!.range.start.character,
     });
 
-    if (hover) {
-      const contents = hover.contents;
-      if (
-        typeof contents === "object" &&
-        !Array.isArray(contents) &&
-        "kind" in contents
-      ) {
-        expect(contents.kind).toBe("markdown");
-      }
-    }
+    expect(hover).not.toBeNull();
+    const contents = hover!.contents;
+    expect(typeof contents).toBe("object");
+    expect(Array.isArray(contents)).toBe(false);
+    expect(contents).toMatchObject({ kind: "markdown" });
   });
 
   it("hover content contains fix availability info", async () => {
@@ -167,20 +156,16 @@ describe("LSP Hover", () => {
     openDocument(client, uri, content);
     const diagResult = await waitForDiagnostics(client, uri);
 
-    // Find any diagnostic with a hover
-    for (const diag of diagResult.diagnostics) {
-      const hover = await requestHover(client, uri, {
-        line: diag.range.start.line,
-        character: diag.range.start.character,
-      });
+    const diag = diagResult.diagnostics[0];
+    expect(diag).toBeDefined();
+    const hover = await requestHover(client, uri, {
+      line: diag!.range.start.line,
+      character: diag!.range.start.character,
+    });
 
-      if (hover) {
-        const text = extractHoverText(hover);
-        // Should mention auto-fix availability
-        expect(text).toMatch(/auto-fix/i);
-        break;
-      }
-    }
+    expect(hover).not.toBeNull();
+    // Should mention auto-fix availability.
+    expect(extractHoverText(hover!)).toMatch(/auto-fix/i);
   });
 
   it("returns null for position without diagnostic", async () => {
@@ -189,12 +174,7 @@ describe("LSP Hover", () => {
     const content = readFixture("clean.sol");
 
     openDocument(client, uri, content);
-    // Wait for diagnostics (or timeout if none)
-    try {
-      await waitForDiagnostics(client, uri, 5000);
-    } catch {
-      // May timeout if there are no diagnostics — that's fine
-    }
+    await waitForDiagnostics(client, uri, 5000);
 
     // Hover in the middle of a clean region — should return null
     // (clean.sol has proper NatSpec, so line 6 is the balance declaration)

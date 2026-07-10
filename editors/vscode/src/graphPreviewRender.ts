@@ -118,6 +118,96 @@ const TD_BRANCH_LANE_GAP = 56;
 const TD_LEVEL_GAP = 92;
 const TD_NODE_GAP = 32;
 
+const GRAPH_KINDS = new Set<GraphKind>([
+  "imports",
+  "inheritance",
+  "linearized-inheritance",
+  "control-flow",
+]);
+const GRAPH_NODE_KINDS = new Set<GraphNodeKind>([
+  "file",
+  "contract",
+  "entry",
+  "exit",
+  "modifier",
+  "declaration",
+  "assignment",
+  "call",
+  "emit",
+  "branch",
+  "loop",
+  "loop-next",
+  "terminal-return",
+  "terminal-revert",
+  "control-transfer",
+  "assembly",
+  "try",
+  "catch",
+  "block",
+  "statement",
+]);
+const GRAPH_EDGE_KINDS = new Set<GraphEdgeKind>([
+  "imports",
+  "inherits",
+  "precedes",
+  "normal",
+  "branch-true",
+  "branch-false",
+  "loop-back",
+  "return",
+  "revert",
+  "break",
+  "continue",
+]);
+
+export function isGraphDocumentLike(value: unknown): value is GraphDocumentLike {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const graph = value as Partial<GraphDocumentLike>;
+  if (
+    typeof graph.title !== "string" ||
+    !GRAPH_KINDS.has(graph.kind as GraphKind) ||
+    !Array.isArray(graph.nodes) ||
+    !Array.isArray(graph.edges) ||
+    (graph.focusNodeId !== undefined && typeof graph.focusNodeId !== "string")
+  ) {
+    return false;
+  }
+
+  const nodeIds = new Set<string>();
+  for (const node of graph.nodes) {
+    if (
+      !node ||
+      typeof node !== "object" ||
+      typeof node.id !== "string" ||
+      typeof node.label !== "string" ||
+      typeof node.detail !== "string" ||
+      (node.uri !== undefined && typeof node.uri !== "string") ||
+      (node.kind !== undefined && !GRAPH_NODE_KINDS.has(node.kind)) ||
+      nodeIds.has(node.id)
+    ) {
+      return false;
+    }
+    nodeIds.add(node.id);
+  }
+
+  if (graph.focusNodeId !== undefined && !nodeIds.has(graph.focusNodeId)) {
+    return false;
+  }
+  return graph.edges.every(
+    (edge) =>
+      edge !== null &&
+      typeof edge === "object" &&
+      typeof edge.from === "string" &&
+      typeof edge.to === "string" &&
+      nodeIds.has(edge.from) &&
+      nodeIds.has(edge.to) &&
+      (edge.label === undefined || typeof edge.label === "string") &&
+      (edge.kind === undefined || GRAPH_EDGE_KINDS.has(edge.kind))
+  );
+}
+
 export function buildGraphPreviewSnapshot(
   graph: GraphDocumentLike
 ): GraphPreviewSnapshot {
@@ -157,15 +247,22 @@ export function renderGraphWebviewHtml(
     <style nonce="${options.nonce}">
       :root {
         color-scheme: light dark;
+        --panel-bg: var(--vscode-editor-background);
         --panel-bg: color-mix(in srgb, var(--vscode-editor-background) 94%, var(--vscode-sideBar-background) 6%);
+        --panel-border: var(--vscode-panel-border);
         --panel-border: color-mix(in srgb, var(--vscode-panel-border) 72%, transparent);
+        --panel-muted: var(--vscode-descriptionForeground);
         --panel-muted: color-mix(in srgb, var(--vscode-descriptionForeground) 82%, transparent);
         --panel-strong: var(--vscode-foreground);
         --canvas-bg: var(--vscode-editor-background);
+        --accent: var(--vscode-textLink-foreground);
         --accent: color-mix(in srgb, var(--vscode-textLink-foreground) 86%, white 14%);
+        --accent-soft: transparent;
         --accent-soft: color-mix(in srgb, var(--vscode-textLink-foreground) 16%, transparent);
+        --chip-bg: var(--vscode-badge-background);
         --chip-bg: color-mix(in srgb, var(--vscode-badge-background) 22%, transparent);
         --chip-text: var(--vscode-badge-foreground);
+        --edge-default: var(--vscode-descriptionForeground);
         --edge-default: color-mix(in srgb, var(--panel-muted) 60%, transparent);
         --edge-false: #b45309;
         --edge-true: #15803d;
@@ -198,11 +295,16 @@ export function renderGraphWebviewHtml(
       }
 
       body.vscode-light {
+        --panel-bg: var(--vscode-editor-background);
         --panel-bg: color-mix(in srgb, var(--vscode-editor-background) 96%, var(--vscode-sideBar-background) 4%);
+        --panel-border: var(--vscode-panel-border);
         --panel-border: color-mix(in srgb, var(--vscode-panel-border) 80%, #d0d7de);
+        --panel-muted: var(--vscode-descriptionForeground);
         --panel-muted: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, #57606a);
         --accent: var(--vscode-textLink-foreground);
+        --accent-soft: white;
         --accent-soft: color-mix(in srgb, var(--vscode-textLink-foreground) 12%, white);
+        --chip-bg: var(--vscode-badge-background);
         --chip-bg: color-mix(in srgb, var(--vscode-badge-background) 12%, white);
         --chip-text: var(--vscode-foreground);
         --edge-false: #9a6500;
@@ -323,6 +425,7 @@ export function renderGraphWebviewHtml(
         height: 28px;
         border: 1px solid var(--panel-border);
         border-radius: 6px;
+        background: var(--vscode-editor-background);
         background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
         color: var(--panel-strong);
         cursor: pointer;
@@ -382,6 +485,7 @@ export function renderGraphWebviewHtml(
       }
 
       .grid-line {
+        stroke: var(--panel-border);
         stroke: color-mix(in srgb, var(--panel-border) 50%, transparent);
         stroke-width: 1;
       }
@@ -420,6 +524,7 @@ export function renderGraphWebviewHtml(
       }
 
       .edge-label-pill .edge-label-box {
+        fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
         stroke: var(--edge-default);
         stroke-width: 1;
@@ -430,6 +535,7 @@ export function renderGraphWebviewHtml(
       }
 
       .edge-label-pill.branch-true .edge-label-box {
+        fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--edge-true) 12%, var(--vscode-editor-background));
         stroke: var(--edge-true);
       }
@@ -439,19 +545,23 @@ export function renderGraphWebviewHtml(
       }
 
       .edge-label-pill.branch-false .edge-label-box {
+        fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--edge-false) 12%, var(--vscode-editor-background));
         stroke: var(--edge-false);
       }
 
       .node-card-svg rect {
         stroke-width: 1.6;
+        fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--vscode-editor-background) 92%, transparent);
+        stroke: var(--panel-border);
         stroke: color-mix(in srgb, var(--panel-border) 80%, transparent);
       }
 
       .node-card-svg.focus rect {
         stroke: var(--accent);
         stroke-width: 2.4;
+        fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--accent-soft) 50%, var(--vscode-editor-background));
       }
 
@@ -494,7 +604,9 @@ export function renderGraphWebviewHtml(
       }
 
       .source-chip rect {
+        fill: white;
         fill: color-mix(in srgb, white 72%, transparent);
+        stroke: var(--accent);
         stroke: color-mix(in srgb, var(--accent) 72%, transparent);
         stroke-width: 1;
       }
@@ -509,6 +621,7 @@ export function renderGraphWebviewHtml(
       .source-chip:hover rect,
       .source-chip:focus rect {
         stroke: var(--accent);
+        fill: white;
         fill: color-mix(in srgb, white 86%, var(--accent-soft));
       }
 

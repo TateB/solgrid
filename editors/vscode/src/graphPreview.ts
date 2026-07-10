@@ -5,6 +5,7 @@ import {
   GraphDocumentLike,
   GraphKind,
   GraphPreviewSnapshot,
+  isGraphDocumentLike,
   renderGraphWebviewHtml,
 } from "./graphPreviewRender";
 
@@ -17,6 +18,7 @@ export interface GraphCommandArgs {
 
 let graphPanel: vscode.WebviewPanel | undefined;
 let lastGraphPreviewSnapshot: GraphPreviewSnapshot | undefined;
+let graphRequestSequence = 0;
 
 export function getGraphPreviewSnapshot():
   | GraphPreviewSnapshot
@@ -38,21 +40,37 @@ export async function showGraph(
   }
 
   const command = graphCommand(request.kind);
-  const graph = await client.sendRequest<GraphDocumentLike | null>(
-    "workspace/executeCommand",
-    {
-      command,
-      arguments: [
-        {
-          uri: request.uri,
-          symbolName: request.symbolName ?? null,
-          targetOffset: request.targetOffset ?? null,
-        },
-      ],
+  const requestSequence = ++graphRequestSequence;
+  let graph: GraphDocumentLike | null;
+  try {
+    graph = await client.sendRequest<GraphDocumentLike | null>(
+      "workspace/executeCommand",
+      {
+        command,
+        arguments: [
+          {
+            uri: request.uri,
+            symbolName: request.symbolName ?? null,
+            targetOffset: request.targetOffset ?? null,
+          },
+        ],
+      }
+    );
+  } catch (error) {
+    if (requestSequence === graphRequestSequence) {
+      const detail = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(
+        `solgrid could not build ${graphSubject(request)}: ${detail}`
+      );
     }
-  );
+    return;
+  }
 
-  if (!graph) {
+  if (requestSequence !== graphRequestSequence) {
+    return;
+  }
+
+  if (!graph || !isGraphDocumentLike(graph)) {
     const subject = graphSubject(request);
     void vscode.window.showWarningMessage(`solgrid could not build ${subject}.`);
     return;
@@ -110,10 +128,19 @@ function showGraphPanel(graph: GraphDocumentLike): void {
         message.type === "openSource" &&
         typeof message.uri === "string"
       ) {
-        void vscode.commands.executeCommand(
-          "vscode.open",
-          vscode.Uri.parse(message.uri)
-        );
+        let uri: vscode.Uri;
+        try {
+          uri = vscode.Uri.parse(message.uri, true);
+        } catch {
+          return;
+        }
+        if (uri.scheme !== "file") {
+          void vscode.window.showWarningMessage(
+            "solgrid graph source links may only open local files."
+          );
+          return;
+        }
+        void vscode.commands.executeCommand("vscode.open", uri);
       }
     });
   }

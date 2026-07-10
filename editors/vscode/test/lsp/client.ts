@@ -28,6 +28,19 @@ interface PendingRequest {
   reject: (reason: unknown) => void;
 }
 
+interface NotificationMessage {
+  method: string;
+  params: unknown;
+}
+
+interface PendingNotification {
+  method: string;
+  filter?: (params: unknown) => boolean;
+  resolve: (params: unknown) => void;
+  reject: (reason: unknown) => void;
+  timer: NodeJS.Timeout;
+}
+
 // ---------------------------------------------------------------------------
 // Binary resolution
 // ---------------------------------------------------------------------------
@@ -68,23 +81,31 @@ export class TestLspClient extends EventEmitter {
   private process: ChildProcess | null = null;
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
-  private buffer = "";
+  private buffer = Buffer.alloc(0);
   private contentLength = -1;
+  private closing = false;
+  private notificationBacklog: NotificationMessage[] = [];
+  private notificationWaiters: PendingNotification[] = [];
 
   /**
    * Start the solgrid server process.
    */
   start(binaryPath?: string): void {
     const bin = binaryPath ?? getSolgridBinaryPath();
-    this.process = spawn(bin, ["server"], {
+    this.closing = false;
+    this.notificationBacklog = [];
+    this.buffer = Buffer.alloc(0);
+    this.contentLength = -1;
+    const child = spawn(bin, ["server"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.process = child;
 
-    this.process.stdout!.on("data", (data: Buffer) => {
-      this.onData(data.toString("utf-8"));
+    child.stdout!.on("data", (data: Buffer) => {
+      this.onData(data);
     });
 
-    this.process.stderr!.on("data", (data: Buffer) => {
+    child.stderr!.on("data", (data: Buffer) => {
       // Log server stderr for debugging but don't fail
       const text = data.toString("utf-8").trim();
       if (text) {
@@ -93,7 +114,30 @@ export class TestLspClient extends EventEmitter {
       }
     });
 
-    this.process.on("exit", (code) => {
+    child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
+      if (!this.isExpectedShutdownError(error)) {
+        this.emit("stderr", `LSP stdin error: ${error.message}`);
+      }
+    });
+
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      if (!this.isExpectedShutdownError(error)) {
+        this.emit("stderr", `LSP process error: ${error.message}`);
+      }
+      this.rejectPending(error);
+    });
+
+    child.once("close", (code, signal) => {
+      if (this.process === child) {
+        this.process = null;
+      }
+      this.rejectPending(
+        new Error(
+          `LSP server closed with ${
+            signal ? `signal ${signal}` : `code ${code}`
+          }`
+        )
+      );
       this.emit("exit", code);
     });
   }
@@ -120,7 +164,10 @@ export class TestLspClient extends EventEmitter {
         resolve: resolve as (value: unknown) => void,
         reject,
       });
-      this.send(message);
+      if (!this.send(message)) {
+        this.pending.delete(id);
+        reject(new Error(`Cannot send LSP request "${method}": server is not running`));
+      }
     });
   }
 
@@ -136,6 +183,10 @@ export class TestLspClient extends EventEmitter {
       message.params = params;
     }
     this.send(message);
+    if (method === "exit") {
+      this.closing = true;
+      this.process?.stdin?.end();
+    }
   }
 
   /**
@@ -147,9 +198,26 @@ export class TestLspClient extends EventEmitter {
     filter?: (params: unknown) => boolean,
     timeoutMs = 15000
   ): Promise<unknown> {
+    const bufferedMatches = this.notificationBacklog.filter(
+      (message) =>
+        message.method === method && this.matchesNotification(filter, message.params)
+    );
+    const latestBuffered = bufferedMatches.at(-1);
+    if (latestBuffered) {
+      this.notificationBacklog = this.notificationBacklog.filter(
+        (message) =>
+          message.method !== method ||
+          !this.matchesNotification(filter, message.params)
+      );
+      return Promise.resolve(latestBuffered.params);
+    }
+
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.removeListener("notification", handler);
+        const index = this.notificationWaiters.indexOf(waiter);
+        if (index >= 0) {
+          this.notificationWaiters.splice(index, 1);
+        }
         reject(
           new Error(
             `Timeout waiting for notification "${method}" after ${timeoutMs}ms`
@@ -157,17 +225,88 @@ export class TestLspClient extends EventEmitter {
         );
       }, timeoutMs);
 
-      const handler = (msg: { method: string; params: unknown }) => {
-        if (msg.method === method) {
-          if (!filter || filter(msg.params)) {
-            clearTimeout(timer);
-            this.removeListener("notification", handler);
-            resolve(msg.params);
-          }
+      const waiter: PendingNotification = {
+        method,
+        filter,
+        resolve,
+        reject,
+        timer,
+      };
+      this.notificationWaiters.push(waiter);
+    });
+  }
+
+  discardNotifications(
+    method: string,
+    filter?: (params: unknown) => boolean
+  ): void {
+    this.notificationBacklog = this.notificationBacklog.filter(
+      (message) =>
+        message.method !== method ||
+        !this.matchesNotification(filter, message.params)
+    );
+  }
+
+  waitForNotificationQuiescence(
+    method: string,
+    filter?: (params: unknown) => boolean,
+    quietMs = 250,
+    timeoutMs = 5000
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let quietTimer: NodeJS.Timeout;
+      let settled = false;
+      const cleanup = (): void => {
+        clearTimeout(quietTimer);
+        clearTimeout(timeoutTimer);
+        this.removeListener("notification", handler);
+        this.removeListener("exit", exitHandler);
+      };
+      const fail = (error: Error): void => {
+        if (settled) {
+          return;
         }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const timeoutTimer = setTimeout(() => {
+        fail(
+          new Error(
+            `Notifications for "${method}" did not settle within ${timeoutMs}ms`
+          )
+        );
+      }, timeoutMs);
+      const settle = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const resetQuietTimer = (): void => {
+        clearTimeout(quietTimer);
+        quietTimer = setTimeout(settle, quietMs);
+      };
+      const handler = (message: NotificationMessage): void => {
+        if (
+          message.method === method &&
+          this.matchesNotification(filter, message.params)
+        ) {
+          resetQuietTimer();
+        }
+      };
+      const exitHandler = (code: number | null): void => {
+        fail(
+          new Error(
+            `LSP server exited with code ${code} before notifications settled`
+          )
+        );
       };
 
       this.on("notification", handler);
+      this.on("exit", exitHandler);
     });
   }
 
@@ -207,6 +346,7 @@ export class TestLspClient extends EventEmitter {
    * Send shutdown request followed by exit notification.
    */
   async shutdown(): Promise<void> {
+    this.closing = true;
     try {
       await this.request("shutdown", undefined);
     } catch {
@@ -219,10 +359,12 @@ export class TestLspClient extends EventEmitter {
    * Force-kill the server process.
    */
   kill(): void {
+    this.closing = true;
     if (this.process) {
       this.process.kill("SIGTERM");
       this.process = null;
     }
+    this.rejectPending(new Error("LSP server was terminated"));
   }
 
   /**
@@ -236,14 +378,37 @@ export class TestLspClient extends EventEmitter {
   // Internal
   // -------------------------------------------------------------------------
 
-  private send(message: JsonRpcMessage): void {
+  private send(message: JsonRpcMessage): boolean {
     const body = JSON.stringify(message);
     const header = `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n\r\n`;
-    this.process!.stdin!.write(header + body, "utf-8");
+    const stdin = this.process?.stdin;
+    if (!stdin || stdin.destroyed || stdin.writableEnded) {
+      return false;
+    }
+    try {
+      stdin.write(header + body, "utf-8", (error) => {
+        if (error && !this.isExpectedShutdownError(error)) {
+          this.emit("stderr", `LSP write error: ${error.message}`);
+        }
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        !this.isExpectedShutdownError(error as NodeJS.ErrnoException)
+      ) {
+        this.emit("stderr", `LSP write error: ${error.message}`);
+      }
+      return false;
+    }
   }
 
-  private onData(chunk: string): void {
-    this.buffer += chunk;
+  feedServerBytesForTests(chunk: Buffer): void {
+    this.onData(chunk);
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
     this.parseMessages();
   }
 
@@ -254,27 +419,25 @@ export class TestLspClient extends EventEmitter {
         const headerEnd = this.buffer.indexOf("\r\n\r\n");
         if (headerEnd === -1) return;
 
-        const header = this.buffer.substring(0, headerEnd);
+        const header = this.buffer.subarray(0, headerEnd).toString("ascii");
         const match = header.match(/Content-Length:\s*(\d+)/i);
         if (!match) {
           // Skip malformed header
-          this.buffer = this.buffer.substring(headerEnd + 4);
+          this.buffer = this.buffer.subarray(headerEnd + 4);
           continue;
         }
 
         this.contentLength = parseInt(match[1], 10);
-        this.buffer = this.buffer.substring(headerEnd + 4);
+        this.buffer = this.buffer.subarray(headerEnd + 4);
       }
 
       // Check if we have enough data for the body
-      const bodyBytes = Buffer.byteLength(this.buffer, "utf-8");
-      if (bodyBytes < this.contentLength) return;
+      if (this.buffer.length < this.contentLength) return;
 
-      // Extract exactly contentLength bytes
-      // Need to handle multi-byte correctly
-      const buf = Buffer.from(this.buffer, "utf-8");
-      const bodyStr = buf.subarray(0, this.contentLength).toString("utf-8");
-      this.buffer = buf.subarray(this.contentLength).toString("utf-8");
+      const bodyStr = this.buffer
+        .subarray(0, this.contentLength)
+        .toString("utf-8");
+      this.buffer = this.buffer.subarray(this.contentLength);
       this.contentLength = -1;
 
       try {
@@ -304,10 +467,12 @@ export class TestLspClient extends EventEmitter {
       }
     } else if (message.method && message.id === undefined) {
       // Server-initiated notification
-      this.emit("notification", {
+      const notification = {
         method: message.method,
         params: message.params,
-      });
+      };
+      this.dispatchNotification(notification);
+      this.emit("notification", notification);
     } else if (message.method && message.id !== undefined) {
       // Server-initiated request (e.g., workspace/configuration)
       this.emit("request", {
@@ -321,5 +486,56 @@ export class TestLspClient extends EventEmitter {
         result: null,
       });
     }
+  }
+
+  private dispatchNotification(message: NotificationMessage): void {
+    const waiterIndex = this.notificationWaiters.findIndex(
+      (waiter) =>
+        waiter.method === message.method &&
+        this.matchesNotification(waiter.filter, message.params)
+    );
+    if (waiterIndex >= 0) {
+      const [waiter] = this.notificationWaiters.splice(waiterIndex, 1);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        waiter.resolve(message.params);
+      }
+      return;
+    }
+
+    this.notificationBacklog.push(message);
+    if (this.notificationBacklog.length > 200) {
+      this.notificationBacklog.shift();
+    }
+  }
+
+  private matchesNotification(
+    filter: ((params: unknown) => boolean) | undefined,
+    params: unknown
+  ): boolean {
+    if (!filter) {
+      return true;
+    }
+    try {
+      return filter(params);
+    } catch {
+      return false;
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+    for (const waiter of this.notificationWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.notificationWaiters = [];
+  }
+
+  private isExpectedShutdownError(error: NodeJS.ErrnoException): boolean {
+    return this.closing && (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED");
   }
 }

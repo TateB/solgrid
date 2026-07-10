@@ -18,7 +18,10 @@ import {
   changeDocument,
   closeDocument,
   requestExecuteCommand,
+  saveDocument,
   waitForDiagnostics,
+  waitForNextDiagnostics,
+  waitForDiagnosticsToSettle,
   readFixture,
   fixtureUri,
   resetDocumentVersions,
@@ -68,6 +71,240 @@ describe("LSP Diagnostics", () => {
 
     expect(result.diagnostics).toBeDefined();
     expect(result.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it("uses unsaved imported-file content when republishing dependent diagnostics", async () => {
+    const dir = tempWorkspace();
+    const basePath = path.join(dir, "Base.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const baseUri = toUri(basePath);
+    const mainUri = toUri(mainPath);
+    const baseSource = `pragma solidity ^0.8.0;
+contract Base {}
+`;
+    const unsavedBaseSource = `pragma solidity ^0.8.0;
+contract RenamedBase {}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Main is Base {}
+`;
+
+    fs.writeFileSync(basePath, baseSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      await initializeServer(client, toUri(dir));
+
+      openDocument(client, baseUri, baseSource);
+      openDocument(client, mainUri, mainSource);
+      await waitForDiagnostics(client, baseUri);
+      const initialMain = await waitForDiagnostics(client, mainUri);
+      expect(
+        initialMain.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.code === "compiler/unresolved-base-contract"
+        )
+      ).toBe(false);
+
+      const initialSettled = waitForDiagnosticsToSettle(client, [mainUri]);
+      changeDocument(client, mainUri, mainSource);
+      await initialSettled;
+      const refreshedMain = waitForNextDiagnostics(client, mainUri);
+      changeDocument(client, baseUri, unsavedBaseSource);
+      const refreshed = await refreshedMain;
+
+      expect(
+        refreshed.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.code === "compiler/unresolved-base-contract"
+        )
+      ).toBe(true);
+      expect(fs.readFileSync(basePath, "utf8")).toBe(baseSource);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("republishes diagnostics for transitive open dependents after an import changes", async () => {
+    const dir = tempWorkspace();
+    const basePath = path.join(dir, "Base.sol");
+    const middlePath = path.join(dir, "Middle.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const baseUri = toUri(basePath);
+    const middleUri = toUri(middlePath);
+    const mainUri = toUri(mainPath);
+    const baseSource = `pragma solidity ^0.8.0;
+contract Base {}
+`;
+    const middleSource = `pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Middle is Base {}
+`;
+    const mainSource = `pragma solidity ^0.8.0;
+import {Middle} from "./Middle.sol";
+contract Main is Middle {}
+`;
+
+    fs.writeFileSync(basePath, baseSource, "utf8");
+    fs.writeFileSync(middlePath, middleSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      await initializeServer(client, toUri(dir));
+
+      openDocument(client, baseUri, baseSource);
+      openDocument(client, middleUri, middleSource);
+      openDocument(client, mainUri, mainSource);
+      await waitForDiagnostics(client, baseUri);
+      await waitForDiagnostics(client, middleUri);
+      await waitForDiagnostics(client, mainUri);
+
+      const middleSettled = waitForDiagnosticsToSettle(client, [middleUri]);
+      const mainSettled = waitForDiagnosticsToSettle(client, [mainUri]);
+      changeDocument(client, middleUri, middleSource);
+      changeDocument(client, mainUri, mainSource);
+      await Promise.all([middleSettled, mainSettled]);
+      const middleRefresh = waitForNextDiagnostics(client, middleUri);
+      const mainRefresh = waitForNextDiagnostics(client, mainUri);
+      changeDocument(
+        client,
+        baseUri,
+        `pragma solidity ^0.8.0;\ncontract RenamedBase {}\n`
+      );
+
+      const [refreshedMiddle, refreshedMain] = await Promise.all([
+        middleRefresh,
+        mainRefresh,
+      ]);
+      expect(refreshedMiddle.uri).toBe(middleUri);
+      expect(
+        refreshedMiddle.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.code === "compiler/unresolved-base-contract"
+        )
+      ).toBe(true);
+      expect(refreshedMain.uri).toBe(mainUri);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes only the newest dependent result after rapid imported-buffer changes", async () => {
+    const dir = tempWorkspace();
+    const basePath = path.join(dir, "Base.sol");
+    const mainPath = path.join(dir, "Main.sol");
+    const baseUri = toUri(basePath);
+    const mainUri = toUri(mainPath);
+    const baseSource = `pragma solidity ^0.8.0;\ncontract Base {}\n`;
+    const missingBaseSource = `pragma solidity ^0.8.0;\ncontract RenamedBase {}\n`;
+    const mainSource = `pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Main is Base {}
+`;
+
+    fs.writeFileSync(basePath, baseSource, "utf8");
+    fs.writeFileSync(mainPath, mainSource, "utf8");
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      await initializeServer(client, toUri(dir));
+
+      openDocument(client, baseUri, baseSource);
+      openDocument(client, mainUri, mainSource);
+      await waitForDiagnostics(client, baseUri);
+      await waitForDiagnostics(client, mainUri);
+      const initialSettled = waitForDiagnosticsToSettle(client, [mainUri]);
+      changeDocument(client, mainUri, mainSource);
+      await initialSettled;
+
+      client.discardNotifications(
+        "textDocument/publishDiagnostics",
+        (params) => (params as PublishDiagnosticsParams).uri === mainUri
+      );
+      const rapidPublications: PublishDiagnosticsParams[] = [];
+      const captureRapid = (message: { method: string; params: unknown }): void => {
+        const params = message.params as PublishDiagnosticsParams;
+        if (
+          message.method === "textDocument/publishDiagnostics" &&
+          params.uri === mainUri
+        ) {
+          rapidPublications.push(params);
+        }
+      };
+      client.on("notification", captureRapid);
+      const rapidSettled = waitForDiagnosticsToSettle(client, [mainUri]);
+      changeDocument(client, baseUri, missingBaseSource);
+      changeDocument(client, baseUri, baseSource);
+      await rapidSettled;
+      client.removeListener("notification", captureRapid);
+      const newest = await waitForDiagnostics(client, mainUri);
+      expect(
+        newest.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.code === "compiler/unresolved-base-contract"
+        )
+      ).toBe(false);
+      expect(rapidPublications.length).toBeGreaterThan(0);
+      expect(
+        rapidPublications.every(
+          (publication) =>
+            !publication.diagnostics.some(
+              (diagnostic) =>
+                diagnostic.code === "compiler/unresolved-base-contract"
+            )
+        )
+      ).toBe(true);
+
+      client.discardNotifications(
+        "textDocument/publishDiagnostics",
+        (params) => (params as PublishDiagnosticsParams).uri === mainUri
+      );
+      const savePublications: PublishDiagnosticsParams[] = [];
+      const captureSave = (message: { method: string; params: unknown }): void => {
+        const params = message.params as PublishDiagnosticsParams;
+        if (
+          message.method === "textDocument/publishDiagnostics" &&
+          params.uri === mainUri
+        ) {
+          savePublications.push(params);
+        }
+      };
+      client.on("notification", captureSave);
+      const saveSettled = waitForDiagnosticsToSettle(client, [mainUri]);
+      saveDocument(client, baseUri, missingBaseSource);
+      await saveSettled;
+      client.removeListener("notification", captureSave);
+      const saved = await waitForDiagnostics(client, mainUri);
+      expect(
+        saved.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.code === "compiler/unresolved-base-contract"
+        )
+      ).toBe(true);
+      expect(savePublications.length).toBeGreaterThan(0);
+      expect(
+        savePublications.every((publication) =>
+          publication.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.code === "compiler/unresolved-base-contract"
+          )
+        )
+      ).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("detects security/tx-origin in file with tx.origin usage", async () => {

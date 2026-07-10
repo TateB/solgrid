@@ -5,6 +5,7 @@ import * as path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { TestLspClient } from "./client";
 import {
+  changeDocument,
   closeDocument,
   CallHierarchyItem,
   CodeLens,
@@ -147,7 +148,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const position = { line: 3, character: 26 };
     const withoutDeclaration = await requestReferences(client, uri, position, false);
@@ -183,8 +184,8 @@ contract Main is T {}
 
       openDocument(client, tokenUri, tokenSource);
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, tokenUri).catch(() => {});
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, tokenUri);
+      await waitForDiagnostics(client, mainUri);
 
       const references = await requestReferences(
         client,
@@ -217,7 +218,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const position = { line: 4, character: 16 };
     const prepare = await requestPrepareRename(client, uri, position);
@@ -248,6 +249,25 @@ contract Token {
     ]);
   });
 
+  it("rejects Solidity reserved keywords as rename targets", async () => {
+    const uri = "file:///tmp/solgrid-rename-keyword.sol";
+    const source = `pragma solidity ^0.8.0;
+
+contract Token {
+    function run(uint256 amount) external pure returns (uint256) {
+        return amount;
+    }
+}
+`;
+
+    openDocument(client, uri, source);
+    await waitForDiagnostics(client, uri);
+
+    const position = { line: 3, character: 14 };
+    expect(await requestPrepareRename(client, uri, position)).not.toBeNull();
+    expect(await requestRename(client, uri, position, "contract")).toBeNull();
+  });
+
   it("prepares and applies safe cross-file rename edits for aliased imports", async () => {
     const dir = tempWorkspace();
     const tokenPath = path.join(dir, "Token.sol");
@@ -276,8 +296,8 @@ contract Main is T {}
 
       openDocument(client, tokenUri, tokenSource);
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, tokenUri).catch(() => {});
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, tokenUri);
+      await waitForDiagnostics(client, mainUri);
 
       const prepare = await requestPrepareRename(client, tokenUri, {
         line: 1,
@@ -341,8 +361,8 @@ contract Main is T {}
 
       openDocument(client, tokenUri, tokenSource);
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, tokenUri).catch(() => {});
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, tokenUri);
+      await waitForDiagnostics(client, mainUri);
 
       expect(
         await requestPrepareRename(client, mainUri, { line: 2, character: 17 })
@@ -385,8 +405,8 @@ contract Main {
 
       openDocument(client, tokenUri, tokenSource);
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, tokenUri).catch(() => {});
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, tokenUri);
+      await waitForDiagnostics(client, mainUri);
 
       const prepare = await requestPrepareRename(client, tokenUri, {
         line: 1,
@@ -461,8 +481,8 @@ contract Main {
 
       openDocument(client, tokenUri, tokenSource);
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, tokenUri).catch(() => {});
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, tokenUri);
+      await waitForDiagnostics(client, mainUri);
 
       const prepare = await requestPrepareRename(client, tokenUri, {
         line: 1,
@@ -523,7 +543,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const prepared = await requestPrepareCallHierarchy(client, uri, {
       line: 9,
@@ -567,7 +587,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     expect(
       await requestPrepareCallHierarchy(client, uri, {
@@ -590,7 +610,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const symbols = nestedDocumentSymbols(await requestDocumentSymbols(client, uri));
     expect(symbols).toHaveLength(1);
@@ -618,7 +638,7 @@ contract Main {}
 
     try {
       openDocument(client, mainUri, fs.readFileSync(mainPath, "utf-8"));
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, mainUri);
 
       const links = await requestDocumentLinks(client, mainUri);
       expect(links).toHaveLength(1);
@@ -662,6 +682,59 @@ contract Main {}
     }
   });
 
+  it("keeps immediate open-buffer changes when initial indexing completes", async () => {
+    const dir = tempWorkspace();
+    const targetPath = path.join(dir, "Target.sol");
+    const targetUri = toUri(targetPath);
+    const diskSource = `pragma solidity ^0.8.0;\ncontract DiskName {}\n`;
+    const bufferSource = `pragma solidity ^0.8.0;\ncontract BufferName {}\n`;
+    fs.writeFileSync(targetPath, diskSource, "utf8");
+    for (let index = 0; index < 300; index += 1) {
+      fs.writeFileSync(
+        path.join(dir, `Filler${index}.sol`),
+        `pragma solidity ^0.8.0;\ncontract Filler${index} {}\n`,
+        "utf8"
+      );
+    }
+
+    try {
+      client.kill();
+      client = new TestLspClient();
+      client.start();
+      resetDocumentVersions();
+      const indexReady = client.waitForNotification(
+        "solgrid/projectIndexStatus",
+        (params) =>
+          (params as { state?: string }).state === "ready",
+        15000
+      );
+      await initializeServer(client, toUri(dir));
+
+      const changedDiagnostics = client.waitForNotification(
+        "textDocument/publishDiagnostics",
+        (params) => {
+          const diagnostics = params as { uri?: string; version?: number };
+          return diagnostics.uri === targetUri && diagnostics.version === 2;
+        },
+        15000
+      );
+      openDocument(client, targetUri, diskSource);
+      changeDocument(client, targetUri, bufferSource);
+      await Promise.all([indexReady, changedDiagnostics]);
+
+      const bufferSymbols = await requestWorkspaceSymbols(client, "BufferName");
+      expect(bufferSymbols?.some((symbol) => symbol.name === "BufferName")).toBe(
+        true
+      );
+      const diskSymbols = await requestWorkspaceSymbols(client, "DiskName");
+      expect(diskSymbols?.some((symbol) => symbol.name === "DiskName")).toBe(
+        false
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns reference-count code lenses", async () => {
     const uri = "file:///tmp/solgrid-codelens.sol";
     const source = `pragma solidity ^0.8.0;
@@ -677,7 +750,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const { lens: referenceLens, lenses } = await waitForCodeLens(
       client,
@@ -758,7 +831,7 @@ contract Use {
 
       const uri = toUri(libPath);
       openDocument(client, uri, libSource);
-      await waitForDiagnostics(client, uri).catch(() => {});
+      await waitForDiagnostics(client, uri);
 
       const warmingLenses = (await requestCodeLenses(client, uri)) ?? [];
       expect(
@@ -800,7 +873,7 @@ contract Main is Dep {}
       await initializeServer(client, toUri(dir));
 
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, mainUri);
 
       const graph = await requestExecuteCommand<{
         kind: string;
@@ -839,7 +912,7 @@ contract Vault is Ownable {}
       await initializeServer(client, toUri(dir));
 
       openDocument(client, uri, source);
-      await waitForDiagnostics(client, uri).catch(() => {});
+      await waitForDiagnostics(client, uri);
 
       const graph = await requestExecuteCommand<{
         kind: string;
@@ -882,7 +955,7 @@ contract Vault is AccessControl, Pausable {}
       await initializeServer(client, toUri(dir));
 
       openDocument(client, uri, source);
-      await waitForDiagnostics(client, uri).catch(() => {});
+      await waitForDiagnostics(client, uri);
 
       const lenses = (await requestCodeLenses(client, uri)) ?? [];
       expect(
@@ -932,7 +1005,7 @@ contract Vault {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const graph = await requestExecuteCommand<{
       kind: string;
@@ -985,7 +1058,7 @@ contract Vault {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const graph = await requestExecuteCommand<{
       kind: string;
@@ -1049,7 +1122,7 @@ contract Main is Base {
       await initializeServer(client, toUri(dir));
 
       openDocument(client, mainUri, mainSource);
-      await waitForDiagnostics(client, mainUri).catch(() => {});
+      await waitForDiagnostics(client, mainUri);
 
       const graph = await requestExecuteCommand<{
         kind: string;
@@ -1105,7 +1178,7 @@ contract Vault {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const graph = await requestExecuteCommand<{
       kind: string;
@@ -1168,7 +1241,7 @@ contract Vault {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const graph = await requestExecuteCommand<{
       kind: string;
@@ -1214,7 +1287,7 @@ contract Token {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const hints =
       (await requestInlayHints(client, uri, {
@@ -1248,7 +1321,7 @@ contract Router {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const hints =
       (await requestInlayHints(client, uri, {
@@ -1285,7 +1358,7 @@ contract Router is BaseRouter, IRouter {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const hints =
       (await requestInlayHints(client, uri, {
@@ -1314,7 +1387,7 @@ contract Forwarder {
 `;
 
     openDocument(client, uri, source);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const hints =
       (await requestInlayHints(client, uri, {
@@ -1357,7 +1430,7 @@ contract Vault is BaseVault {}
       await initializeServer(client, toUri(dir));
 
       openDocument(client, uri, source);
-      await waitForDiagnostics(client, uri).catch(() => {});
+      await waitForDiagnostics(client, uri);
 
       const hints =
         (await requestInlayHints(client, uri, {

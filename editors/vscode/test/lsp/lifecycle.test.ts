@@ -142,20 +142,29 @@ describe("LSP Server Lifecycle", () => {
     const result = await client.request("shutdown", undefined);
     expect(result).toBeNull();
 
-    // Send exit notification
-    client.notify("exit", undefined);
-
     // tower-lsp-server v0.21+ closes transport ~1s after exit notification.
     // The server process should terminate on its own within 5s.
+    const processExit = new Promise<boolean>((resolve) => {
+      client.on("exit", () => resolve(true));
+    });
+    client.notify("exit", undefined);
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => {
-        client.on("exit", () => resolve(true));
-      }),
+      processExit,
       new Promise<boolean>((resolve) => {
         setTimeout(() => resolve(false), 5000);
       }),
     ]);
 
     expect(exited).toBe(true);
+  });
+
+  it("rejects pending requests when the server process cannot spawn", async () => {
+    const missingClient = new TestLspClient();
+    missingClient.start("/definitely/missing/solgrid-test-server");
+
+    await expect(
+      missingClient.request("initialize", { processId: process.pid })
+    ).rejects.toThrow(/ENOENT|spawn|closed/u);
+    missingClient.kill();
   });
 });

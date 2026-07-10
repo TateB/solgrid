@@ -19,6 +19,18 @@ import {
   summarizeOverview,
 } from "./securityOverviewModel";
 
+type SecurityCodeActionResolver = (
+  finding: SecurityFinding
+) => Promise<Array<vscode.CodeAction | vscode.Command>>;
+
+let securityCodeActionResolver: SecurityCodeActionResolver | undefined;
+
+export function setSecurityCodeActionResolver(
+  resolver: SecurityCodeActionResolver | undefined
+): void {
+  securityCodeActionResolver = resolver;
+}
+
 export type SecurityOverviewNode =
   | SecurityOverviewGroupNode
   | SecurityOverviewFindingNode;
@@ -487,24 +499,79 @@ async function suppressFindings(
   }
 
   const edit = new vscode.WorkspaceEdit();
+  const grouped = new Map<string, SecurityFinding[]>();
+  let firstApplied:
+    | { finding: SecurityFinding; directiveLine: number }
+    | undefined;
 
   for (const finding of findings) {
-    const uri = vscode.Uri.parse(finding.uri);
-    const document = await vscode.workspace.openTextDocument(uri);
-    const targetLine = finding.range.start.line;
+    const key = `${finding.uri}:${finding.range.start.line}`;
+    const group = grouped.get(key) ?? [];
+    group.push(finding);
+    grouped.set(key, group);
+  }
+
+  for (const sameLineFindings of grouped.values()) {
+    const firstCandidate = sameLineFindings[0];
+    if (!firstCandidate) {
+      continue;
+    }
+    let uri: vscode.Uri;
+    let document: vscode.TextDocument;
+    try {
+      uri = vscode.Uri.parse(firstCandidate.uri, true);
+      document = await vscode.workspace.openTextDocument(uri);
+    } catch {
+      continue;
+    }
+    const currentFindings = sameLineFindings.filter((finding) =>
+      isCurrentFinding(uri, finding)
+    );
+    const [first] = currentFindings;
+    if (!first) {
+      continue;
+    }
+    const targetLine = first.range.start.line;
+    if (targetLine < 0 || targetLine >= document.lineCount) {
+      continue;
+    }
+    const ruleIds = currentFindings.map((finding) => finding.meta.id);
     const directive = buildSuppressNextLineDirective(
-      finding.meta.id,
+      ruleIds,
       document.lineAt(targetLine).text
     );
 
-    if (
-      targetLine > 0 &&
-      document.lineAt(targetLine - 1).text.trim() === directive.trim()
-    ) {
-      continue;
+    if (targetLine > 0) {
+      const previousLine = document.lineAt(targetLine - 1);
+      const existing = previousLine.text.match(
+        /^\s*\/\/\s*solgrid-disable-next-line(?:\s+(.*?))?\s*$/u
+      );
+      if (existing) {
+        const existingIds = (existing[1] ?? "")
+          .split(",")
+          .map((ruleId) => ruleId.trim())
+          .filter(Boolean);
+        if (existingIds.length === 0) {
+          continue;
+        }
+        const combinedDirective = buildSuppressNextLineDirective(
+          [...existingIds, ...ruleIds],
+          document.lineAt(targetLine).text
+        ).trimEnd();
+        if (previousLine.text !== combinedDirective) {
+          edit.replace(uri, previousLine.range, combinedDirective);
+          firstApplied ??= { finding: first, directiveLine: targetLine - 1 };
+        }
+        continue;
+      }
     }
 
     edit.insert(uri, new vscode.Position(targetLine, 0), directive);
+    firstApplied ??= { finding: first, directiveLine: targetLine };
+  }
+
+  if (!firstApplied) {
+    return;
   }
 
   const applied = await vscode.workspace.applyEdit(edit);
@@ -513,21 +580,51 @@ async function suppressFindings(
   }
 
   if (revealFirstFinding) {
-    const [firstFinding] = findings;
-    if (firstFinding) {
-      await revealSuppressionDirective(firstFinding);
+    try {
+      await revealSuppressionDirective(
+        firstApplied.finding,
+        firstApplied.directiveLine
+      );
+    } catch {
+      // The document can change again between applying and revealing the edit.
     }
   }
 }
 
-async function revealSuppressionDirective(finding: SecurityFinding): Promise<void> {
+function isCurrentFinding(uri: vscode.Uri, finding: SecurityFinding): boolean {
+  return vscode.languages.getDiagnostics(uri).some((diagnostic) => {
+    const code =
+      typeof diagnostic.code === "object" && diagnostic.code !== null
+        ? diagnostic.code.value
+        : diagnostic.code;
+    return (
+      diagnostic.source === finding.source &&
+      String(code) === finding.code &&
+      diagnostic.range.start.line === finding.range.start.line &&
+      diagnostic.range.start.character === finding.range.start.character &&
+      diagnostic.range.end.line === finding.range.end.line &&
+      diagnostic.range.end.character === finding.range.end.character
+    );
+  });
+}
+
+async function revealSuppressionDirective(
+  finding: SecurityFinding,
+  directiveLineNumber: number
+): Promise<void> {
   const uri = vscode.Uri.parse(finding.uri);
   const updatedDocument = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(updatedDocument, {
     preview: false,
     preserveFocus: false,
   });
-  const directiveLine = updatedDocument.lineAt(finding.range.start.line).range;
+  if (
+    directiveLineNumber < 0 ||
+    directiveLineNumber >= updatedDocument.lineCount
+  ) {
+    return;
+  }
+  const directiveLine = updatedDocument.lineAt(directiveLineNumber).range;
   editor.selection = new vscode.Selection(directiveLine.end, directiveLine.end);
   editor.revealRange(directiveLine, vscode.TextEditorRevealType.InCenter);
 }
@@ -584,20 +681,36 @@ async function resolvePreferredFixForFinding(
     )
   );
 
-  const actions =
-    (await vscode.commands.executeCommand<
-      Array<vscode.CodeAction | vscode.Command>
-    >(
-      "vscode.executeCodeActionProvider",
-      uri,
-      range,
-      vscode.CodeActionKind.QuickFix.value
-    )) ?? [];
-  const matchingActions = actions.filter(isCodeAction);
-  const selected = pickPreferredCodeActionForFinding<vscode.CodeAction>(
+  const actions = securityCodeActionResolver
+    ? await securityCodeActionResolver(finding)
+    : ((await vscode.commands.executeCommand<
+        Array<vscode.CodeAction | vscode.Command>
+      >(
+        "vscode.executeCodeActionProvider",
+        uri,
+        range,
+        vscode.CodeActionKind.QuickFix.value
+      )) ?? []);
+  const codeActions = actions.filter(isCodeAction);
+  const diagnosticMatch = pickPreferredCodeActionForFinding<vscode.CodeAction>(
     finding,
-    matchingActions
-  ) ?? fallbackQuickFixAction(matchingActions);
+    codeActions
+  );
+  const matchingActions = diagnosticMatch
+    ? codeActions.filter((action) =>
+        action.diagnostics?.some((diagnostic) => {
+          const diagnosticCode =
+            typeof diagnostic.code === "object" && diagnostic.code !== null
+              ? diagnostic.code.value
+              : diagnostic.code;
+          return (
+            String(diagnosticCode) === finding.code &&
+            diagnostic.range.isEqual(range)
+          );
+        })
+      )
+    : [];
+  const selected = diagnosticMatch;
 
   return {
     actions,
@@ -646,32 +759,6 @@ async function applyResolvedFixAction(
   }
 
   return true;
-}
-
-function fallbackQuickFixAction(
-  actions: readonly vscode.CodeAction[]
-): vscode.CodeAction | undefined {
-  if (actions.length === 0) {
-    return undefined;
-  }
-
-  const quickFixes = actions.filter((action) =>
-    action.kind?.contains(vscode.CodeActionKind.QuickFix) ?? true
-  );
-  if (quickFixes.length === 1) {
-    return quickFixes[0];
-  }
-
-  const preferredQuickFixes = quickFixes.filter((action) => action.isPreferred);
-  if (preferredQuickFixes.length === 1) {
-    return preferredQuickFixes[0];
-  }
-
-  if (actions.length === 1) {
-    return actions[0];
-  }
-
-  return undefined;
 }
 
 function readIgnoredFindingKeys(storage: vscode.Memento): string[] {

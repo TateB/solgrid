@@ -208,6 +208,17 @@ describe("buildSuppressNextLineDirective", () => {
       "        // solgrid-disable-next-line security/unchecked-low-level-call\n"
     );
   });
+
+  it("groups multiple rule IDs into one directive", () => {
+    const directive = buildSuppressNextLineDirective(
+      ["security/tx-origin", "best-practices/no-empty-blocks"],
+      "    function run() external {}"
+    );
+
+    expect(directive).toBe(
+      "    // solgrid-disable-next-line best-practices/no-empty-blocks, security/tx-origin\n"
+    );
+  });
 });
 
 describe("pickPreferredCodeActionForFinding", () => {
@@ -269,6 +280,38 @@ describe("pickPreferredCodeActionForFinding", () => {
     ]);
 
     expect(chosen?.title).toBe("Preferred fix");
+  });
+
+  it("does not fall back to an unrelated sole quick fix", () => {
+    const [finding] = extractSecurityFindings({
+      uri: "file:///workspace/Test.sol",
+      diagnostics: [
+        {
+          range: {
+            start: { line: 4, character: 8 },
+            end: { line: 4, character: 12 },
+          },
+          code: "style/use-uint256",
+          source: "solgrid",
+          message: "use uint256",
+        },
+      ],
+    });
+
+    const chosen = pickPreferredCodeActionForFinding(finding, [
+      {
+        title: "Unrelated fix",
+        isPreferred: true,
+        diagnostics: [
+          {
+            code: "security/tx-origin",
+            range: finding.range,
+          },
+        ],
+      },
+    ]);
+
+    expect(chosen).toBeUndefined();
   });
 });
 

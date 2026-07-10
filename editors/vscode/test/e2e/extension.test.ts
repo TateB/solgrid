@@ -172,10 +172,8 @@ describe("solgrid Extension E2E", () => {
     // Verify settings exist with correct defaults
     assert.strictEqual(config.get("enable"), true);
     assert.strictEqual(config.get("fixOnSave"), true);
+    assert.strictEqual(config.get("unsafeFixesOnSave"), false);
     assert.strictEqual(config.get("formatOnSave"), true);
-    // Note: "fixOnSave.unsafeFixes" is not testable via getConfiguration() because
-    // VSCode ignores dotted child keys when the parent is a boolean leaf.
-    // The extension handles this with a fallback default in readVSCodeConfig().
     // Note: "path" may be set by test runner via workspace settings, so only check type
     const pathVal = config.get("path");
     assert.ok(pathVal === null || typeof pathVal === "string", "path should be null or string");
@@ -607,7 +605,7 @@ contract Vault {
 
     const preview = await waitForGraphPreviewSnapshot(
       (snapshot) =>
-        snapshot.title === "Control-flow graph for Vault.run" &&
+        snapshot.title.startsWith("Control-flow graph for Vault.run") &&
         snapshot.kind === "control-flow" &&
         snapshot.focusLabel === "Entry",
       15000,
@@ -616,7 +614,10 @@ contract Vault {
 
     assert.ok(preview.summary.includes("Function-level CFG"));
     assert.ok(preview.nodeLabels.includes("Entry"));
-    assert.ok(preview.nodeLabels.includes("Exit"));
+    assert.ok(
+      !preview.nodeLabels.includes("Exit"),
+      "the renderer should prune an unconnected synthetic exit after a terminal return"
+    );
   });
 
   it("graph preview command opens a rendered linearized inheritance preview", async function () {
@@ -1001,8 +1002,6 @@ contract SecurityGroupIgnored {
     function badAuth() external view returns (bool) {
         return tx.origin == owner;
     }
-
-    function noop() external {}
 }
 `
     );
@@ -1132,11 +1131,7 @@ pragma solidity 0.8.0;
 contract SecurityGroupSuppress {
     address private owner;
 
-    function badAuth() external view returns (bool) {
-        return tx.origin == owner;
-    }
-
-    function noop() external {}
+    function badAuth() external view returns (bool) { return tx.origin == owner && block.timestamp > 0; }
 }
 `
     );
@@ -1187,19 +1182,22 @@ contract SecurityGroupSuppress {
       async () => document.getText(),
       (text) =>
         text !== originalText &&
-        text.includes("// solgrid-disable-next-line security/tx-origin") &&
         text.includes(
-          "// solgrid-disable-next-line best-practices/no-empty-blocks"
+          "// solgrid-disable-next-line security/not-rely-on-time, security/tx-origin"
         ),
       15000,
       "group suppress directive application"
     );
 
-    assert.ok(updatedText.includes("solgrid-disable-next-line security/tx-origin"));
     assert.ok(
       updatedText.includes(
-        "solgrid-disable-next-line best-practices/no-empty-blocks"
+        "solgrid-disable-next-line security/not-rely-on-time, security/tx-origin"
       )
+    );
+    assert.strictEqual(
+      updatedText.match(/solgrid-disable-next-line/gu)?.length,
+      1,
+      "same-line findings should produce one grouped suppression directive"
     );
   });
 
@@ -1381,7 +1379,10 @@ contract SecurityGroupFixable {
     }>("_solgrid.test.previewSecurityOverviewFix", findingNode);
 
     assert.ok(preview, "expected a fix preview result");
-    assert.ok(preview?.selectedTitle, "expected a concrete selected fix action");
+    assert.ok(
+      preview?.selectedTitle,
+      `expected a concrete selected fix action: ${JSON.stringify(preview)}`
+    );
     assert.strictEqual(preview?.selectedKind, "quickfix");
     assert.ok((preview?.matchingTitles.length ?? 0) > 0);
 

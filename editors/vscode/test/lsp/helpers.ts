@@ -408,6 +408,39 @@ export function waitForDiagnostics(
   ) as Promise<PublishDiagnosticsParams>;
 }
 
+/**
+ * Ignore already-buffered diagnostics and wait for the next publication.
+ * Register the returned promise before sending the notification that triggers
+ * analysis.
+ */
+export function waitForNextDiagnostics(
+  client: TestLspClient,
+  uri: string,
+  timeoutMs = 15000
+): Promise<PublishDiagnosticsParams> {
+  const matchesUri = (params: unknown): boolean =>
+    (params as PublishDiagnosticsParams).uri === uri;
+  client.discardNotifications("textDocument/publishDiagnostics", matchesUri);
+  return client.waitForNotification(
+    "textDocument/publishDiagnostics",
+    matchesUri,
+    timeoutMs
+  ) as Promise<PublishDiagnosticsParams>;
+}
+
+export function waitForDiagnosticsToSettle(
+  client: TestLspClient,
+  uris: readonly string[],
+  quietMs = 250
+): Promise<void> {
+  const uriSet = new Set(uris);
+  return client.waitForNotificationQuiescence(
+    "textDocument/publishDiagnostics",
+    (params) => uriSet.has((params as PublishDiagnosticsParams).uri),
+    quietMs
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Request helpers
 // ---------------------------------------------------------------------------

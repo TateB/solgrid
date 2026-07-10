@@ -301,11 +301,18 @@ export function collectRestorableGroupFindings(
 }
 
 export function buildSuppressNextLineDirective(
-  ruleId: string,
+  ruleIds: string | readonly string[],
   lineText: string
 ): string {
   const indentation = lineText.match(/^\s*/)?.[0] ?? "";
-  return `${indentation}// solgrid-disable-next-line ${ruleId}\n`;
+  const ids = (typeof ruleIds === "string" ? [ruleIds] : ruleIds)
+    .map((ruleId) => ruleId.trim())
+    .filter(Boolean);
+  const suffix =
+    ids.length > 0
+      ? ` ${Array.from(new Set(ids)).sort().join(", ")}`
+      : "";
+  return `${indentation}// solgrid-disable-next-line${suffix}\n`;
 }
 
 export function pickPreferredCodeActionForFinding<T extends CodeActionLike>(
