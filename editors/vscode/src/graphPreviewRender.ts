@@ -74,6 +74,16 @@ export interface GraphPreviewSnapshot {
   edgeCount: number;
 }
 
+export interface GraphRenderBudget {
+  canRender: boolean;
+  edgeCount: number;
+  edgeLimit: number;
+  nodeCount: number;
+  nodeLimit: number;
+  textLength: number;
+  textLimit: number;
+}
+
 interface LayoutNode extends GraphNodeLike {
   height: number;
   width: number;
@@ -84,6 +94,10 @@ interface LayoutNode extends GraphNodeLike {
 interface LayoutEdge extends GraphEdgeLike {
   labelX: number;
   labelY: number;
+  maxX: number;
+  maxY: number;
+  minX: number;
+  minY: number;
   path: string;
 }
 
@@ -92,6 +106,8 @@ interface LayoutGraph {
   edges: LayoutEdge[];
   height: number;
   nodes: LayoutNode[];
+  viewBoxX: number;
+  viewBoxY: number;
   width: number;
 }
 
@@ -101,6 +117,14 @@ interface RenderOptions {
 }
 
 const CARD_GAP = 24;
+const EDGE_LABEL_MAX_CHARS = 18;
+const EDGE_LABEL_WIDTH_MAX = 144;
+const EDGE_ROUTE_MARGIN = 14;
+export const GRAPH_RENDER_EDGE_LIMIT = 4_000;
+export const GRAPH_RENDER_NODE_LIMIT = 2_000;
+export const GRAPH_RENDER_TEXT_LIMIT = 500_000;
+export const GRAPH_MANUAL_SCALE_MIN = 0.2;
+export const GRAPH_SCALE_MAX = 1.8;
 const H_PADDING = 40;
 const NODE_DETAIL_LINES_MAX = 2;
 const NODE_DETAIL_WRAP = 30;
@@ -112,6 +136,8 @@ const NODE_SOURCE_ACTION_HEIGHT = 22;
 const NODE_SOURCE_ACTION_WIDTH = 88;
 const NODE_WIDTH_MAX = 320;
 const NODE_WIDTH_MIN = 180;
+const SOURCE_LABEL_MAX_CHARS = 80;
+const SOURCE_LABEL_SUMMARY_LIMIT = 3;
 const V_PADDING = 40;
 const SAME_RANK_EDGE_GAP = 6;
 const TD_BRANCH_LANE_GAP = 56;
@@ -226,11 +252,66 @@ export function buildGraphPreviewSnapshot(
   };
 }
 
+export function assessGraphRenderBudget(
+  graph: GraphDocumentLike
+): GraphRenderBudget {
+  return assessDisplayedGraphRenderBudget(graphForDisplay(graph));
+}
+
+export function calculateGraphFitScale(
+  viewportWidth: number,
+  viewportHeight: number,
+  graphWidth: number,
+  graphHeight: number,
+  includeHeight: boolean,
+  viewportInset = 12
+): number {
+  if (
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    !Number.isFinite(graphWidth) ||
+    !Number.isFinite(graphHeight) ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0 ||
+    graphWidth <= 0 ||
+    graphHeight <= 0
+  ) {
+    return 1;
+  }
+
+  const inset = Math.max(0, viewportInset);
+  const availableWidth = Math.max(1, viewportWidth - inset);
+  const availableHeight = Math.max(1, viewportHeight - inset);
+  const widthScale = availableWidth / graphWidth;
+  const heightScale = availableHeight / graphHeight;
+  return Math.max(
+    Number.MIN_VALUE,
+    Math.min(widthScale, includeHeight ? heightScale : 1, 1)
+  );
+}
+
+export function clampManualGraphScale(
+  value: number,
+  minimum = 0.2,
+  maximum = 1.8
+): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
 export function renderGraphWebviewHtml(
   graph: GraphDocumentLike,
   options: RenderOptions
 ): string {
   const displayGraph = graphForDisplay(graph);
+  const renderBudget = assessDisplayedGraphRenderBudget(displayGraph);
+  if (!renderBudget.canRender) {
+    throw new RangeError(
+      `Graph exceeds the interactive render budget (${renderBudget.nodeCount} nodes, ${renderBudget.edgeCount} relationships, ${renderBudget.textLength} text characters).`
+    );
+  }
   const layout = layoutGraph(displayGraph);
   const snapshot = buildGraphPreviewSnapshot(displayGraph);
 
@@ -263,7 +344,6 @@ export function renderGraphWebviewHtml(
         --chip-bg: color-mix(in srgb, var(--vscode-badge-background) 22%, transparent);
         --chip-text: var(--vscode-badge-foreground);
         --edge-default: var(--vscode-descriptionForeground);
-        --edge-default: color-mix(in srgb, var(--panel-muted) 60%, transparent);
         --edge-false: #b45309;
         --edge-true: #15803d;
         --node-label-fill: #101828;
@@ -348,6 +428,16 @@ export function renderGraphWebviewHtml(
         font-family: var(--vscode-font-family);
       }
 
+      body.vscode-light,
+      body.vscode-high-contrast-light {
+        color-scheme: light;
+      }
+
+      body.vscode-dark,
+      body.vscode-high-contrast {
+        color-scheme: dark;
+      }
+
       .shell {
         display: flex;
         height: 100vh;
@@ -377,18 +467,32 @@ export function renderGraphWebviewHtml(
         flex: 0 0 auto;
       }
 
+      .title-block {
+        flex: 1 1 320px;
+        min-width: 0;
+      }
+
       .title-block h1 {
+        display: -webkit-box;
         margin: 0;
+        overflow: hidden;
+        overflow-wrap: anywhere;
         font-size: 1.2rem;
         line-height: 1.2;
         letter-spacing: 0;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
       }
 
       .title-block p {
+        display: -webkit-box;
         margin: 10px 0 0;
+        overflow: hidden;
         color: var(--panel-muted);
         max-width: 72ch;
         line-height: 1.45;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
       }
 
       .badges {
@@ -440,12 +544,109 @@ export function renderGraphWebviewHtml(
         color: var(--accent);
       }
 
+      .zoom-button:focus-visible,
+      .graph-details > summary:focus-visible,
+      .source-button:focus-visible {
+        outline: 2px solid var(--vscode-focusBorder, var(--vscode-contrastActiveBorder, Highlight));
+        outline-offset: 2px;
+      }
+
       .zoom-readout {
         min-width: 48px;
         color: var(--panel-muted);
         font-size: 0.82rem;
         font-variant-numeric: tabular-nums;
         text-align: right;
+      }
+
+      .graph-details {
+        margin: 10px 18px 0;
+        max-height: min(42vh, 360px);
+        overflow: auto;
+        border: 1px solid var(--panel-border);
+        border-radius: 7px;
+        background: var(--panel-bg);
+        color: var(--panel-strong);
+        flex: 0 1 auto;
+      }
+
+      .graph-details > summary {
+        padding: 7px 10px;
+        color: var(--panel-muted);
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 700;
+      }
+
+      .graph-details[open] > summary {
+        border-bottom: 1px solid var(--panel-border);
+        color: var(--panel-strong);
+      }
+
+      .graph-details-content {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+        gap: 16px;
+        padding: 12px;
+      }
+
+      .graph-details-section h2,
+      .graph-details-section h3 {
+        margin: 0 0 8px;
+        font-size: 0.9rem;
+      }
+
+      .graph-details-section ul {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      .graph-details-section li {
+        line-height: 1.4;
+      }
+
+      .node-kind-cue {
+        display: inline-block;
+        margin-right: 5px;
+        color: var(--panel-muted);
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .node-detail {
+        display: block;
+        margin-top: 2px;
+        color: var(--panel-muted);
+      }
+
+      .source-button {
+        border: 1px solid var(--panel-border);
+        border-radius: 5px;
+        padding: 4px 7px;
+        background: var(--vscode-button-secondaryBackground, var(--vscode-editor-background));
+        color: var(--vscode-button-secondaryForeground, var(--panel-strong));
+        cursor: pointer;
+        font: inherit;
+      }
+
+      .source-button:hover {
+        background: var(--vscode-button-secondaryHoverBackground, var(--accent-soft));
+      }
+
+      .viewport-instructions {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
       }
 
       .canvas-wrap {
@@ -459,21 +660,30 @@ export function renderGraphWebviewHtml(
         touch-action: none;
       }
 
+      .canvas-wrap:focus-visible {
+        outline: 2px solid var(--vscode-focusBorder, var(--vscode-contrastActiveBorder, Highlight));
+        outline-offset: -3px;
+      }
+
       .canvas-wrap.is-panning {
         cursor: grabbing;
         user-select: none;
       }
 
       .canvas-inner {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
         min-width: 100%;
+        min-height: 100%;
         width: max-content;
         padding: 0;
       }
 
       .graph-stage {
         position: relative;
-        width: var(--graph-width);
-        height: var(--graph-height);
+        width: ${layout.width}px;
+        height: ${layout.height}px;
       }
 
       svg {
@@ -494,6 +704,18 @@ export function renderGraphWebviewHtml(
         fill: none;
         stroke: var(--edge-default);
         stroke-width: 2.4;
+      }
+
+      .arrow-head {
+        fill: var(--edge-default);
+      }
+
+      .arrow-head.branch-true {
+        fill: var(--edge-true);
+      }
+
+      .arrow-head.branch-false {
+        fill: var(--edge-false);
       }
 
       .edge.branch-true {
@@ -550,7 +772,7 @@ export function renderGraphWebviewHtml(
         stroke: var(--edge-false);
       }
 
-      .node-card-svg rect {
+      .node-card-svg > rect {
         stroke-width: 1.6;
         fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--vscode-editor-background) 92%, transparent);
@@ -558,25 +780,25 @@ export function renderGraphWebviewHtml(
         stroke: color-mix(in srgb, var(--panel-border) 80%, transparent);
       }
 
-      .node-card-svg.focus rect {
+      .node-card-svg.file > rect { fill: var(--node-file-bg); stroke: var(--node-file-stroke); }
+      .node-card-svg.contract > rect { fill: var(--node-contract-bg); stroke: var(--node-contract-stroke); }
+      .node-card-svg.entry > rect { fill: var(--node-entry-bg); stroke: var(--node-entry-stroke); }
+      .node-card-svg.exit > rect { fill: var(--node-exit-bg); stroke: var(--node-exit-stroke); }
+      .node-card-svg.modifier > rect { fill: var(--node-modifier-bg); stroke: var(--node-modifier-stroke); }
+      .node-card-svg.state > rect { fill: var(--node-state-bg); stroke: var(--node-state-stroke); }
+      .node-card-svg.call > rect { fill: var(--node-call-bg); stroke: var(--node-call-stroke); }
+      .node-card-svg.branch > rect { fill: var(--node-branch-bg); stroke: var(--node-branch-stroke); }
+      .node-card-svg.loop > rect { fill: var(--node-loop-bg); stroke: var(--node-loop-stroke); }
+      .node-card-svg.terminal > rect { fill: var(--node-terminal-bg); stroke: var(--node-terminal-stroke); }
+      .node-card-svg.opaque > rect { fill: var(--node-opaque-bg); stroke: var(--node-opaque-stroke); }
+      .node-card-svg.structural > rect { fill: var(--node-structural-bg); stroke: var(--node-structural-stroke); }
+
+      .node-card-svg.focus > rect {
         stroke: var(--accent);
         stroke-width: 2.4;
         fill: var(--vscode-editor-background);
         fill: color-mix(in srgb, var(--accent-soft) 50%, var(--vscode-editor-background));
       }
-
-      .node-card-svg.file rect { fill: var(--node-file-bg); stroke: var(--node-file-stroke); }
-      .node-card-svg.contract rect { fill: var(--node-contract-bg); stroke: var(--node-contract-stroke); }
-      .node-card-svg.entry rect { fill: var(--node-entry-bg); stroke: var(--node-entry-stroke); }
-      .node-card-svg.exit rect { fill: var(--node-exit-bg); stroke: var(--node-exit-stroke); }
-      .node-card-svg.modifier rect { fill: var(--node-modifier-bg); stroke: var(--node-modifier-stroke); }
-      .node-card-svg.state rect { fill: var(--node-state-bg); stroke: var(--node-state-stroke); }
-      .node-card-svg.call rect { fill: var(--node-call-bg); stroke: var(--node-call-stroke); }
-      .node-card-svg.branch rect { fill: var(--node-branch-bg); stroke: var(--node-branch-stroke); }
-      .node-card-svg.loop rect { fill: var(--node-loop-bg); stroke: var(--node-loop-stroke); }
-      .node-card-svg.terminal rect { fill: var(--node-terminal-bg); stroke: var(--node-terminal-stroke); }
-      .node-card-svg.opaque rect { fill: var(--node-opaque-bg); stroke: var(--node-opaque-stroke); }
-      .node-card-svg.structural rect { fill: var(--node-structural-bg); stroke: var(--node-structural-stroke); }
 
       .node-card-svg text,
       .node-card-svg > rect,
@@ -596,6 +818,14 @@ export function renderGraphWebviewHtml(
       .node-meta {
         fill: var(--node-meta-fill);
         font-size: 11px;
+      }
+
+      .node-kind {
+        fill: var(--node-meta-fill);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       .source-chip {
@@ -625,6 +855,86 @@ export function renderGraphWebviewHtml(
         fill: color-mix(in srgb, white 86%, var(--accent-soft));
       }
 
+      body.vscode-high-contrast .node-card-svg > rect,
+      body.vscode-high-contrast-light .node-card-svg > rect {
+        fill: var(--vscode-editor-background);
+        stroke: var(--vscode-contrastActiveBorder, var(--vscode-foreground));
+        stroke-width: 2px;
+      }
+
+      body.vscode-high-contrast .node-card-svg.focus > rect,
+      body.vscode-high-contrast-light .node-card-svg.focus > rect {
+        stroke: var(--vscode-focusBorder, var(--vscode-contrastActiveBorder, Highlight));
+        stroke-width: 3px;
+        stroke-dasharray: 7 3;
+      }
+
+      body.vscode-high-contrast .node-label,
+      body.vscode-high-contrast .node-meta,
+      body.vscode-high-contrast .node-kind,
+      body.vscode-high-contrast-light .node-label,
+      body.vscode-high-contrast-light .node-meta,
+      body.vscode-high-contrast-light .node-kind {
+        fill: var(--vscode-foreground);
+      }
+
+      body.vscode-high-contrast .edge,
+      body.vscode-high-contrast-light .edge {
+        stroke: var(--vscode-foreground);
+      }
+
+      body.vscode-high-contrast .arrow-head,
+      body.vscode-high-contrast-light .arrow-head {
+        fill: var(--vscode-foreground);
+      }
+
+      body.vscode-high-contrast .edge-label-pill .edge-label-box,
+      body.vscode-high-contrast .source-chip rect,
+      body.vscode-high-contrast-light .edge-label-pill .edge-label-box,
+      body.vscode-high-contrast-light .source-chip rect {
+        fill: var(--vscode-editor-background);
+        stroke: var(--vscode-foreground);
+      }
+
+      body.vscode-high-contrast .edge-label-pill .edge-label,
+      body.vscode-high-contrast .source-chip text,
+      body.vscode-high-contrast-light .edge-label-pill .edge-label,
+      body.vscode-high-contrast-light .source-chip text {
+        fill: var(--vscode-foreground);
+      }
+
+      @media (forced-colors: active) {
+        .node-card-svg.node-card-svg > rect,
+        .edge-label-pill.edge-label-pill .edge-label-box,
+        .source-chip.source-chip rect {
+          fill: Canvas;
+          stroke: CanvasText;
+        }
+
+        .node-label,
+        .node-meta,
+        .node-kind,
+        .edge-label-pill.edge-label-pill .edge-label,
+        .source-chip text {
+          fill: CanvasText;
+        }
+
+        .edge.edge,
+        .grid-line {
+          stroke: CanvasText;
+        }
+
+        .arrow-head.arrow-head {
+          fill: CanvasText;
+        }
+
+        .node-card-svg.focus > rect {
+          stroke: Highlight;
+          stroke-width: 3px;
+          stroke-dasharray: 7 3;
+        }
+      }
+
       @media (max-width: 700px) {
         .header {
           gap: 8px;
@@ -651,6 +961,10 @@ export function renderGraphWebviewHtml(
           padding: 8px 14px 0;
         }
 
+        .graph-details {
+          margin: 8px 14px 0;
+        }
+
         .canvas-wrap {
           padding: 10px 14px 14px;
         }
@@ -662,8 +976,12 @@ export function renderGraphWebviewHtml(
       <section class="canvas-card">
         <div class="header">
           <div class="title-block">
-            <h1>${escapeHtml(graph.title)}</h1>
-            <p>${escapeHtml(snapshot.summary)}</p>
+            <h1 title="${escapeHtmlAttribute(graph.title)}">${escapeHtml(
+              graph.title
+            )}</h1>
+            <p title="${escapeHtmlAttribute(snapshot.summary)}">${escapeHtml(
+              snapshot.summary
+            )}</p>
           </div>
           <div class="badges">
             <span class="badge">${graphKindLabel(displayGraph.kind)}</span>
@@ -678,9 +996,13 @@ export function renderGraphWebviewHtml(
           <button class="zoom-button" type="button" data-zoom-action="in" title="Zoom in" aria-label="Zoom in">+</button>
           <span class="zoom-readout" aria-live="polite">100%</span>
         </div>
-        <div class="canvas-wrap">
+        ${renderAccessibleGraphDetails(displayGraph)}
+        <p class="viewport-instructions" id="graph-viewport-instructions">Use the arrow keys to scroll the graph. Page Up and Page Down scroll by a viewport. Home moves to the start and End moves to the end.</p>
+        <div class="canvas-wrap" tabindex="0" role="region" aria-label="${escapeHtmlAttribute(
+          `${graph.title} interactive graph viewport`
+        )}" aria-describedby="graph-viewport-instructions">
           <div class="canvas-inner">
-            <div class="graph-stage" data-graph-stage data-graph-width="${layout.width}" data-graph-height="${layout.height}" style="--graph-width: ${layout.width}px; --graph-height: ${layout.height}px;">
+            <div class="graph-stage" data-graph-stage data-graph-width="${layout.width}" data-graph-height="${layout.height}">
               ${renderSvg(displayGraph, layout)}
             </div>
           </div>
@@ -698,26 +1020,36 @@ export function renderGraphWebviewHtml(
       const graphWidth = Number(graphStage?.getAttribute("data-graph-width") ?? 0);
       const graphHeight = Number(graphStage?.getAttribute("data-graph-height") ?? 0);
       let graphScale = 1;
+      let autoFitMode = "width";
       let panStart = null;
+      const KEYBOARD_SCROLL_STEP = 48;
       const WHEEL_LINE_HEIGHT = 16;
       const WHEEL_ZOOM_DELTA_MAX = 120;
       const WHEEL_ZOOM_SENSITIVITY = 0.002;
       const TRACKPAD_ZOOM_SENSITIVITY = 0.004;
+      const GRAPH_MANUAL_SCALE_MIN = ${GRAPH_MANUAL_SCALE_MIN};
+      const GRAPH_SCALE_MAX = ${GRAPH_SCALE_MAX};
+      const calculateGraphFitScale = ${calculateGraphFitScale.toString()};
+      const clampManualGraphScale = ${clampManualGraphScale.toString()};
 
-      function clampScale(value) {
-        return Math.min(1.8, Math.max(0.2, value));
+      function clampRenderedScale(value) {
+        if (!Number.isFinite(value) || value <= 0) {
+          return 1;
+        }
+        return Math.min(GRAPH_SCALE_MAX, Math.max(Number.MIN_VALUE, value));
       }
 
       function fitScale({ includeHeight = false } = {}) {
         if (!canvasWrap || !graphWidth || !graphHeight) {
           return 1;
         }
-        const widthScale = (canvasWrap.clientWidth - 12) / graphWidth;
-        const heightScale = (canvasWrap.clientHeight - 12) / graphHeight;
-        const targetScale = includeHeight
-          ? Math.min(widthScale, heightScale, 1)
-          : Math.min(widthScale, 1);
-        return clampScale(targetScale);
+        return calculateGraphFitScale(
+          canvasWrap.clientWidth,
+          canvasWrap.clientHeight,
+          graphWidth,
+          graphHeight,
+          includeHeight
+        );
       }
 
       function setGraphScale(
@@ -745,12 +1077,16 @@ export function renderGraphWebviewHtml(
           anchorX === null ? null : (canvasWrap.scrollLeft + anchorX) / graphScale;
         const graphAnchorY =
           anchorY === null ? null : (canvasWrap.scrollTop + anchorY) / graphScale;
-        graphScale = clampScale(nextScale);
+        graphScale = clampRenderedScale(nextScale);
         graphStage.style.width = graphWidth * graphScale + "px";
         graphStage.style.height = graphHeight * graphScale + "px";
         graphSvg.style.transform = "scale(" + graphScale + ")";
         if (zoomReadout) {
-          zoomReadout.textContent = Math.round(graphScale * 100) + "%";
+          const scalePercent = graphScale * 100;
+          zoomReadout.textContent =
+            scalePercent > 0 && scalePercent < 1
+              ? "<1%"
+              : Math.round(scalePercent) + "%";
         }
         if (graphAnchorX !== null && graphAnchorY !== null && anchorX !== null && anchorY !== null) {
           canvasWrap.scrollLeft = graphAnchorX * graphScale - anchorX;
@@ -775,6 +1111,56 @@ export function renderGraphWebviewHtml(
             ? TRACKPAD_ZOOM_SENSITIVITY
             : WHEEL_ZOOM_SENSITIVITY;
         return Math.exp(-clampedDelta * sensitivity);
+      }
+
+      function setManualGraphScale(nextScale, options = {}) {
+        autoFitMode = null;
+        if (graphScale < GRAPH_MANUAL_SCALE_MIN && nextScale <= graphScale) {
+          setGraphScale(graphScale, options);
+          return;
+        }
+        setGraphScale(clampManualGraphScale(nextScale), options);
+      }
+
+      function scrollGraphViewport(event) {
+        if (!canvasWrap) {
+          return;
+        }
+        const pageStep = Math.max(KEYBOARD_SCROLL_STEP, canvasWrap.clientHeight * 0.9);
+        let left = canvasWrap.scrollLeft;
+        let top = canvasWrap.scrollTop;
+        switch (event.key) {
+          case "ArrowLeft":
+            left -= KEYBOARD_SCROLL_STEP;
+            break;
+          case "ArrowRight":
+            left += KEYBOARD_SCROLL_STEP;
+            break;
+          case "ArrowUp":
+            top -= KEYBOARD_SCROLL_STEP;
+            break;
+          case "ArrowDown":
+            top += KEYBOARD_SCROLL_STEP;
+            break;
+          case "PageUp":
+            top -= pageStep;
+            break;
+          case "PageDown":
+            top += pageStep;
+            break;
+          case "Home":
+            left = 0;
+            top = 0;
+            break;
+          case "End":
+            left = canvasWrap.scrollWidth;
+            top = canvasWrap.scrollHeight;
+            break;
+          default:
+            return;
+        }
+        event.preventDefault();
+        canvasWrap.scrollTo({ left, top, behavior: "auto" });
       }
 
       function beginPan(event) {
@@ -818,9 +1204,10 @@ export function renderGraphWebviewHtml(
         canvasWrap.addEventListener("pointermove", updatePan);
         canvasWrap.addEventListener("pointerup", endPan);
         canvasWrap.addEventListener("pointercancel", endPan);
+        canvasWrap.addEventListener("keydown", scrollGraphViewport);
         canvasWrap.addEventListener("dblclick", (event) => {
           event.preventDefault();
-          setGraphScale(graphScale * 1.25, {
+          setManualGraphScale(graphScale * 1.25, {
             anchorClientX: event.clientX,
             anchorClientY: event.clientY,
           });
@@ -833,7 +1220,7 @@ export function renderGraphWebviewHtml(
             }
             event.preventDefault();
             const zoomFactor = wheelZoomFactor(event);
-            setGraphScale(graphScale * zoomFactor, {
+            setManualGraphScale(graphScale * zoomFactor, {
               anchorClientX: event.clientX,
               anchorClientY: event.clientY,
             });
@@ -846,12 +1233,13 @@ export function renderGraphWebviewHtml(
         button.addEventListener("click", () => {
           const action = button.getAttribute("data-zoom-action");
           if (action === "in") {
-            setGraphScale(graphScale + 0.1);
+            setManualGraphScale(graphScale + 0.1);
           } else if (action === "out") {
-            setGraphScale(graphScale - 0.1);
+            setManualGraphScale(graphScale - 0.1);
           } else if (action === "reset") {
-            setGraphScale(1);
+            setManualGraphScale(1);
           } else if (action === "fit") {
+            autoFitMode = "all";
             setGraphScale(fitScale({ includeHeight: true }), { preserveCenter: false });
           }
         });
@@ -862,7 +1250,12 @@ export function renderGraphWebviewHtml(
       });
 
       window.addEventListener("resize", () => {
-        setGraphScale(fitScale(), { preserveCenter: false });
+        if (autoFitMode !== null) {
+          setGraphScale(
+            fitScale({ includeHeight: autoFitMode === "all" }),
+            { preserveCenter: false }
+          );
+        }
       });
 
       function openSourceFromElement(element) {
@@ -877,13 +1270,6 @@ export function renderGraphWebviewHtml(
           event.stopPropagation();
           openSourceFromElement(button);
         });
-        button.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            event.stopPropagation();
-            openSourceFromElement(button);
-          }
-        });
       }
     </script>
   </body>
@@ -892,6 +1278,17 @@ export function renderGraphWebviewHtml(
 
 function edgeClass(kind?: GraphEdgeKind): string {
   return kind ?? "normal";
+}
+
+function edgeMarkerId(kind?: GraphEdgeKind): string {
+  switch (kind) {
+    case "branch-true":
+      return "arrow-branch-true";
+    case "branch-false":
+      return "arrow-branch-false";
+    default:
+      return "arrow-default";
+  }
 }
 
 function graphKindLabel(kind: GraphKind): string {
@@ -905,6 +1302,215 @@ function graphKindLabel(kind: GraphKind): string {
     case "control-flow":
       return "Control flow";
   }
+}
+
+function nodeKindLabel(kind?: GraphNodeKind): string {
+  switch (kind) {
+    case "file":
+      return "File";
+    case "contract":
+      return "Contract";
+    case "entry":
+      return "Entry";
+    case "exit":
+      return "Exit";
+    case "modifier":
+      return "Modifier";
+    case "declaration":
+      return "Declaration";
+    case "assignment":
+      return "Assignment";
+    case "call":
+      return "Call";
+    case "emit":
+      return "Emission";
+    case "branch":
+      return "Branch";
+    case "loop":
+      return "Loop";
+    case "loop-next":
+      return "Loop next";
+    case "terminal-return":
+      return "Return";
+    case "terminal-revert":
+      return "Revert";
+    case "control-transfer":
+      return "Control transfer";
+    case "assembly":
+      return "Assembly";
+    case "try":
+      return "Try";
+    case "catch":
+      return "Catch";
+    case "block":
+      return "Block";
+    case "statement":
+    default:
+      return "Statement";
+  }
+}
+
+function edgeKindLabel(kind?: GraphEdgeKind): string {
+  switch (kind) {
+    case "imports":
+      return "imports";
+    case "inherits":
+      return "inherits from";
+    case "precedes":
+      return "precedes";
+    case "branch-true":
+      return "true branch to";
+    case "branch-false":
+      return "false branch to";
+    case "loop-back":
+      return "loops back to";
+    case "return":
+      return "returns to";
+    case "revert":
+      return "reverts to";
+    case "break":
+      return "breaks to";
+    case "continue":
+      return "continues to";
+    case "normal":
+    default:
+      return "flows to";
+  }
+}
+
+function edgeRelationshipText(
+  edge: GraphEdgeLike,
+  nodeLabels: Map<string, string>
+): string {
+  const from = nodeLabels.get(edge.from) ?? edge.from;
+  const to = nodeLabels.get(edge.to) ?? edge.to;
+  const label = edge.label?.trim();
+  const kind = edge.kind ? edgeKindLabel(edge.kind) : label || edgeKindLabel();
+  const normalizedLabel = label?.toLowerCase();
+  const distinctLabel =
+    edge.kind &&
+    label &&
+    normalizedLabel !== kind.toLowerCase() &&
+    normalizedLabel !== edge.kind
+      ? `, labeled ${label}`
+      : "";
+  return `${from} ${kind} ${to}${distinctLabel}.`;
+}
+
+function renderAccessibleGraphDetails(graph: GraphDocumentLike): string {
+  const nodeLabels = new Map(graph.nodes.map((node) => [node.id, node.label]));
+  const nodeItems = graph.nodes
+    .map(
+      (node) => `<li>
+        <span class="node-kind-cue">${escapeHtml(nodeKindLabel(node.kind))}</span><strong>${escapeHtml(node.label)}</strong>
+        <span class="node-detail">${escapeHtml(node.detail)}</span>
+      </li>`
+    )
+    .join("");
+  const edgeItems = graph.edges
+    .map(
+      (edge) =>
+        `<li>${escapeHtml(edgeRelationshipText(edge, nodeLabels))}</li>`
+    )
+    .join("");
+
+  const sources = new Map<string, Set<string>>();
+  for (const node of graph.nodes) {
+    if (!node.uri) {
+      continue;
+    }
+    const labels = sources.get(node.uri) ?? new Set<string>();
+    labels.add(node.label);
+    sources.set(node.uri, labels);
+  }
+  const sourceItems = Array.from(sources, ([uri, nodeLabelSet]) => {
+    const labels = summarizeSourceNodeLabels(nodeLabelSet);
+    const label = sourceLabel(uri);
+    return `<li>
+      <button class="source-button" type="button" aria-label="${escapeHtmlAttribute(
+        `Open source ${label} for ${labels}`
+      )}" data-source-uri="${escapeHtmlAttribute(uri)}">Open ${escapeHtml(
+        label
+      )}</button>
+      <span class="node-detail">Source for ${escapeHtml(labels)}</span>
+    </li>`;
+  }).join("");
+
+  return `<details class="graph-details">
+    <summary>Graph details and source links</summary>
+    <div class="graph-details-content">
+      <section class="graph-details-section" aria-labelledby="graph-node-details-heading">
+        <h2 id="graph-node-details-heading">Nodes</h2>
+        ${nodeItems ? `<ul>${nodeItems}</ul>` : "<p>No nodes.</p>"}
+      </section>
+      <section class="graph-details-section" aria-labelledby="graph-edge-details-heading">
+        <h2 id="graph-edge-details-heading">Relationships</h2>
+        ${edgeItems ? `<ul>${edgeItems}</ul>` : "<p>No relationships.</p>"}
+      </section>
+      ${
+        sourceItems
+          ? `<section class="graph-details-section" aria-labelledby="graph-source-details-heading">
+        <h2 id="graph-source-details-heading">Source links</h2>
+        <ul>${sourceItems}</ul>
+      </section>`
+          : ""
+      }
+    </div>
+  </details>`;
+}
+
+function summarizeSourceNodeLabels(labels: ReadonlySet<string>): string {
+  const allLabels = Array.from(labels);
+  const visibleLabels = allLabels
+    .slice(0, SOURCE_LABEL_SUMMARY_LIMIT)
+    .map((label) => truncateText(label, SOURCE_LABEL_MAX_CHARS));
+  const remaining = allLabels.length - visibleLabels.length;
+  return `${visibleLabels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`;
+}
+
+function assessDisplayedGraphRenderBudget(
+  graph: GraphDocumentLike
+): GraphRenderBudget {
+  let textLength = Math.min(
+    GRAPH_RENDER_TEXT_LIMIT + 1,
+    graph.title.length
+  );
+  const addText = (value: string | undefined): void => {
+    if (!value || textLength > GRAPH_RENDER_TEXT_LIMIT) {
+      return;
+    }
+    textLength = Math.min(
+      GRAPH_RENDER_TEXT_LIMIT + 1,
+      textLength + value.length
+    );
+  };
+
+  for (const node of graph.nodes) {
+    addText(node.id);
+    addText(node.label);
+    addText(node.detail);
+    addText(node.uri);
+  }
+  for (const edge of graph.edges) {
+    addText(edge.from);
+    addText(edge.to);
+    addText(edge.label);
+  }
+
+  const nodeCount = graph.nodes.length;
+  const edgeCount = graph.edges.length;
+  return {
+    canRender:
+      nodeCount <= GRAPH_RENDER_NODE_LIMIT &&
+      edgeCount <= GRAPH_RENDER_EDGE_LIMIT &&
+      textLength <= GRAPH_RENDER_TEXT_LIMIT,
+    edgeCount,
+    edgeLimit: GRAPH_RENDER_EDGE_LIMIT,
+    nodeCount,
+    nodeLimit: GRAPH_RENDER_NODE_LIMIT,
+    textLength,
+    textLimit: GRAPH_RENDER_TEXT_LIMIT,
+  };
 }
 
 function graphForDisplay(graph: GraphDocumentLike): GraphDocumentLike {
@@ -1046,16 +1652,17 @@ function layoutGraph(graph: GraphDocumentLike): LayoutGraph {
       x += maxWidth + 88;
     }
 
-    const width = Math.max(x - 88 + H_PADDING, 820);
-    return {
+    const width = Math.max(x - 88 + H_PADDING, H_PADDING * 2);
+    const edges = graph.edges
+      .map((edge) => layoutEdge(edge, nodeMap, direction))
+      .filter((edge): edge is LayoutEdge => edge !== undefined);
+    return layoutWithEdgeExtents(
       direction,
-      edges: graph.edges
-        .map((edge) => layoutEdge(edge, nodeMap, direction))
-        .filter((edge): edge is LayoutEdge => edge !== undefined),
-      height: Math.max(height, 520),
       nodes,
+      edges,
       width,
-    };
+      Math.max(height, V_PADDING * 2)
+    );
   }
 
   const { height, width } = placeTopDownNodes(
@@ -1065,14 +1672,31 @@ function layoutGraph(graph: GraphDocumentLike): LayoutGraph {
     levelBuckets,
     sortedLevels
   );
+  const edges = graph.edges
+    .map((edge) => layoutEdge(edge, nodeMap, direction))
+    .filter((edge): edge is LayoutEdge => edge !== undefined);
+  return layoutWithEdgeExtents(direction, nodes, edges, width, height);
+}
+
+function layoutWithEdgeExtents(
+  direction: "LR" | "TD",
+  nodes: LayoutNode[],
+  edges: LayoutEdge[],
+  baseWidth: number,
+  baseHeight: number
+): LayoutGraph {
+  const viewBoxX = Math.min(0, ...edges.map((edge) => edge.minX));
+  const viewBoxY = Math.min(0, ...edges.map((edge) => edge.minY));
+  const maxX = Math.max(baseWidth, ...edges.map((edge) => edge.maxX));
+  const maxY = Math.max(baseHeight, ...edges.map((edge) => edge.maxY));
   return {
     direction,
-    edges: graph.edges
-      .map((edge) => layoutEdge(edge, nodeMap, direction))
-      .filter((edge): edge is LayoutEdge => edge !== undefined),
-    height,
+    edges,
+    height: Math.max(1, maxY - viewBoxY),
     nodes,
-    width: Math.max(width, 900),
+    viewBoxX,
+    viewBoxY,
+    width: Math.max(1, maxX - viewBoxX),
   };
 }
 
@@ -1153,7 +1777,7 @@ function placeTopDownNodes(
   }
 
   if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
-    return { height: 620, width: 900 };
+    return { height: V_PADDING * 2, width: H_PADDING * 2 };
   }
 
   const shiftX = H_PADDING - minX;
@@ -1162,7 +1786,7 @@ function placeTopDownNodes(
   }
 
   return {
-    height: Math.max(y - TD_LEVEL_GAP + V_PADDING, 620),
+    height: Math.max(y - TD_LEVEL_GAP + V_PADDING, V_PADDING * 2),
     width: maxX - minX + H_PADDING * 2,
   };
 }
@@ -1304,12 +1928,18 @@ function layoutEdge(
       { x: endX - control, y: endY },
       { x: endX, y: endY }
     );
-    return {
-      ...edge,
-      labelX: labelPoint.x,
-      labelY: labelPoint.y,
-      path: `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`,
-    };
+    const points = [
+      { x: startX, y: startY },
+      { x: startX + control, y: startY },
+      { x: endX - control, y: endY },
+      { x: endX, y: endY },
+    ];
+    return edgeLayoutWithBounds(
+      edge,
+      labelPoint,
+      `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`,
+      points
+    );
   }
 
   if (Math.abs(from.y - to.y) < 1) {
@@ -1336,14 +1966,20 @@ function layoutEdge(
       { x: secondControlX, y: endY },
       { x: endX, y: endY }
     );
-    return {
-      ...edge,
-      labelX: labelPoint.x,
-      labelY: labelPoint.y,
-      path: flowsRight
+    const points = [
+      { x: startX, y: startY },
+      { x: firstControlX, y: startY },
+      { x: secondControlX, y: endY },
+      { x: endX, y: endY },
+    ];
+    return edgeLayoutWithBounds(
+      edge,
+      labelPoint,
+      flowsRight
         ? `M ${startX} ${startY} C ${startX + control} ${startY}, ${endX - control} ${endY}, ${endX} ${endY}`
         : `M ${startX} ${startY} C ${startX - control} ${startY}, ${endX + control} ${endY}, ${endX} ${endY}`,
-    };
+      points
+    );
   }
 
   const startX = from.x + from.width / 2;
@@ -1358,11 +1994,52 @@ function layoutEdge(
     { x: endX, y: endY - control },
     { x: endX, y: endY }
   );
+  const points = [
+    { x: startX, y: startY },
+    { x: startX, y: startY + control },
+    { x: endX, y: endY - control },
+    { x: endX, y: endY },
+  ];
+  return edgeLayoutWithBounds(
+    edge,
+    labelPoint,
+    `M ${startX} ${startY} C ${startX} ${startY + control}, ${endX} ${endY - control}, ${endX} ${endY}`,
+    points
+  );
+}
+
+function edgeLayoutWithBounds(
+  edge: GraphEdgeLike,
+  labelPoint: { x: number; y: number },
+  path: string,
+  routePoints: { x: number; y: number }[]
+): LayoutEdge {
+  const halfLabelWidth = EDGE_LABEL_WIDTH_MAX / 2;
+  const routeMinX = Math.min(
+    ...routePoints.map((point) => point.x),
+    labelPoint.x - halfLabelWidth
+  );
+  const routeMaxX = Math.max(
+    ...routePoints.map((point) => point.x),
+    labelPoint.x + halfLabelWidth
+  );
+  const routeMinY = Math.min(
+    ...routePoints.map((point) => point.y),
+    labelPoint.y - 10
+  );
+  const routeMaxY = Math.max(
+    ...routePoints.map((point) => point.y),
+    labelPoint.y + 10
+  );
   return {
     ...edge,
     labelX: labelPoint.x,
     labelY: labelPoint.y,
-    path: `M ${startX} ${startY} C ${startX} ${startY + control}, ${endX} ${endY - control}, ${endX} ${endY}`,
+    maxX: routeMaxX + EDGE_ROUTE_MARGIN,
+    maxY: routeMaxY + EDGE_ROUTE_MARGIN,
+    minX: routeMinX - EDGE_ROUTE_MARGIN,
+    minY: routeMinY - EDGE_ROUTE_MARGIN,
+    path,
   };
 }
 
@@ -1465,7 +2142,7 @@ function measureNodeHeight(node: GraphNodeLike): number {
     : 0;
   return Math.max(
     68,
-    26 + labelLines.length * 16 + detailLines.length * 14 + 12 + actionHeight
+    26 + labelLines.length * 16 + 14 + detailLines.length * 14 + 12 + actionHeight
   );
 }
 
@@ -1555,6 +2232,14 @@ function limitLines(
   return limited;
 }
 
+function truncateText(value: string, maxChars: number): string {
+  const characters = Array.from(value);
+  if (characters.length <= maxChars) {
+    return value;
+  }
+  return `${characters.slice(0, Math.max(0, maxChars - 1)).join("")}…`;
+}
+
 function renderNodeText(node: LayoutNode): string {
   const labelLines = nodeLabelLines(node);
   const detailLines = nodeDetailLines(node);
@@ -1567,6 +2252,13 @@ function renderNodeText(node: LayoutNode): string {
     );
     y += 16;
   }
+
+  lines.push(
+    `<text class="node-kind" x="16" y="${y}">${escapeHtml(
+      nodeKindLabel(node.kind)
+    )}</text>`
+  );
+  y += 14;
 
   for (const line of detailLines) {
     lines.push(
@@ -1584,30 +2276,36 @@ function renderNodeSourceAction(node: LayoutNode): string {
   }
 
   const y = node.height - NODE_SOURCE_ACTION_HEIGHT - 12;
-  return `<g class="source-chip" role="button" tabindex="0" aria-label="${escapeHtmlAttribute(
-    `Open source ${sourceLabel(node.uri)}`
-  )}" data-source-uri="${escapeHtmlAttribute(node.uri)}">
+  return `<g class="source-chip" data-source-uri="${escapeHtmlAttribute(node.uri)}">
+    <title>${escapeHtml(`Open source ${sourceLabel(node.uri)}`)}</title>
     <rect x="16" y="${y}" width="${NODE_SOURCE_ACTION_WIDTH}" height="${NODE_SOURCE_ACTION_HEIGHT}" rx="6" ry="6"></rect>
     <text x="${16 + NODE_SOURCE_ACTION_WIDTH / 2}" y="${y + 15}" text-anchor="middle">Open source</text>
   </g>`;
 }
 
 function renderEdgeLabel(edge: LayoutEdge, label: string): string {
-  const width = clamp(label.length * 7 + 18, 32, 72);
+  const displayLabel = truncateText(label, EDGE_LABEL_MAX_CHARS);
+  const width = clamp(displayLabel.length * 7 + 18, 32, EDGE_LABEL_WIDTH_MAX);
   const height = 20;
   return `<g class="edge-label-pill ${edgeClass(edge.kind)}" transform="translate(${edge.labelX} ${edge.labelY})">
+    <title>${escapeHtml(label)}</title>
     <rect class="edge-label-box" x="${-width / 2}" y="${-height / 2}" width="${width}" height="${height}" rx="10" ry="10"></rect>
-    <text class="edge-label" x="0" y="0">${escapeHtml(label)}</text>
+    <text class="edge-label" x="0" y="0">${escapeHtml(displayLabel)}</text>
   </g>`;
 }
 
 function renderSvg(graph: GraphDocumentLike, layout: LayoutGraph): string {
-  return `<svg width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}" role="img" aria-label="${escapeHtmlAttribute(
-    graph.title
-  )}">
+  const nodeLabels = new Map(graph.nodes.map((node) => [node.id, node.label]));
+  return `<svg width="${layout.width}" height="${layout.height}" viewBox="${layout.viewBoxX} ${layout.viewBoxY} ${layout.width} ${layout.height}" aria-hidden="true" focusable="false">
     <defs>
-      <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(120, 132, 158, 0.9)" />
+      <marker id="arrow-default" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+        <path class="arrow-head" d="M 0 0 L 10 5 L 0 10 z" />
+      </marker>
+      <marker id="arrow-branch-true" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+        <path class="arrow-head branch-true" d="M 0 0 L 10 5 L 0 10 z" />
+      </marker>
+      <marker id="arrow-branch-false" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+        <path class="arrow-head branch-false" d="M 0 0 L 10 5 L 0 10 z" />
       </marker>
     </defs>
     ${renderBackdrop(layout)}
@@ -1615,7 +2313,8 @@ function renderSvg(graph: GraphDocumentLike, layout: LayoutGraph): string {
       .map((edge) => {
         const label = edgeLabel(graph, edge);
         return `<g>
-          <path class="edge ${edgeClass(edge.kind)}" d="${edge.path}" marker-end="url(#arrow)"></path>
+          <title>${escapeHtml(edgeRelationshipText(edge, nodeLabels))}</title>
+          <path class="edge ${edgeClass(edge.kind)}" d="${edge.path}" marker-end="url(#${edgeMarkerId(edge.kind)})"></path>
           ${label ? renderEdgeLabel(edge, label) : ""}
         </g>`;
       })
@@ -1625,6 +2324,7 @@ function renderSvg(graph: GraphDocumentLike, layout: LayoutGraph): string {
         const visualClass = nodeVisualClass(node.kind);
         const focusClass = graph.focusNodeId === node.id ? " focus" : "";
         return `<g class="node-card-svg ${visualClass}${focusClass}" transform="translate(${node.x} ${node.y})">
+          <title>${escapeHtml(`${nodeKindLabel(node.kind)}: ${node.label}. ${node.detail}`)}</title>
           <rect rx="${NODE_RADIUS}" ry="${NODE_RADIUS}" width="${node.width}" height="${node.height}"></rect>
           ${renderNodeText(node)}
           ${renderNodeSourceAction(node)}
@@ -1662,18 +2362,26 @@ function edgeLabel(
 function renderBackdrop(layout: LayoutGraph): string {
   if (layout.direction === "LR") {
     const columns: string[] = [];
-    for (let x = H_PADDING; x < layout.width - H_PADDING; x += 120) {
+    for (
+      let x = layout.viewBoxX + H_PADDING;
+      x < layout.viewBoxX + layout.width - H_PADDING;
+      x += 120
+    ) {
       columns.push(
-        `<line class="grid-line" x1="${x}" y1="${V_PADDING / 2}" x2="${x}" y2="${layout.height - V_PADDING / 2}"></line>`
+        `<line class="grid-line" x1="${x}" y1="${layout.viewBoxY + V_PADDING / 2}" x2="${x}" y2="${layout.viewBoxY + layout.height - V_PADDING / 2}"></line>`
       );
     }
     return columns.join("");
   }
 
   const rows: string[] = [];
-  for (let y = V_PADDING; y < layout.height - V_PADDING; y += 120) {
+  for (
+    let y = layout.viewBoxY + V_PADDING;
+    y < layout.viewBoxY + layout.height - V_PADDING;
+    y += 120
+  ) {
     rows.push(
-      `<line class="grid-line" x1="${H_PADDING / 2}" y1="${y}" x2="${layout.width - H_PADDING / 2}" y2="${y}"></line>`
+      `<line class="grid-line" x1="${layout.viewBoxX + H_PADDING / 2}" y1="${y}" x2="${layout.viewBoxX + layout.width - H_PADDING / 2}" y2="${y}"></line>`
     );
   }
   return rows.join("");
