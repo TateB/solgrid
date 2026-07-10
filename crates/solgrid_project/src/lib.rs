@@ -18,6 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range as ByteRange;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use tower_lsp_server::ls_types::{
     CodeLens, Command, DocumentLink, DocumentSymbol, DocumentSymbolResponse, Location, Position,
     Range, SymbolInformation, SymbolKind as LspSymbolKind, Uri, WorkspaceSymbolResponse,
@@ -92,6 +93,18 @@ pub struct ReferenceTarget {
     pub name_span: ByteRange<usize>,
     pub def_span: ByteRange<usize>,
     pub container_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReferenceCacheKey {
+    generation: u64,
+    target: ReferenceTarget,
+}
+
+#[derive(Debug, Clone)]
+struct ReferenceSearchResult {
+    locations: Vec<Location>,
+    declaration: Option<Location>,
 }
 
 /// Safe rename plan derived from the current reference index.
@@ -425,6 +438,8 @@ pub struct ProjectIndex<B = SolarNavBackend> {
     resolver: ImportResolver,
     files: HashMap<PathBuf, ProjectFileData>,
     symbols: HashMap<String, Vec<WorkspaceSymbolEntry>>,
+    reference_generation: u64,
+    reference_cache: Mutex<HashMap<ReferenceCacheKey, ReferenceSearchResult>>,
 }
 
 impl Default for ProjectIndex<SolarNavBackend> {
@@ -458,6 +473,8 @@ impl<B: NavBackend> ProjectIndex<B> {
             resolver,
             files: HashMap::new(),
             symbols: HashMap::new(),
+            reference_generation: 0,
+            reference_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -484,6 +501,19 @@ impl<B: NavBackend> ProjectIndex<B> {
     /// Return all indexed Solidity file paths.
     pub fn indexed_paths(&self) -> Vec<PathBuf> {
         self.files.keys().cloned().collect()
+    }
+
+    /// Return the number of Solidity files currently held in the workspace index.
+    pub fn indexed_file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    #[cfg(test)]
+    fn reference_cache_entry_count(&self) -> usize {
+        self.reference_cache
+            .lock()
+            .map(|cache| cache.len())
+            .unwrap_or(0)
     }
 
     /// Parse a temporary snapshot without mutating the index.
@@ -547,12 +577,14 @@ impl<B: NavBackend> ProjectIndex<B> {
                 exported_symbols,
             },
         );
+        self.invalidate_reference_cache();
     }
 
     /// Remove all indexed data for a file.
     pub fn remove_file(&mut self, path: &Path) {
         let path = normalize_path(path);
         if let Some(previous) = self.files.remove(&path) {
+            self.invalidate_reference_cache();
             for entry in previous.exported_symbols {
                 if let Some(bucket) = self.symbols.get_mut(&entry.name) {
                     bucket.retain(|candidate| candidate.file_path != path);
@@ -718,17 +750,17 @@ impl<B: NavBackend> ProjectIndex<B> {
             .into_iter()
             .map(|(def, container_name)| {
                 let target = reference_target_from_def(&snapshot.path, def, container_name);
-                let count = self
-                    .find_references_for_target(
-                        &target,
-                        Some((snapshot.path.clone(), source)),
-                        false,
-                        get_source,
-                    )
-                    .len();
+                let locations = self.find_references_for_target(
+                    &target,
+                    Some((snapshot.path.clone(), source)),
+                    false,
+                    get_source,
+                );
+                let count = locations.len();
                 let range = span_to_range(source, &def.name_span);
                 let arguments = path_to_uri(&snapshot.path).map(|uri| {
                     vec![json!({
+                        "locations": locations,
                         "position": range.start,
                         "uri": uri,
                     })]
@@ -1395,6 +1427,7 @@ impl<B: NavBackend> ProjectIndex<B> {
     }
 
     fn rebuild_from_workspace(&mut self) {
+        self.invalidate_reference_cache();
         self.files.clear();
         self.symbols.clear();
 
@@ -1986,11 +2019,44 @@ impl<B: NavBackend> ProjectIndex<B> {
         include_declaration: bool,
         get_source: &dyn Fn(&Path) -> Option<String>,
     ) -> Vec<Location> {
+        let cacheable = self.reference_cache_usable(current_file.as_ref());
+        let cached = cacheable
+            .then(|| self.cached_references_for_target(target))
+            .flatten();
+        let result = match cached {
+            Some(result) => result,
+            None => {
+                let result =
+                    self.compute_references_for_target(target, current_file.as_ref(), get_source);
+                if cacheable {
+                    self.store_references_for_target(target, result.clone());
+                }
+                result
+            }
+        };
+
+        if include_declaration {
+            result.locations
+        } else {
+            result
+                .locations
+                .into_iter()
+                .filter(|location| result.declaration.as_ref() != Some(location))
+                .collect()
+        }
+    }
+
+    fn compute_references_for_target(
+        &self,
+        target: &ReferenceTarget,
+        current_file: Option<&(PathBuf, &str)>,
+        get_source: &dyn Fn(&Path) -> Option<String>,
+    ) -> ReferenceSearchResult {
         let mut candidate_paths = self.files.keys().cloned().collect::<Vec<_>>();
         if !candidate_paths.iter().any(|path| path == &target.file_path) {
             candidate_paths.push(target.file_path.clone());
         }
-        if let Some((current_path, _)) = current_file.as_ref() {
+        if let Some((current_path, _)) = current_file {
             if !candidate_paths.iter().any(|path| path == current_path) {
                 candidate_paths.push(current_path.clone());
             }
@@ -1999,22 +2065,16 @@ impl<B: NavBackend> ProjectIndex<B> {
         candidate_paths.dedup();
 
         let mut locations = Vec::new();
+        let mut declaration = None;
         let mut seen = HashSet::new();
 
         for path in candidate_paths {
-            let Some(snapshot) = self.candidate_snapshot(&path, current_file.as_ref(), get_source)
-            else {
+            let Some(snapshot) = self.candidate_snapshot(&path, current_file, get_source) else {
                 continue;
             };
 
             for name in reference_scan_names(&snapshot, target, get_source, &self.resolver) {
                 for span in find_identifier_occurrences(&snapshot.source, &name) {
-                    let is_declaration =
-                        snapshot.path == target.file_path && span == target.name_span;
-                    if !include_declaration && is_declaration {
-                        continue;
-                    }
-
                     let Some(resolved_target) = reference_target_at_offset(
                         &snapshot,
                         span.start,
@@ -2030,10 +2090,14 @@ impl<B: NavBackend> ProjectIndex<B> {
 
                     if seen.insert((snapshot.path.clone(), span.clone())) {
                         if let Some(uri) = path_to_uri(&snapshot.path) {
-                            locations.push(Location {
+                            let location = Location {
                                 uri,
                                 range: span_to_range(&snapshot.source, &span),
-                            });
+                            };
+                            if snapshot.path == target.file_path && span == target.name_span {
+                                declaration = Some(location.clone());
+                            }
+                            locations.push(location);
                         }
                     }
                 }
@@ -2047,7 +2111,47 @@ impl<B: NavBackend> ProjectIndex<B> {
                 .then_with(|| left.range.start.line.cmp(&right.range.start.line))
                 .then_with(|| left.range.start.character.cmp(&right.range.start.character))
         });
-        locations
+        ReferenceSearchResult {
+            locations,
+            declaration,
+        }
+    }
+
+    fn cached_references_for_target(
+        &self,
+        target: &ReferenceTarget,
+    ) -> Option<ReferenceSearchResult> {
+        let key = ReferenceCacheKey {
+            generation: self.reference_generation,
+            target: target.clone(),
+        };
+        self.reference_cache.lock().ok()?.get(&key).cloned()
+    }
+
+    fn store_references_for_target(&self, target: &ReferenceTarget, result: ReferenceSearchResult) {
+        let key = ReferenceCacheKey {
+            generation: self.reference_generation,
+            target: target.clone(),
+        };
+        if let Ok(mut cache) = self.reference_cache.lock() {
+            cache.insert(key, result);
+        }
+    }
+
+    fn reference_cache_usable(&self, current_file: Option<&(PathBuf, &str)>) -> bool {
+        let Some((path, source)) = current_file else {
+            return true;
+        };
+        self.files
+            .get(&normalize_path(path))
+            .is_some_and(|file| file.snapshot.source == *source)
+    }
+
+    fn invalidate_reference_cache(&mut self) {
+        self.reference_generation = self.reference_generation.wrapping_add(1);
+        if let Ok(mut cache) = self.reference_cache.lock() {
+            cache.clear();
+        }
     }
 }
 
@@ -5748,6 +5852,41 @@ contract Token {
         });
 
         assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn test_find_references_uses_and_invalidates_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Token.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Token {
+    function foo(uint256 amount) public pure returns (uint256) {
+        return amount + amount;
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let mut index = ProjectIndex::build(dir.path());
+        let position = offset_to_position(source, source.find("amount +").unwrap());
+        let refs_without_decl =
+            index.find_references(&path, source, position, false, &|candidate| {
+                fs::read_to_string(candidate).ok()
+            });
+        assert_eq!(refs_without_decl.len(), 2);
+        assert_eq!(index.reference_cache_entry_count(), 1);
+
+        let refs_with_decl = index.find_references(&path, source, position, true, &|candidate| {
+            fs::read_to_string(candidate).ok()
+        });
+        assert_eq!(refs_with_decl.len(), 3);
+        assert_eq!(index.reference_cache_entry_count(), 1);
+
+        index.update_file(
+            &path,
+            "pragma solidity ^0.8.0;\ncontract Token { function foo(uint256 count) public pure returns (uint256) { return count; } }\n",
+        );
+        assert_eq!(index.reference_cache_entry_count(), 0);
     }
 
     #[test]

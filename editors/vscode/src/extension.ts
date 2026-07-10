@@ -4,6 +4,9 @@ import {
   languages,
   Location,
   Position,
+  Range,
+  StatusBarAlignment,
+  StatusBarItem,
   Uri,
   window,
   workspace,
@@ -49,11 +52,32 @@ import {
 let client: LanguageClient | undefined;
 
 interface ReferenceLensArgs {
+  locations?: ReferenceLocationArg[];
   position?: {
     character: number;
     line: number;
   };
   uri?: string;
+}
+
+interface ReferenceLocationArg {
+  range: {
+    end: {
+      character: number;
+      line: number;
+    };
+    start: {
+      character: number;
+      line: number;
+    };
+  };
+  uri: string;
+}
+
+interface ProjectIndexStatus {
+  durationMs?: number | null;
+  files?: number;
+  state?: string;
 }
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -131,6 +155,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
   );
 
   client.outputChannel.appendLine(`Using solgrid binary: ${serverPath}`);
+
+  const projectIndexStatus = window.createStatusBarItem(
+    StatusBarAlignment.Left,
+    100
+  );
+  projectIndexStatus.name = "solgrid workspace index";
+  projectIndexStatus.text = "$(sync~spin) solgrid: starting";
+  projectIndexStatus.tooltip = "Starting the solgrid language server.";
+  projectIndexStatus.show();
+  context.subscriptions.push(projectIndexStatus);
+
+  client.onNotification("solgrid/projectIndexStatus", (status: ProjectIndexStatus) => {
+    updateProjectIndexStatus(projectIndexStatus, status);
+  });
 
   context.subscriptions.push(
     languages.onDidChangeDiagnostics((event) => {
@@ -383,11 +421,13 @@ async function showReferences(args?: ReferenceLensArgs): Promise<void> {
   }
 
   const locations =
-    (await commands.executeCommand<Location[]>(
+    referenceLocationsFromArgs(args?.locations) ??
+    ((await commands.executeCommand<Location[]>(
       "vscode.executeReferenceProvider",
       uri,
       position
-    )) ?? [];
+    )) ??
+      []);
 
   if (locations.length === 0) {
     void window.showInformationMessage("solgrid found no references for this symbol.");
@@ -395,6 +435,73 @@ async function showReferences(args?: ReferenceLensArgs): Promise<void> {
   }
 
   await commands.executeCommand("editor.action.showReferences", uri, position, locations);
+}
+
+function referenceLocationsFromArgs(
+  locations: ReferenceLocationArg[] | undefined
+): Location[] | undefined {
+  if (!Array.isArray(locations)) {
+    return undefined;
+  }
+
+  return locations.flatMap((location) => {
+    if (
+      typeof location?.uri !== "string" ||
+      !Number.isInteger(location.range?.start?.line) ||
+      !Number.isInteger(location.range?.start?.character) ||
+      !Number.isInteger(location.range?.end?.line) ||
+      !Number.isInteger(location.range?.end?.character)
+    ) {
+      return [];
+    }
+
+    return [
+      new Location(
+        Uri.parse(location.uri),
+        new Range(
+          new Position(location.range.start.line, location.range.start.character),
+          new Position(location.range.end.line, location.range.end.character)
+        )
+      ),
+    ];
+  });
+}
+
+function updateProjectIndexStatus(
+  statusBar: StatusBarItem,
+  status: ProjectIndexStatus
+): void {
+  const files = Number.isInteger(status.files) ? status.files ?? 0 : 0;
+  const fileLabel = `${files} Solidity file${files === 1 ? "" : "s"}`;
+  const duration =
+    typeof status.durationMs === "number" && Number.isFinite(status.durationMs)
+      ? ` in ${formatDuration(status.durationMs)}`
+      : "";
+
+  if (status.state === "building") {
+    statusBar.text = "$(sync~spin) solgrid: indexing";
+    statusBar.tooltip =
+      files > 0
+        ? `Rebuilding the solgrid workspace index from ${fileLabel}.`
+        : "Building the solgrid workspace index.";
+    statusBar.show();
+    return;
+  }
+
+  statusBar.text = "$(check) solgrid";
+  statusBar.tooltip =
+    files > 0
+      ? `Workspace index ready for ${fileLabel}${duration}.`
+      : "Workspace index ready.";
+  statusBar.show();
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1000) {
+    return `${Math.max(0, Math.round(milliseconds))}ms`;
+  }
+
+  return `${(milliseconds / 1000).toFixed(1)}s`;
 }
 
 /**

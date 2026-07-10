@@ -690,6 +690,13 @@ contract Token {
       position: { character: 13, line: 3 },
       uri,
     });
+    expect(referenceLens?.command?.arguments?.[0]?.locations).toHaveLength(2);
+    expect(referenceLens?.command?.arguments?.[0]?.locations?.[0]).toMatchObject({
+      range: {
+        start: { character: 8, line: 6 },
+      },
+      uri,
+    });
     expect(
       lenses.some(
         (lens: CodeLens) =>

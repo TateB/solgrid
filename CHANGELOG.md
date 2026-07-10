@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added detector propagation through transitive imported wrapper chains when each step collapses to one propagated sink result
 - Changed detector propagation through imported overloads and wrapper chains to keep the common propagated sink result instead of requiring identical sink summaries
 - Added detector propagation through non-unique helper contracts when their member summaries share a common propagated sink result
+- Added VS Code workspace-index status reporting in the status bar so large Solidity projects show indexing and ready states with file counts
+- Added generation-scoped lazy reference caching so repeated references, rename, and CodeLens lookups can reuse resolved reference sets until the project index changes
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
@@ -71,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code graph previews to keep large project graphs contained in the webview with independent scrolling, pan/zoom controls, cleaner light-mode styling, and vertical linearized inheritance rendering
 - Fixed VS Code graph previews to make trackpad pinch zoom more responsive, lay out branch paths as distinct lanes, attach branch labels directly to graph edges, hide synthetic terminal-to-exit edges, and move source actions into graph nodes
 - Fixed VS Code reference CodeLens actions by wiring `solgrid.showReferences` to the native references peek command and suppressing transient `0 references` counts while the workspace index is warming
+- Fixed VS Code reference CodeLens clicks to reuse precomputed locations instead of rerunning the references provider before opening peek
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH
 - Fixed LSP compiler-style member diagnostics to resolve modifiers, custom errors, and events inherited from imported base contracts/interfaces
 - Fixed hover and go-to-definition for inherited contract/interface members such as custom errors used from derived contracts

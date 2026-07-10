@@ -15,8 +15,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::notification::Notification;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
@@ -43,6 +45,23 @@ const IMPORTS_GRAPH_COMMAND: &str = "solgrid.graph.imports";
 const INHERITANCE_GRAPH_COMMAND: &str = "solgrid.graph.inheritance";
 const LINEARIZED_INHERITANCE_GRAPH_COMMAND: &str = "solgrid.graph.linearizedInheritance";
 const CONTROL_FLOW_GRAPH_COMMAND: &str = "solgrid.graph.controlFlow";
+const PROJECT_INDEX_STATUS_NOTIFICATION: &str = "solgrid/projectIndexStatus";
+
+enum ProjectIndexStatusNotification {}
+
+impl Notification for ProjectIndexStatusNotification {
+    type Params = ProjectIndexStatusParams;
+
+    const METHOD: &'static str = PROJECT_INDEX_STATUS_NOTIFICATION;
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectIndexStatusParams {
+    state: String,
+    files: usize,
+    duration_ms: Option<u128>,
+}
 
 #[derive(Debug, Clone)]
 struct OpenDocumentOverlay {
@@ -218,6 +237,11 @@ impl SolgridServer {
         &self,
         open_docs: &HashMap<std::path::PathBuf, OpenDocumentOverlay>,
     ) {
+        self.project_index_ready.store(false, Ordering::SeqCst);
+        let indexed_files = self.project_index.read().await.indexed_file_count();
+        send_project_index_status(&self.client, "building", indexed_files, None).await;
+
+        let started_at = Instant::now();
         let workspace_root = self.workspace_root.read().await.clone();
         let mut rebuilt = match workspace_root.as_deref() {
             Some(root) => ProjectIndex::build(root),
@@ -230,8 +254,16 @@ impl SolgridServer {
             }
         }
 
+        let indexed_files = rebuilt.indexed_file_count();
         *self.project_index.write().await = rebuilt;
         self.project_index_ready.store(true, Ordering::SeqCst);
+        send_project_index_status(
+            &self.client,
+            "ready",
+            indexed_files,
+            Some(started_at.elapsed().as_millis()),
+        )
+        .await;
         let _ = self.client.code_lens_refresh().await;
     }
 
@@ -614,9 +646,18 @@ impl LanguageServer for SolgridServer {
                 let project_index_ready = self.project_index_ready.clone();
                 let client = self.client.clone();
                 tokio::spawn(async move {
+                    let started_at = Instant::now();
                     let built = ProjectIndex::build(&root_path);
+                    let indexed_files = built.indexed_file_count();
                     *project_index.write().await = built;
                     project_index_ready.store(true, Ordering::SeqCst);
+                    send_project_index_status(
+                        &client,
+                        "ready",
+                        indexed_files,
+                        Some(started_at.elapsed().as_millis()),
+                    )
+                    .await;
                     let _ = client.code_lens_refresh().await;
                 });
             }
@@ -721,8 +762,12 @@ impl LanguageServer for SolgridServer {
         self.client
             .log_message(MessageType::INFO, "solgrid LSP server initialized")
             .await;
+        let indexed_files = self.project_index.read().await.indexed_file_count();
         if self.project_index_ready.load(Ordering::SeqCst) {
+            send_project_index_status(&self.client, "ready", indexed_files, None).await;
             let _ = self.client.code_lens_refresh().await;
+        } else {
+            send_project_index_status(&self.client, "building", indexed_files, None).await;
         }
     }
 
@@ -2057,6 +2102,21 @@ fn graph_code_lens(spec: GraphLensSpec, uri: &Uri) -> CodeLens {
         }),
         data: None,
     }
+}
+
+async fn send_project_index_status(
+    client: &Client,
+    state: &'static str,
+    files: usize,
+    duration_ms: Option<u128>,
+) {
+    client
+        .send_notification::<ProjectIndexStatusNotification>(ProjectIndexStatusParams {
+            state: state.to_string(),
+            files,
+            duration_ms,
+        })
+        .await;
 }
 
 fn call_hierarchy_item(entry: CallHierarchyEntry) -> CallHierarchyItem {
