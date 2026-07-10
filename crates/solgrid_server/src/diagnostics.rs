@@ -1361,8 +1361,8 @@ struct FunctionCallEdge {
 
 #[derive(Debug, Clone)]
 enum ArgumentParameterBindings {
-    Positional(Vec<Option<String>>),
-    Named(HashMap<String, Option<String>>),
+    Positional(Vec<Option<usize>>),
+    Named(HashMap<String, Option<usize>>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1445,14 +1445,12 @@ fn build_function_sink_summaries(
                     SinkKind::Delegatecall,
                     edge,
                     &previous,
-                    &summary.parameter_names,
                 );
                 changed |= propagate_sink_indices_through_edge(
                     &mut summary.eth_transfer_parameters,
                     SinkKind::EthTransfer,
                     edge,
                     &previous,
-                    &summary.parameter_names,
                 );
             }
         }
@@ -1736,10 +1734,16 @@ fn summarize_function_sinks(
         parameter_names: parameter_names.clone(),
         ..FunctionSinkSummary::default()
     };
-    let parameter_indexes = parameter_names
+    let parameter_indexes = function
+        .header
+        .parameters
         .iter()
         .enumerate()
-        .filter_map(|(index, name)| name.clone().map(|name| (name, index)))
+        .filter_map(|(index, parameter)| {
+            parameter
+                .name
+                .map(|name| (solgrid_ast::span_to_range(name.span).start, index))
+        })
         .collect::<HashMap<_, _>>();
 
     if let Some(body) = &function.body {
@@ -1760,7 +1764,7 @@ fn collect_function_sink_stmts(
     file: &FileSemanticInfo,
     current_contract: Option<&str>,
     stmts: &[Stmt<'_>],
-    parameter_indexes: &HashMap<String, usize>,
+    parameter_indexes: &HashMap<usize, usize>,
     context: &SinkSummaryContext<'_>,
     summary: &mut FunctionSinkSummary,
 ) {
@@ -1934,7 +1938,7 @@ fn collect_function_sink_expr(
     file: &FileSemanticInfo,
     current_contract: Option<&str>,
     expr: &Expr<'_>,
-    parameter_indexes: &HashMap<String, usize>,
+    parameter_indexes: &HashMap<usize, usize>,
     context: &SinkSummaryContext<'_>,
     summary: &mut FunctionSinkSummary,
 ) {
@@ -1971,25 +1975,35 @@ fn collect_function_sink_expr(
             );
         }
         ExprKind::Call(callee, args) => {
-            if let Some((parameter_name, _)) =
+            if let Some((parameter_name, parameter_span)) =
                 delegatecall_target_identifier_from_sink_expr(file, expr)
             {
-                if let Some(index) = parameter_indexes.get(&parameter_name) {
-                    summary.delegatecall_parameters.insert(*index);
+                if let Some(index) = resolved_parameter_index(
+                    file,
+                    &parameter_name,
+                    &parameter_span,
+                    parameter_indexes,
+                ) {
+                    summary.delegatecall_parameters.insert(index);
                 }
             }
-            if let Some((parameter_name, _, _)) =
+            if let Some((parameter_name, _, parameter_span)) =
                 eth_transfer_target_identifier_from_sink_expr(file, expr)
             {
-                if let Some(index) = parameter_indexes.get(&parameter_name) {
-                    summary.eth_transfer_parameters.insert(*index);
+                if let Some(index) = resolved_parameter_index(
+                    file,
+                    &parameter_name,
+                    &parameter_span,
+                    parameter_indexes,
+                ) {
+                    summary.eth_transfer_parameters.insert(index);
                 }
             }
             let callees = resolved_callable_targets(file, current_contract, callee, args, context);
             if !callees.is_empty() {
                 summary.call_edges.push(FunctionCallEdge {
                     callees,
-                    argument_parameters: argument_parameter_bindings(args),
+                    argument_parameters: argument_parameter_bindings(file, args, parameter_indexes),
                 });
             }
             collect_function_sink_expr(
@@ -3199,21 +3213,14 @@ fn sink_indices_for_summary(
     callee_sinks: &HashSet<usize>,
     callee_parameter_names: &[Option<String>],
     argument_parameters: &ArgumentParameterBindings,
-    current_parameter_names: &[Option<String>],
 ) -> HashSet<usize> {
     let mut propagated = HashSet::new();
     for callee_index in callee_sinks {
-        let Some(argument_name) = argument_parameter_for_index(
+        let Some(current_index) = argument_parameter_for_index(
             argument_parameters,
             callee_parameter_names,
             *callee_index,
         ) else {
-            continue;
-        };
-        let Some(current_index) = current_parameter_names
-            .iter()
-            .position(|name| name.as_deref() == Some(argument_name))
-        else {
             continue;
         };
         propagated.insert(current_index);
@@ -3221,16 +3228,16 @@ fn sink_indices_for_summary(
     propagated
 }
 
-fn argument_parameter_for_index<'a>(
-    bindings: &'a ArgumentParameterBindings,
+fn argument_parameter_for_index(
+    bindings: &ArgumentParameterBindings,
     callee_parameter_names: &[Option<String>],
     index: usize,
-) -> Option<&'a str> {
+) -> Option<usize> {
     match bindings {
-        ArgumentParameterBindings::Positional(parameters) => parameters.get(index)?.as_deref(),
+        ArgumentParameterBindings::Positional(parameters) => *parameters.get(index)?,
         ArgumentParameterBindings::Named(parameters) => {
             let parameter_name = callee_parameter_names.get(index)?.as_deref()?;
-            parameters.get(parameter_name)?.as_deref()
+            *parameters.get(parameter_name)?
         }
     }
 }
@@ -3239,18 +3246,12 @@ fn sink_indices_for_summary_kind(
     summary: &FunctionSinkSummary,
     sink_kind: SinkKind,
     argument_parameters: &ArgumentParameterBindings,
-    current_parameter_names: &[Option<String>],
 ) -> HashSet<usize> {
     let callee_sinks = match sink_kind {
         SinkKind::Delegatecall => &summary.delegatecall_parameters,
         SinkKind::EthTransfer => &summary.eth_transfer_parameters,
     };
-    sink_indices_for_summary(
-        callee_sinks,
-        &summary.parameter_names,
-        argument_parameters,
-        current_parameter_names,
-    )
+    sink_indices_for_summary(callee_sinks, &summary.parameter_names, argument_parameters)
 }
 
 fn propagate_sink_indices_through_edge(
@@ -3258,19 +3259,14 @@ fn propagate_sink_indices_through_edge(
     sink_kind: SinkKind,
     edge: &FunctionCallEdge,
     previous: &HashMap<CallableTargetKey, FunctionSinkSummary>,
-    current_parameter_names: &[Option<String>],
 ) -> bool {
     let mut propagated_candidates = Vec::<HashSet<usize>>::new();
     for callee in &edge.callees {
         let Some(summary) = previous.get(callee) else {
             continue;
         };
-        let propagated = sink_indices_for_summary_kind(
-            summary,
-            sink_kind,
-            &edge.argument_parameters,
-            current_parameter_names,
-        );
+        let propagated =
+            sink_indices_for_summary_kind(summary, sink_kind, &edge.argument_parameters);
         if propagated_candidates.contains(&propagated) {
             continue;
         }
@@ -3401,10 +3397,18 @@ fn call_argument_for_parameter<'a, 'ast>(
     }
 }
 
-fn argument_parameter_bindings(args: &solar_ast::CallArgs<'_>) -> ArgumentParameterBindings {
+fn argument_parameter_bindings(
+    file: &FileSemanticInfo,
+    args: &solar_ast::CallArgs<'_>,
+    parameter_indexes: &HashMap<usize, usize>,
+) -> ArgumentParameterBindings {
     match &args.kind {
         solar_ast::CallArgsKind::Unnamed(_) => ArgumentParameterBindings::Positional(
-            args.exprs().map(parameter_name_for_expr).collect(),
+            args.exprs()
+                .map(|argument| {
+                    resolved_parameter_index_for_expr(file, argument, parameter_indexes)
+                })
+                .collect(),
         ),
         solar_ast::CallArgsKind::Named(named) => ArgumentParameterBindings::Named(
             named
@@ -3412,7 +3416,7 @@ fn argument_parameter_bindings(args: &solar_ast::CallArgs<'_>) -> ArgumentParame
                 .map(|argument| {
                     (
                         argument.name.as_str().to_string(),
-                        parameter_name_for_expr(argument.value),
+                        resolved_parameter_index_for_expr(file, argument.value, parameter_indexes),
                     )
                 })
                 .collect(),
@@ -3420,14 +3424,32 @@ fn argument_parameter_bindings(args: &solar_ast::CallArgs<'_>) -> ArgumentParame
     }
 }
 
+fn resolved_parameter_index_for_expr(
+    file: &FileSemanticInfo,
+    expr: &Expr<'_>,
+    parameter_indexes: &HashMap<usize, usize>,
+) -> Option<usize> {
+    let (name, span) = parameter_name_and_span_for_expr(expr)?;
+    resolved_parameter_index(file, &name, &span, parameter_indexes)
+}
+
+fn resolved_parameter_index(
+    file: &FileSemanticInfo,
+    name: &str,
+    span: &std::ops::Range<usize>,
+    parameter_indexes: &HashMap<usize, usize>,
+) -> Option<usize> {
+    let resolved = file.table.resolve(name, span.start)?;
+    if resolved.kind != SymbolKind::Parameter {
+        return None;
+    }
+    parameter_indexes.get(&resolved.name_span.start).copied()
+}
+
 fn resolved_parameter_name(file: &FileSemanticInfo, expr: &Expr<'_>) -> Option<String> {
     let (name, span) = parameter_name_and_span_for_expr(expr)?;
     let resolved = file.table.resolve(&name, span.start)?;
     (resolved.kind == SymbolKind::Parameter).then_some(name)
-}
-
-fn parameter_name_for_expr(expr: &Expr<'_>) -> Option<String> {
-    parameter_name_and_span_for_expr(expr).map(|(name, _)| name)
 }
 
 fn parameter_name_and_span_for_expr(expr: &Expr<'_>) -> Option<(String, std::ops::Range<usize>)> {
@@ -4219,6 +4241,40 @@ contract Delegatecall {
     }
 
     #[test]
+    fn test_compiler_diagnostics_do_not_propagate_shadowed_local_delegatecall_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ShadowedDelegatecall.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract ShadowedDelegatecall {
+    address private trusted;
+
+    function run(address implementation, bytes memory payload) external {
+        _delegate(implementation, payload);
+    }
+
+    function _delegate(address target, bytes memory payload) internal {
+        {
+            address target = trusted;
+            target.delegatecall(payload);
+        }
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.code
+                == Some(ls_types::NumberOrString::String(
+                    USER_CONTROLLED_DELEGATECALL_ID.into(),
+                ))
+        }));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_report_interprocedural_delegatecall_flow() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DelegatecallWrapper.sol");
@@ -4260,6 +4316,45 @@ contract DelegatecallWrapper {
         )
         .expect("valid finding metadata");
         assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_do_not_propagate_shadowed_wrapper_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ShadowedWrapper.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract ShadowedWrapper {
+    address private trusted;
+
+    function run(address implementation, bytes memory payload) external {
+        forward(implementation, payload);
+    }
+
+    function forward(address target, bytes memory payload) internal {
+        {
+            address target = trusted;
+            _delegate(target, payload);
+        }
+    }
+
+    function _delegate(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.code
+                == Some(ls_types::NumberOrString::String(
+                    USER_CONTROLLED_DELEGATECALL_ID.into(),
+                ))
+                && diagnostic.message.contains("via `forward`")
+        }));
     }
 
     #[test]
