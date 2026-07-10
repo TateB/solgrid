@@ -108,7 +108,8 @@ enum Commands {
         /// Solidity file to analyze
         path: PathBuf,
 
-        /// Target symbol for inheritance or control-flow graphs
+        /// Target contract for inheritance graphs, or canonical callable signature for control-flow
+        /// (for example `Vault.deposit(uint256)`)
         #[arg(long)]
         symbol: Option<String>,
 

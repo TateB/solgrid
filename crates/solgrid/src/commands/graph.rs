@@ -76,7 +76,10 @@ fn build_graph_document(
     match graph_kind {
         GraphKind::Imports => {
             if symbol.is_some() {
-                return Err("--symbol is only valid for inheritance or control-flow graphs".into());
+                return Err(
+                    "--symbol is only valid for inheritance, linearized-inheritance, or control-flow graphs"
+                        .into(),
+                );
             }
             index
                 .imports_graph(path, source, &get_source)
@@ -530,8 +533,82 @@ contract Main {
         let error = build_graph_document(&GraphKindArg::ControlFlow, &main, &source, None)
             .expect_err("control-flow graph should require a symbol when multiple functions exist");
         assert!(error.contains("requires --symbol"));
-        assert!(error.contains("Main.deposit"));
-        assert!(error.contains("Main.withdraw"));
+        assert!(error.contains("Main.deposit()"));
+        assert!(error.contains("Main.withdraw()"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_build_graph_document_selects_control_flow_overloads_by_canonical_signature() {
+        let root = temp_workspace("graph_overloads");
+        let main = root.join("Main.sol");
+        fs::write(
+            &main,
+            r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(uint value) public returns (uint) { return value; }
+    function run(address value) public returns (address) { return value; }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("solgrid.toml"), "").unwrap();
+
+        let source = fs::read_to_string(&main).unwrap();
+        let ambiguous = build_graph_document(&GraphKindArg::ControlFlow, &main, &source, None)
+            .expect_err("overloaded control-flow graph should require a signature");
+        assert!(ambiguous.contains("Main.run(uint256)"));
+        assert!(ambiguous.contains("Main.run(address)"));
+
+        let graph = build_graph_document(
+            &GraphKindArg::ControlFlow,
+            &main,
+            &source,
+            Some("Main.run(uint256)"),
+        )
+        .expect("canonical overload target");
+        assert_eq!(graph.title, "Control-flow graph for Main.run(uint256)");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_control_flow_identity_preserves_function_pointer_shapes() {
+        let root = temp_workspace("graph_function_pointer_overloads");
+        let main = root.join("Main.sol");
+        fs::write(
+            &main,
+            r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(function(uint) internal returns (uint) callback) internal returns (uint) {
+        return callback(1);
+    }
+    function run(function(address) internal returns (address) callback) internal returns (address) {
+        return callback(address(0));
+    }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("solgrid.toml"), "").unwrap();
+
+        let source = fs::read_to_string(&main).unwrap();
+        let ambiguous = build_graph_document(&GraphKindArg::ControlFlow, &main, &source, None)
+            .expect_err("function-pointer overloads should remain distinct");
+        let uint_target = "Main.run(function(uint256) internal returns(uint256))";
+        let address_target = "Main.run(function(address) internal returns(address))";
+        assert!(ambiguous.contains(uint_target));
+        assert!(ambiguous.contains(address_target));
+
+        let graph = build_graph_document(
+            &GraphKindArg::ControlFlow,
+            &main,
+            &source,
+            Some(uint_target),
+        )
+        .expect("function-pointer overload target");
+        assert_eq!(graph.title, format!("Control-flow graph for {uint_target}"));
 
         let _ = fs::remove_dir_all(root);
     }

@@ -59,6 +59,7 @@ pub enum TypeSpec {
         display: String,
     },
     Mapping {
+        key: Box<TypeSpec>,
         value: Box<TypeSpec>,
         display: String,
     },
@@ -239,6 +240,12 @@ impl SymbolTable {
                     results.push(sym);
                 }
             }
+            // Solidity lexical shadowing stops lookup at the first scope that
+            // defines the name. Keep all definitions in that scope so callers
+            // can still reason conservatively about overload sets.
+            if !results.is_empty() {
+                break;
+            }
             current = scope.parent;
         }
 
@@ -305,6 +312,18 @@ impl SymbolTable {
             return &[];
         }
         &self.scopes[0].symbols
+    }
+
+    /// Find the declaration whose identifier exactly occupies `span`.
+    ///
+    /// This deliberately ignores lexical lookup so declarations remain
+    /// addressable when a parameter or local uses the same name as an
+    /// enclosing callable.
+    pub fn definition_at_name_span(&self, span: &Range<usize>) -> Option<&SymbolDef> {
+        self.scopes
+            .iter()
+            .flat_map(|scope| scope.symbols.iter())
+            .find(|definition| definition.name_span == *span)
     }
 
     /// Collect all symbols visible at the given byte offset.
@@ -540,6 +559,12 @@ pub fn type_spec_from_ast(
             display,
         },
         TypeKind::Mapping(mapping) => TypeSpec::Mapping {
+            key: Box::new(type_spec_from_ast(
+                source,
+                &mapping.key,
+                None,
+                resolve_offset,
+            )),
             value: Box::new(type_spec_from_ast(
                 source,
                 &mapping.value,
@@ -695,6 +720,24 @@ fn collect_item(
                         name: "<constructor>".to_string(),
                         kind: SymbolKind::Constructor,
                         name_span: header_start..header_start,
+                        def_span: def_span.clone(),
+                        scope: Some(func_scope),
+                        type_info: None,
+                        signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
+                    },
+                );
+            } else if matches!(func.kind, FunctionKind::Fallback | FunctionKind::Receive) {
+                let header_span = span_to_range(func.header.span);
+                let name = func.kind.to_str().to_string();
+                let relative_start = source[header_span.clone()].find(&name).unwrap_or(0);
+                let name_start = header_span.start + relative_start;
+                table.add_symbol(
+                    parent_scope,
+                    SymbolDef {
+                        name: name.clone(),
+                        kind: SymbolKind::Function,
+                        name_span: name_start..name_start + name.len(),
                         def_span: def_span.clone(),
                         scope: Some(func_scope),
                         type_info: None,
@@ -1055,8 +1098,32 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
 
         StmtKind::Try(try_stmt) => {
             for clause in try_stmt.clauses.iter() {
-                let clause_span = span_to_range(clause.block.span);
+                let clause_span = span_to_range(clause.span);
                 let clause_scope = table.push_scope(Some(scope), clause_span);
+                for argument in clause.args.iter() {
+                    let Some(name_ident) = argument.name else {
+                        continue;
+                    };
+                    let argument_span = span_to_range(argument.span);
+                    table.add_symbol(
+                        clause_scope,
+                        SymbolDef {
+                            name: name_ident.as_str().to_string(),
+                            kind: SymbolKind::LocalVariable,
+                            name_span: span_to_range(name_ident.span),
+                            def_span: argument_span.clone(),
+                            scope: None,
+                            type_info: Some(type_spec_from_ast(
+                                source,
+                                &argument.ty,
+                                argument.data_location,
+                                argument_span.start,
+                            )),
+                            signature: None,
+                            visibility: None,
+                        },
+                    );
+                }
                 collect_stmts(table, clause_scope, source, clause.block.stmts);
             }
         }
@@ -1526,5 +1593,75 @@ interface IERC20 {
         // When cursor is on the container name, not the member.
         let source = "MyContract.transfer(to, amount);";
         assert!(find_member_access_at_offset(source, 3).is_none());
+    }
+
+    #[test]
+    fn test_resolve_all_preserves_overloads_but_stops_at_lexical_shadow() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function run(uint256 value) external { value; }
+    function run(address value) external { value; }
+}
+"#;
+        let table = table_for(source);
+
+        let overloads = table.resolve_all("run", source.find("contract Test").unwrap());
+        assert_eq!(overloads.len(), 2);
+
+        let use_offset = source.find("value; }").unwrap();
+        let values = table.resolve_all("value", use_offset);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].kind, SymbolKind::Parameter);
+    }
+
+    #[test]
+    fn test_collects_try_and_catch_bound_arguments() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    function fetch() external returns (uint256) { return 1; }
+    function run() external returns (uint256) {
+        try this.fetch() returns (uint256 fetched) {
+            return fetched;
+        } catch Error(string memory reason) {
+            revert(reason);
+        }
+    }
+}
+"#;
+        let table = table_for(source);
+
+        let fetched_use = source.rfind("fetched;").unwrap();
+        let fetched = table.resolve("fetched", fetched_use).unwrap();
+        assert_eq!(fetched.kind, SymbolKind::LocalVariable);
+        assert_eq!(fetched.type_info.as_ref().unwrap().display(), "uint256");
+
+        let reason_use = source.rfind("reason);").unwrap();
+        let reason = table.resolve("reason", reason_use).unwrap();
+        assert_eq!(reason.kind, SymbolKind::LocalVariable);
+        assert_eq!(
+            reason.type_info.as_ref().unwrap().display(),
+            "string memory"
+        );
+    }
+
+    #[test]
+    fn test_collects_fallback_and_receive_declarations() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    fallback() external payable {}
+    receive() external payable {}
+}
+"#;
+        let table = table_for(source);
+        let contract = table.resolve("Test", source.find("Test").unwrap()).unwrap();
+
+        let fallback = table.resolve_member(contract, "fallback").unwrap();
+        assert_eq!(fallback.kind, SymbolKind::Function);
+        assert_eq!(&source[fallback.name_span.clone()], "fallback");
+
+        let receive = table.resolve_member(contract, "receive").unwrap();
+        assert_eq!(receive.kind, SymbolKind::Function);
+        assert_eq!(&source[receive.name_span.clone()], "receive");
     }
 }

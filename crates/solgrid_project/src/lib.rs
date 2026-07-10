@@ -9,11 +9,11 @@ use serde_json::json;
 use solgrid_ast::resolve::ImportResolver;
 use solgrid_ast::symbols::{self, ImportedSymbols, SymbolDef, SymbolKind, SymbolTable, TypePath};
 use solgrid_parser::solar_ast::{
-    self, yul, FunctionKind, ItemFunction, ItemKind, Stmt, StmtKind, Visibility,
+    self, yul, CallArgsKind, FunctionKind, ItemFunction, ItemKind, Stmt, StmtKind, Visibility,
 };
 use solgrid_parser::with_parsed_ast_sequential;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range as ByteRange;
 use std::path::{Path, PathBuf};
@@ -405,6 +405,7 @@ struct PlaceholderExpansion<'ast, 'modifiers, 'source> {
 struct FlowSegment {
     entry: String,
     fallthroughs: Vec<PendingEdge>,
+    returns: Vec<PendingEdge>,
     breaks: Vec<PendingEdge>,
     continues: Vec<PendingEdge>,
 }
@@ -501,6 +502,35 @@ impl<B: NavBackend> ProjectIndex<B> {
     /// Return all indexed Solidity file paths.
     pub fn indexed_paths(&self) -> Vec<PathBuf> {
         self.files.keys().cloned().collect()
+    }
+
+    /// Return every indexed file that transitively imports `path`.
+    ///
+    /// The target itself is excluded, including when an import cycle leads
+    /// back to it. Results are normalized and sorted for deterministic LSP
+    /// invalidation.
+    pub fn transitive_import_dependents(&self, path: &Path) -> Vec<PathBuf> {
+        let target = normalize_path(path);
+        let mut visited = HashSet::from([target.clone()]);
+        let mut queue = VecDeque::from([target]);
+        let mut dependents = Vec::new();
+
+        while let Some(imported_path) = queue.pop_front() {
+            for (candidate_path, file) in &self.files {
+                if visited.contains(candidate_path)
+                    || !file.import_paths.iter().any(|path| path == &imported_path)
+                {
+                    continue;
+                }
+
+                visited.insert(candidate_path.clone());
+                queue.push_back(candidate_path.clone());
+                dependents.push(candidate_path.clone());
+            }
+        }
+
+        dependents.sort();
+        dependents
     }
 
     /// Return the number of Solidity files currently held in the workspace index.
@@ -746,16 +776,56 @@ impl<B: NavBackend> ProjectIndex<B> {
             }
         }
 
+        let reference_targets = targets
+            .iter()
+            .map(|(def, container_name)| {
+                reference_target_from_def(&snapshot.path, def, container_name.clone())
+            })
+            .collect::<Vec<_>>();
+        let current_file = (snapshot.path.clone(), source);
+        let cacheable = self.reference_cache_usable(Some(&current_file));
+        let mut reference_results = vec![None; reference_targets.len()];
+        let mut missing_indices = Vec::new();
+        let mut missing_targets = Vec::new();
+        for (index, target) in reference_targets.iter().enumerate() {
+            if cacheable {
+                reference_results[index] = self.cached_references_for_target(target);
+            }
+            if reference_results[index].is_none() {
+                missing_indices.push(index);
+                missing_targets.push(target.clone());
+            }
+        }
+
+        let computed = self.compute_references_for_targets_batch(
+            &missing_targets,
+            Some(&current_file),
+            get_source,
+        );
+        for ((index, target), result) in missing_indices
+            .into_iter()
+            .zip(missing_targets)
+            .zip(computed)
+        {
+            if cacheable {
+                self.store_references_for_target(&target, result.clone());
+            }
+            reference_results[index] = Some(result);
+        }
+
         targets
             .into_iter()
-            .map(|(def, container_name)| {
-                let target = reference_target_from_def(&snapshot.path, def, container_name);
-                let locations = self.find_references_for_target(
-                    &target,
-                    Some((snapshot.path.clone(), source)),
-                    false,
-                    get_source,
-                );
+            .zip(
+                reference_results
+                    .into_iter()
+                    .map(|result| result.expect("every CodeLens target must have references")),
+            )
+            .map(|((def, _container_name), result)| {
+                let locations = result
+                    .locations
+                    .into_iter()
+                    .filter(|location| result.declaration.as_ref() != Some(location))
+                    .collect::<Vec<_>>();
                 let count = locations.len();
                 let range = span_to_range(source, &def.name_span);
                 let arguments = path_to_uri(&snapshot.path).map(|uri| {
@@ -2074,7 +2144,10 @@ impl<B: NavBackend> ProjectIndex<B> {
             };
 
             for name in reference_scan_names(&snapshot, target, get_source, &self.resolver) {
-                for span in find_identifier_occurrences(&snapshot.source, &name) {
+                let spans = find_identifier_occurrences(&snapshot.source, &name)
+                    .into_iter()
+                    .chain(find_natspec_identifier_occurrences(&snapshot.source, &name));
+                for span in spans {
                     let Some(resolved_target) = reference_target_at_offset(
                         &snapshot,
                         span.start,
@@ -2115,6 +2188,101 @@ impl<B: NavBackend> ProjectIndex<B> {
             locations,
             declaration,
         }
+    }
+
+    fn compute_references_for_targets_batch(
+        &self,
+        targets: &[ReferenceTarget],
+        current_file: Option<&(PathBuf, &str)>,
+        get_source: &dyn Fn(&Path) -> Option<String>,
+    ) -> Vec<ReferenceSearchResult> {
+        if targets.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidate_paths = self.files.keys().cloned().collect::<Vec<_>>();
+        candidate_paths.extend(targets.iter().map(|target| target.file_path.clone()));
+        if let Some((current_path, _)) = current_file {
+            candidate_paths.push(current_path.clone());
+        }
+        candidate_paths.sort();
+        candidate_paths.dedup();
+
+        let mut locations = vec![Vec::new(); targets.len()];
+        let mut declarations = vec![None; targets.len()];
+        let mut seen = vec![HashSet::new(); targets.len()];
+
+        for path in candidate_paths {
+            let Some(snapshot) = self.candidate_snapshot(&path, current_file, get_source) else {
+                continue;
+            };
+            let mut candidates_by_name = HashMap::<String, Vec<usize>>::new();
+            for (target_index, target) in targets.iter().enumerate() {
+                for name in reference_scan_names(&snapshot, target, get_source, &self.resolver) {
+                    candidates_by_name
+                        .entry(name)
+                        .or_default()
+                        .push(target_index);
+                }
+            }
+
+            let mut spans = find_all_identifier_occurrences(&snapshot.source);
+            for name in candidates_by_name.keys() {
+                spans.extend(find_natspec_identifier_occurrences(&snapshot.source, name));
+            }
+            spans.sort_by_key(|span| span.start);
+            spans.dedup();
+
+            for span in spans {
+                let name = &snapshot.source[span.clone()];
+                let Some(candidate_indices) = candidates_by_name.get(name) else {
+                    continue;
+                };
+                let Some(resolved_target) =
+                    reference_target_at_offset(&snapshot, span.start, get_source, &self.resolver)
+                else {
+                    continue;
+                };
+
+                for &target_index in candidate_indices {
+                    let target = &targets[target_index];
+                    if resolved_target != *target
+                        || !seen[target_index].insert((snapshot.path.clone(), span.clone()))
+                    {
+                        continue;
+                    }
+                    let Some(uri) = path_to_uri(&snapshot.path) else {
+                        continue;
+                    };
+                    let location = Location {
+                        uri,
+                        range: span_to_range(&snapshot.source, &span),
+                    };
+                    if snapshot.path == target.file_path && span == target.name_span {
+                        declarations[target_index] = Some(location.clone());
+                    }
+                    locations[target_index].push(location);
+                }
+            }
+        }
+
+        locations
+            .into_iter()
+            .zip(declarations)
+            .map(|(mut locations, declaration)| {
+                locations.sort_by(|left, right| {
+                    left.uri
+                        .as_str()
+                        .cmp(right.uri.as_str())
+                        .then_with(|| left.range.start.line.cmp(&right.range.start.line))
+                        .then_with(|| left.range.start.character.cmp(&right.range.start.character))
+                });
+                ReferenceSearchResult {
+                    locations,
+                    declaration,
+                }
+            })
+            .collect()
     }
 
     fn cached_references_for_target(
@@ -2353,6 +2521,7 @@ fn build_control_flow_graph_document<'ast>(
     {
         builder.add_edge(&entry_id, &segment.entry, None, Some(GraphEdgeKind::Normal));
         builder.connect_pending(segment.fallthroughs, &exit_id);
+        builder.connect_pending(segment.returns, &exit_id);
         builder.connect_pending(segment.breaks, &exit_id);
         builder.connect_pending(segment.continues, &exit_id);
     } else {
@@ -2424,6 +2593,7 @@ fn build_callable_flow<'ast>(
             Some(FlowSegment {
                 entry: modifier_node,
                 fallthroughs: next.fallthroughs,
+                returns: next.returns,
                 breaks: next.breaks,
                 continues: next.continues,
             })
@@ -2435,6 +2605,7 @@ fn build_callable_flow<'ast>(
                 label: None,
                 kind: Some(GraphEdgeKind::Normal),
             }],
+            returns: Vec::new(),
             breaks: Vec::new(),
             continues: Vec::new(),
         }),
@@ -2476,6 +2647,7 @@ fn compose_flow_segments(
         (Some(mut left), Some(right)) => {
             builder.connect_pending(left.fallthroughs, &right.entry);
             left.fallthroughs = right.fallthroughs;
+            left.returns.extend(right.returns);
             left.breaks.extend(right.breaks);
             left.continues.extend(right.continues);
             Some(left)
@@ -2519,16 +2691,14 @@ fn build_stmt_flow<'ast>(
                 stmt_snippet(source, source_base, stmt),
                 GraphNodeKind::TerminalReturn,
             );
-            let exit_id = builder.exit_id.clone();
-            builder.add_edge(
-                &node,
-                &exit_id,
-                Some("return".to_string()),
-                Some(GraphEdgeKind::Return),
-            );
             Some(FlowSegment {
-                entry: node,
+                entry: node.clone(),
                 fallthroughs: Vec::new(),
+                returns: vec![PendingEdge {
+                    from: node,
+                    label: Some("return".to_string()),
+                    kind: Some(GraphEdgeKind::Return),
+                }],
                 breaks: Vec::new(),
                 continues: Vec::new(),
             })
@@ -2549,6 +2719,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node,
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: Vec::new(),
             })
@@ -2562,6 +2733,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node.clone(),
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: vec![PendingEdge {
                     from: node,
                     label: Some("break".to_string()),
@@ -2579,6 +2751,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node.clone(),
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: vec![PendingEdge {
                     from: node,
@@ -2595,7 +2768,14 @@ fn build_stmt_flow<'ast>(
                 placeholder.body_stmts,
                 placeholder.modifiers,
                 loop_context,
-            ),
+            )
+            .map(|mut expanded| {
+                // A Solidity return inside the wrapped function resumes at the
+                // modifier continuation after `_`, allowing each modifier's
+                // postlude to run before the callable exits.
+                expanded.fallthroughs.append(&mut expanded.returns);
+                expanded
+            }),
             None => Some(single_node_segment(
                 builder,
                 "_".to_string(),
@@ -2629,6 +2809,7 @@ fn build_stmt_flow<'ast>(
                 Some(FlowSegment {
                     entry: node,
                     fallthroughs: body.fallthroughs,
+                    returns: body.returns,
                     breaks: body.breaks,
                     continues: body.continues,
                 })
@@ -2640,6 +2821,7 @@ fn build_stmt_flow<'ast>(
                         label: None,
                         kind: Some(GraphEdgeKind::Normal),
                     }],
+                    returns: Vec::new(),
                     breaks: Vec::new(),
                     continues: Vec::new(),
                 })
@@ -2670,6 +2852,7 @@ fn build_stmt_flow<'ast>(
                 )
             });
             let mut fallthroughs = Vec::new();
+            let mut returns = Vec::new();
             let mut breaks = Vec::new();
             let mut continues = Vec::new();
 
@@ -2681,6 +2864,7 @@ fn build_stmt_flow<'ast>(
                     Some(GraphEdgeKind::BranchTrue),
                 );
                 fallthroughs.extend(then_flow.fallthroughs);
+                returns.extend(then_flow.returns);
                 breaks.extend(then_flow.breaks);
                 continues.extend(then_flow.continues);
             } else {
@@ -2699,6 +2883,7 @@ fn build_stmt_flow<'ast>(
                     Some(GraphEdgeKind::BranchFalse),
                 );
                 fallthroughs.extend(else_flow.fallthroughs);
+                returns.extend(else_flow.returns);
                 breaks.extend(else_flow.breaks);
                 continues.extend(else_flow.continues);
             } else {
@@ -2712,6 +2897,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: condition,
                 fallthroughs,
+                returns,
                 breaks,
                 continues,
             })
@@ -2738,6 +2924,7 @@ fn build_stmt_flow<'ast>(
                 label: Some("false".to_string()),
                 kind: Some(GraphEdgeKind::BranchFalse),
             }];
+            let mut returns = Vec::new();
 
             if let Some(body_flow) = body_flow {
                 builder.add_edge(
@@ -2752,6 +2939,7 @@ fn build_stmt_flow<'ast>(
                 );
                 builder.connect_pending(body_flow.continues, &condition);
                 fallthroughs.extend(body_flow.breaks);
+                returns.extend(body_flow.returns);
             } else {
                 builder.add_edge(
                     &condition,
@@ -2764,6 +2952,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: condition,
                 fallthroughs,
+                returns,
                 breaks: Vec::new(),
                 continues: Vec::new(),
             })
@@ -2790,6 +2979,7 @@ fn build_stmt_flow<'ast>(
                 label: Some("false".to_string()),
                 kind: Some(GraphEdgeKind::BranchFalse),
             }];
+            let mut returns = Vec::new();
 
             let entry = if let Some(body_flow) = body_flow {
                 builder.connect_pending(
@@ -2798,6 +2988,7 @@ fn build_stmt_flow<'ast>(
                 );
                 builder.connect_pending(body_flow.continues, &condition);
                 fallthroughs.extend(body_flow.breaks);
+                returns.extend(body_flow.returns);
                 builder.add_edge(
                     &condition,
                     &body_flow.entry,
@@ -2818,6 +3009,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry,
                 fallthroughs,
+                returns,
                 breaks: Vec::new(),
                 continues: Vec::new(),
             })
@@ -2865,6 +3057,7 @@ fn build_stmt_flow<'ast>(
                 } else {
                     Vec::new()
                 },
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: Vec::new(),
             };
@@ -2886,6 +3079,7 @@ fn build_stmt_flow<'ast>(
                         Some(GraphEdgeKind::LoopBack),
                     );
                     loop_segment.fallthroughs.extend(body_flow.breaks);
+                    loop_segment.returns.extend(body_flow.returns);
                 }
                 (Some(body_flow), None) => {
                     builder.add_edge(
@@ -2900,6 +3094,7 @@ fn build_stmt_flow<'ast>(
                     );
                     builder.connect_pending(body_flow.continues, &condition);
                     loop_segment.fallthroughs.extend(body_flow.breaks);
+                    loop_segment.returns.extend(body_flow.returns);
                 }
                 (None, Some(next_node)) => {
                     builder.add_edge(
@@ -2946,6 +3141,7 @@ fn build_stmt_flow<'ast>(
                 GraphNodeKind::Try,
             );
             let mut fallthroughs = Vec::new();
+            let mut returns = Vec::new();
             let mut breaks = Vec::new();
             let mut continues = Vec::new();
 
@@ -2978,6 +3174,7 @@ fn build_stmt_flow<'ast>(
                         Some(GraphEdgeKind::Normal),
                     );
                     fallthroughs.extend(clause_flow.fallthroughs);
+                    returns.extend(clause_flow.returns);
                     breaks.extend(clause_flow.breaks);
                     continues.extend(clause_flow.continues);
                 } else {
@@ -2992,6 +3189,7 @@ fn build_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: try_node,
                 fallthroughs,
+                returns,
                 breaks,
                 continues,
             })
@@ -3035,6 +3233,7 @@ fn build_assembly_flow<'ast>(
             Some(FlowSegment {
                 entry: assembly_node,
                 fallthroughs: body.fallthroughs,
+                returns: body.returns,
                 breaks: body.breaks,
                 continues: body.continues,
             })
@@ -3046,6 +3245,7 @@ fn build_assembly_flow<'ast>(
                 label: None,
                 kind: Some(GraphEdgeKind::Normal),
             }],
+            returns: Vec::new(),
             breaks: Vec::new(),
             continues: Vec::new(),
         }),
@@ -3102,7 +3302,7 @@ fn build_yul_stmt_flow<'ast>(
         | yul::StmtKind::AssignMulti(_, _)
         | yul::StmtKind::Expr(_)
         | yul::StmtKind::VarDecl(_, _) => {
-            build_yul_leaf_stmt_flow(builder, source, source_base, stmt, yul_context, exit_target)
+            build_yul_leaf_stmt_flow(builder, source, source_base, stmt, yul_context)
         }
         yul::StmtKind::FunctionDef(function) => {
             ensure_yul_function_graph(builder, source, source_base, function, yul_context);
@@ -3152,6 +3352,7 @@ fn build_yul_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: condition,
                 fallthroughs,
+                returns: Vec::new(),
                 breaks,
                 continues,
             })
@@ -3193,6 +3394,7 @@ fn build_yul_stmt_flow<'ast>(
                     label: Some("false".to_string()),
                     kind: Some(GraphEdgeKind::BranchFalse),
                 }],
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: Vec::new(),
             };
@@ -3322,6 +3524,7 @@ fn build_yul_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: switch_node,
                 fallthroughs,
+                returns: Vec::new(),
                 breaks,
                 continues,
             })
@@ -3341,6 +3544,7 @@ fn build_yul_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node,
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: Vec::new(),
             })
@@ -3354,6 +3558,7 @@ fn build_yul_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node.clone(),
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: vec![PendingEdge {
                     from: node,
                     label: Some("break".to_string()),
@@ -3371,6 +3576,7 @@ fn build_yul_stmt_flow<'ast>(
             Some(FlowSegment {
                 entry: node.clone(),
                 fallthroughs: Vec::new(),
+                returns: Vec::new(),
                 breaks: Vec::new(),
                 continues: vec![PendingEdge {
                     from: node,
@@ -3388,15 +3594,16 @@ fn build_yul_leaf_stmt_flow<'ast>(
     source_base: usize,
     stmt: &'ast yul::Stmt<'ast>,
     yul_context: &mut YulBuildContext<'ast>,
-    exit_target: &str,
 ) -> Option<FlowSegment> {
     let (label, detail, kind) = yul_stmt_node_descriptor(source, source_base, stmt);
     if let Some((edge_label, edge_kind, node_kind)) = yul_terminal_stmt_semantics(stmt) {
         let node = builder.add_node(edge_label.clone(), detail, node_kind);
-        builder.add_edge(&node, exit_target, Some(edge_label), Some(edge_kind));
+        let global_exit = builder.exit_id.clone();
+        builder.add_edge(&node, &global_exit, Some(edge_label), Some(edge_kind));
         return Some(FlowSegment {
             entry: node,
             fallthroughs: Vec::new(),
+            returns: Vec::new(),
             breaks: Vec::new(),
             continues: Vec::new(),
         });
@@ -3604,6 +3811,7 @@ fn single_node_segment(
             label: None,
             kind: Some(GraphEdgeKind::Normal),
         }],
+        returns: Vec::new(),
         breaks: Vec::new(),
         continues: Vec::new(),
     }
@@ -3764,7 +3972,7 @@ fn callable_declaration(
     let lens_span = callable_lens_span(source, function);
     let container_name = contract_stack.last().cloned();
     let name = callable_name(function);
-    let label = callable_label(contract_stack, function);
+    let label = callable_label(source, contract_stack, function);
     Some(CallableDecl {
         name,
         label: label.clone(),
@@ -3831,8 +4039,15 @@ fn callable_name(function: &ItemFunction<'_>) -> String {
     }
 }
 
-fn callable_label(contract_stack: &[String], function: &ItemFunction<'_>) -> String {
+fn callable_label(source: &str, contract_stack: &[String], function: &ItemFunction<'_>) -> String {
     let container = contract_stack.last();
+    let parameters = function
+        .header
+        .parameters
+        .iter()
+        .map(|parameter| callable_type_identity(source, &parameter.ty))
+        .collect::<Vec<_>>()
+        .join(",");
     match function.kind {
         FunctionKind::Function | FunctionKind::Modifier => {
             let name = function
@@ -3841,18 +4056,91 @@ fn callable_label(contract_stack: &[String], function: &ItemFunction<'_>) -> Str
                 .map(|name| name.as_str().to_string())
                 .unwrap_or_else(|| function.kind.to_str().to_string());
             container
-                .map(|container| format!("{container}.{name}"))
-                .unwrap_or(name)
+                .map(|container| format!("{container}.{name}({parameters})"))
+                .unwrap_or_else(|| format!("{name}({parameters})"))
         }
         FunctionKind::Constructor => container
-            .map(|container| format!("{container}.constructor"))
-            .unwrap_or_else(|| "constructor".to_string()),
+            .map(|container| format!("{container}.constructor({parameters})"))
+            .unwrap_or_else(|| format!("constructor({parameters})")),
         FunctionKind::Fallback => container
-            .map(|container| format!("{container}.fallback"))
-            .unwrap_or_else(|| "fallback".to_string()),
+            .map(|container| format!("{container}.fallback()"))
+            .unwrap_or_else(|| "fallback()".to_string()),
         FunctionKind::Receive => container
-            .map(|container| format!("{container}.receive"))
-            .unwrap_or_else(|| "receive".to_string()),
+            .map(|container| format!("{container}.receive()"))
+            .unwrap_or_else(|| "receive()".to_string()),
+    }
+}
+
+fn callable_type_identity(source: &str, ty: &solar_ast::Type<'_>) -> String {
+    match &ty.kind {
+        solar_ast::TypeKind::Elementary(elementary) => match elementary {
+            solar_ast::ElementaryType::Address(_) => "address".to_string(),
+            solar_ast::ElementaryType::Bool => "bool".to_string(),
+            solar_ast::ElementaryType::String => "string".to_string(),
+            solar_ast::ElementaryType::Bytes => "bytes".to_string(),
+            solar_ast::ElementaryType::Int(size) => format!("int{}", size.bits()),
+            solar_ast::ElementaryType::UInt(size) => format!("uint{}", size.bits()),
+            solar_ast::ElementaryType::FixedBytes(size) => format!("bytes{}", size.bytes()),
+            solar_ast::ElementaryType::Fixed(size, fraction) => {
+                format!("fixed{}x{}", size.bits(), fraction.get())
+            }
+            solar_ast::ElementaryType::UFixed(size, fraction) => {
+                format!("ufixed{}x{}", size.bits(), fraction.get())
+            }
+        },
+        solar_ast::TypeKind::Custom(path) => path
+            .segments()
+            .iter()
+            .map(|segment| segment.as_str())
+            .collect::<Vec<_>>()
+            .join("."),
+        solar_ast::TypeKind::Array(array) => {
+            let element = callable_type_identity(source, &array.element);
+            let length = array.size.as_ref().map(|size| match &size.kind {
+                solar_ast::ExprKind::Lit(literal, None) => match literal.kind {
+                    solar_ast::LitKind::Number(value) => value.to_string(),
+                    _ => range_snippet(source, 0, solgrid_ast::span_to_range(size.span)),
+                },
+                _ => range_snippet(source, 0, solgrid_ast::span_to_range(size.span)),
+            });
+            match length {
+                Some(length) => format!("{element}[{length}]"),
+                None => format!("{element}[]"),
+            }
+        }
+        solar_ast::TypeKind::Mapping(mapping) => format!(
+            "mapping({}=>{})",
+            callable_type_identity(source, &mapping.key),
+            callable_type_identity(source, &mapping.value)
+        ),
+        solar_ast::TypeKind::Function(function) => {
+            let parameters = function
+                .parameters
+                .iter()
+                .map(|parameter| callable_type_identity(source, &parameter.ty))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut identity = format!("function({parameters})");
+            if let Some(visibility) = function.visibility {
+                identity.push(' ');
+                identity.push_str(&visibility.data.to_string());
+            }
+            if let Some(state_mutability) = function.state_mutability {
+                identity.push(' ');
+                identity.push_str(&state_mutability.data.to_string());
+            }
+            if let Some(returns) = &function.returns {
+                let return_types = returns
+                    .iter()
+                    .map(|parameter| callable_type_identity(source, &parameter.ty))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                identity.push_str(" returns(");
+                identity.push_str(&return_types);
+                identity.push(')');
+            }
+            identity
+        }
     }
 }
 
@@ -4701,8 +4989,9 @@ fn resolve_cross_file_symbol_inner(
             continue;
         };
 
-        if let Some(def) = imported_table.resolve(target_name, 0) {
-            let def = def.clone();
+        let definitions = imported_table.resolve_all(target_name, 0);
+        if definitions.len() == 1 {
+            let def = definitions[0].clone();
             return Some(CrossFileSymbol {
                 source: imported_source,
                 table: imported_table,
@@ -4796,8 +5085,9 @@ fn resolve_cross_file_member_symbol_inner(
         };
 
         if target.1 {
-            if let Some(def) = imported_table.resolve(target.0, 0) {
-                let def = def.clone();
+            let definitions = imported_table.resolve_all(target.0, 0);
+            if definitions.len() == 1 {
+                let def = definitions[0].clone();
                 return Some(CrossFileSymbol {
                     source: imported_source,
                     table: imported_table,
@@ -4808,8 +5098,9 @@ fn resolve_cross_file_member_symbol_inner(
         }
 
         if let Some(container_def) = imported_table.resolve(target.0, 0) {
-            if let Some(member_def) = imported_table.resolve_member(container_def, member_name) {
-                let def = member_def.clone();
+            let member_definitions = imported_table.resolve_member_all(container_def, member_name);
+            if member_definitions.len() == 1 {
+                let def = member_definitions[0].clone();
                 return Some(CrossFileSymbol {
                     source: imported_source,
                     table: imported_table,
@@ -4846,12 +5137,18 @@ fn reference_target_at_offset(
     {
         let member_name = &snapshot.source[member_range.clone()];
         if let Some(container_def) = snapshot.table.resolve(&container, offset) {
-            if let Some(def) = snapshot.table.resolve_member(container_def, member_name) {
+            let definitions = snapshot
+                .table
+                .resolve_member_all(container_def, member_name);
+            if definitions.len() == 1 {
                 return Some(reference_target_from_def(
                     &snapshot.path,
-                    def,
+                    definitions[0],
                     Some(container),
                 ));
+            }
+            if !definitions.is_empty() {
+                return None;
             }
         }
 
@@ -4875,8 +5172,32 @@ fn reference_target_at_offset(
 
     let (name, ident_range) = symbols::find_ident_at_offset(&snapshot.source, offset)?;
 
-    if let Some(def) = snapshot.table.resolve(&name, offset) {
-        return Some(reference_target_from_def(&snapshot.path, def, None));
+    if let Some(definition) = snapshot.table.definition_at_name_span(&ident_range) {
+        return Some(reference_target_from_def(&snapshot.path, definition, None));
+    }
+
+    if let Some(target) = natspec_bound_parameter_target(snapshot, &ident_range) {
+        return Some(target);
+    }
+
+    if identifier_may_be_named_argument_key(&snapshot.source, &ident_range) {
+        match named_argument_target_at_offset(snapshot, &ident_range, get_source, resolver) {
+            NamedArgumentResolution::Resolved(target) => return Some(target),
+            NamedArgumentResolution::Ambiguous => return None,
+            NamedArgumentResolution::NotNamedArgument => {}
+        }
+    }
+
+    let definitions = snapshot.table.resolve_all(&name, offset);
+    if definitions.len() == 1 {
+        return Some(reference_target_from_def(
+            &snapshot.path,
+            definitions[0],
+            None,
+        ));
+    }
+    if !definitions.is_empty() {
+        return None;
     }
 
     if let Some(target) =
@@ -4896,6 +5217,609 @@ fn reference_target_at_offset(
     }
 
     None
+}
+
+fn identifier_may_be_named_argument_key(source: &str, span: &ByteRange<usize>) -> bool {
+    source.as_bytes().get(span.end..).and_then(|suffix| {
+        suffix
+            .iter()
+            .copied()
+            .find(|byte| !byte.is_ascii_whitespace())
+    }) == Some(b':')
+}
+
+fn natspec_bound_parameter_target(
+    snapshot: &ProjectSnapshot,
+    ident_span: &ByteRange<usize>,
+) -> Option<ReferenceTarget> {
+    let line_start = solgrid_ast::natspec::line_start(&snapshot.source, ident_span.start);
+    let line_prefix = &snapshot.source[line_start..ident_span.start];
+    let expected_kind = if line_prefix.contains("@param") {
+        SymbolKind::Parameter
+    } else if line_prefix.contains("@return") {
+        SymbolKind::ReturnParameter
+    } else {
+        return None;
+    };
+    let name = &snapshot.source[ident_span.clone()];
+    let filename = snapshot.path.to_string_lossy().to_string();
+
+    with_parsed_ast_sequential(&snapshot.source, &filename, |source_unit| {
+        fn find_in_items<'a, 'ast>(
+            snapshot: &ProjectSnapshot,
+            items: impl Iterator<Item = &'a solar_ast::Item<'ast>>,
+            ident_span: &ByteRange<usize>,
+            name: &str,
+            expected_kind: SymbolKind,
+        ) -> Option<ReferenceTarget>
+        where
+            'ast: 'a,
+        {
+            for item in items {
+                match &item.kind {
+                    ItemKind::Contract(contract) => {
+                        if let Some(target) = find_in_items(
+                            snapshot,
+                            contract.body.iter(),
+                            ident_span,
+                            name,
+                            expected_kind,
+                        ) {
+                            return Some(target);
+                        }
+                    }
+                    ItemKind::Function(function) => {
+                        let item_span = solgrid_ast::span_to_range(item.span);
+                        let Some(block) = solgrid_ast::natspec::find_attached_natspec(
+                            &snapshot.source,
+                            item_span.start,
+                        ) else {
+                            continue;
+                        };
+                        if !block.range.contains(&ident_span.start) {
+                            continue;
+                        }
+                        let function_definition = if let Some(function_name) = function.header.name
+                        {
+                            snapshot
+                                .table
+                                .definition_at_name_span(&solgrid_ast::span_to_range(
+                                    function_name.span,
+                                ))
+                        } else {
+                            None
+                        }?;
+                        let scope_id = function_definition.scope?;
+                        let matches = snapshot
+                            .table
+                            .scope_symbols(scope_id)
+                            .iter()
+                            .filter(|definition| {
+                                definition.kind == expected_kind && definition.name == name
+                            })
+                            .collect::<Vec<_>>();
+                        if let [definition] = matches.as_slice() {
+                            return Some(reference_target_from_def(
+                                &snapshot.path,
+                                definition,
+                                None,
+                            ));
+                        }
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        find_in_items(
+            snapshot,
+            source_unit.items.iter(),
+            ident_span,
+            name,
+            expected_kind,
+        )
+    })
+    .ok()
+    .flatten()
+}
+
+enum NamedArgumentResolution {
+    NotNamedArgument,
+    Resolved(ReferenceTarget),
+    Ambiguous,
+}
+
+struct NamedArgumentFinder<'a> {
+    snapshot: &'a ProjectSnapshot,
+    target_span: &'a ByteRange<usize>,
+    get_source: &'a dyn Fn(&Path) -> Option<String>,
+    resolver: &'a ImportResolver,
+    saw_named_argument: bool,
+    targets: Vec<ReferenceTarget>,
+}
+
+fn named_argument_target_at_offset(
+    snapshot: &ProjectSnapshot,
+    target_span: &ByteRange<usize>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> NamedArgumentResolution {
+    let filename = snapshot.path.to_string_lossy().to_string();
+    let (saw_named_argument, targets) =
+        with_parsed_ast_sequential(&snapshot.source, &filename, |source_unit| {
+            let mut finder = NamedArgumentFinder {
+                snapshot,
+                target_span,
+                get_source,
+                resolver,
+                saw_named_argument: false,
+                targets: Vec::new(),
+            };
+            for item in source_unit.items.iter() {
+                scan_named_argument_item(item, &mut finder);
+            }
+            (finder.saw_named_argument, finder.targets)
+        })
+        .unwrap_or_default();
+
+    if !saw_named_argument {
+        NamedArgumentResolution::NotNamedArgument
+    } else if let [target] = targets.as_slice() {
+        NamedArgumentResolution::Resolved(target.clone())
+    } else {
+        NamedArgumentResolution::Ambiguous
+    }
+}
+
+fn named_call_argument_targets(
+    snapshot: &ProjectSnapshot,
+    callee: &solar_ast::Expr<'_>,
+    argument_names: &[&str],
+    target_name: &str,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<ReferenceTarget> {
+    let callee = callee.peel_parens();
+    let mut targets = Vec::new();
+
+    match &callee.kind {
+        solar_ast::ExprKind::CallOptions(inner, _) => {
+            return named_call_argument_targets(
+                snapshot,
+                inner,
+                argument_names,
+                target_name,
+                get_source,
+                resolver,
+            );
+        }
+        solar_ast::ExprKind::Ident(identifier) => {
+            let offset = solgrid_ast::span_to_range(identifier.span).start;
+            let definitions = snapshot.table.resolve_all(identifier.as_str(), offset);
+            collect_named_key_targets(
+                &snapshot.table,
+                &snapshot.path,
+                definitions.iter().copied(),
+                argument_names,
+                target_name,
+                &mut targets,
+            );
+
+            if definitions.is_empty() {
+                if let Some(cross) = resolve_cross_file_symbol(
+                    &snapshot.table,
+                    identifier.as_str(),
+                    &snapshot.path,
+                    get_source,
+                    resolver,
+                ) {
+                    collect_named_key_targets(
+                        &cross.table,
+                        &cross.resolved_path,
+                        [&cross.def],
+                        argument_names,
+                        target_name,
+                        &mut targets,
+                    );
+                }
+            }
+        }
+        solar_ast::ExprKind::Member(container_expr, member) => {
+            let container_expr = container_expr.peel_parens();
+            let solar_ast::ExprKind::Ident(container) = &container_expr.kind else {
+                return targets;
+            };
+            let offset = solgrid_ast::span_to_range(member.span).start;
+            let container_definition = if container.as_str() == "this" {
+                snapshot
+                    .table
+                    .file_level_symbols()
+                    .iter()
+                    .find(|definition| {
+                        matches!(
+                            definition.kind,
+                            SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+                        ) && definition.def_span.contains(&offset)
+                    })
+            } else {
+                snapshot.table.resolve(container.as_str(), offset)
+            };
+            if let Some(container_definition) = container_definition {
+                collect_named_key_targets(
+                    &snapshot.table,
+                    &snapshot.path,
+                    snapshot
+                        .table
+                        .resolve_member_all(container_definition, member.as_str()),
+                    argument_names,
+                    target_name,
+                    &mut targets,
+                );
+                collect_typed_container_named_key_targets(
+                    snapshot,
+                    container_definition,
+                    member.as_str(),
+                    argument_names,
+                    target_name,
+                    get_source,
+                    resolver,
+                    &mut targets,
+                );
+            }
+        }
+        _ => {}
+    }
+
+    targets
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_typed_container_named_key_targets(
+    snapshot: &ProjectSnapshot,
+    container_definition: &SymbolDef,
+    member_name: &str,
+    argument_names: &[&str],
+    target_name: &str,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    targets: &mut Vec<ReferenceTarget>,
+) {
+    let Some(type_path) = container_definition
+        .type_info
+        .as_ref()
+        .and_then(|ty| ty.member_target())
+    else {
+        return;
+    };
+    let Some(root_name) = type_path.segments.first() else {
+        return;
+    };
+    let resolve_offset = container_definition
+        .type_info
+        .as_ref()
+        .map_or(0, |ty| ty.resolve_offset());
+
+    let local_roots = snapshot.table.resolve_all(root_name, resolve_offset);
+    if !local_roots.is_empty() {
+        for root in local_roots {
+            collect_named_keys_from_type_root(
+                &snapshot.table,
+                &snapshot.path,
+                root,
+                &type_path.segments[1..],
+                member_name,
+                argument_names,
+                target_name,
+                targets,
+            );
+        }
+        return;
+    }
+
+    if let Some(cross) = resolve_cross_file_symbol(
+        &snapshot.table,
+        root_name,
+        &snapshot.path,
+        get_source,
+        resolver,
+    ) {
+        collect_named_keys_from_type_root(
+            &cross.table,
+            &cross.resolved_path,
+            &cross.def,
+            &type_path.segments[1..],
+            member_name,
+            argument_names,
+            target_name,
+            targets,
+        );
+        return;
+    }
+
+    let Some(second_segment) = type_path.segments.get(1) else {
+        return;
+    };
+    if let Some(cross) = resolve_cross_file_member_symbol(
+        &snapshot.table,
+        root_name,
+        second_segment,
+        &snapshot.path,
+        get_source,
+        resolver,
+    ) {
+        collect_named_keys_from_type_root(
+            &cross.table,
+            &cross.resolved_path,
+            &cross.def,
+            &type_path.segments[2..],
+            member_name,
+            argument_names,
+            target_name,
+            targets,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_named_keys_from_type_root(
+    table: &SymbolTable,
+    path: &Path,
+    root: &SymbolDef,
+    remaining_type_path: &[String],
+    member_name: &str,
+    argument_names: &[&str],
+    target_name: &str,
+    targets: &mut Vec<ReferenceTarget>,
+) {
+    let mut current = root.clone();
+    for segment in remaining_type_path {
+        let definitions = table.resolve_member_all(&current, segment);
+        let [definition] = definitions.as_slice() else {
+            return;
+        };
+        current = (*definition).clone();
+    }
+
+    collect_named_key_targets(
+        table,
+        path,
+        table.resolve_member_all(&current, member_name),
+        argument_names,
+        target_name,
+        targets,
+    );
+}
+
+fn collect_named_key_targets<'a, I>(
+    table: &SymbolTable,
+    path: &Path,
+    definitions: I,
+    argument_names: &[&str],
+    target_name: &str,
+    targets: &mut Vec<ReferenceTarget>,
+) where
+    I: IntoIterator<Item = &'a SymbolDef>,
+{
+    for definition in definitions {
+        let member_kind = match definition.kind {
+            SymbolKind::Function | SymbolKind::Modifier => SymbolKind::Parameter,
+            SymbolKind::Struct => SymbolKind::StructField,
+            _ => continue,
+        };
+        let Some(scope_id) = definition.scope else {
+            continue;
+        };
+        let members = table
+            .scope_symbols(scope_id)
+            .iter()
+            .filter(|member| member.kind == member_kind)
+            .collect::<Vec<_>>();
+        if members.len() != argument_names.len()
+            || !argument_names
+                .iter()
+                .all(|name| members.iter().any(|member| member.name == *name))
+        {
+            continue;
+        }
+        let Some(member) = members.iter().find(|member| member.name == target_name) else {
+            continue;
+        };
+        let target = reference_target_from_def(path, member, None);
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+}
+
+fn scan_named_argument_item(item: &solar_ast::Item<'_>, finder: &mut NamedArgumentFinder<'_>) {
+    match &item.kind {
+        ItemKind::Contract(contract) => {
+            for base in contract.bases.iter() {
+                for argument in base.arguments.exprs() {
+                    scan_named_argument_expr(argument, finder);
+                }
+            }
+            for body_item in contract.body.iter() {
+                scan_named_argument_item(body_item, finder);
+            }
+        }
+        ItemKind::Function(function) => {
+            for modifier in function.header.modifiers.iter() {
+                for argument in modifier.arguments.exprs() {
+                    scan_named_argument_expr(argument, finder);
+                }
+            }
+            if let Some(body) = &function.body {
+                scan_named_argument_stmts(body.stmts, finder);
+            }
+        }
+        ItemKind::Variable(variable) => {
+            if let Some(initializer) = &variable.initializer {
+                scan_named_argument_expr(initializer, finder);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn scan_named_argument_stmts(stmts: &[Stmt<'_>], finder: &mut NamedArgumentFinder<'_>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::Assembly(_)
+            | StmtKind::Break
+            | StmtKind::Continue
+            | StmtKind::Placeholder => {}
+            StmtKind::Block(block) | StmtKind::UncheckedBlock(block) => {
+                scan_named_argument_stmts(block.stmts, finder);
+            }
+            StmtKind::DeclSingle(variable) => {
+                if let Some(initializer) = &variable.initializer {
+                    scan_named_argument_expr(initializer, finder);
+                }
+            }
+            StmtKind::DeclMulti(_, expression)
+            | StmtKind::Expr(expression)
+            | StmtKind::Return(Some(expression)) => scan_named_argument_expr(expression, finder),
+            StmtKind::Return(None) => {}
+            StmtKind::DoWhile(body, condition) | StmtKind::While(condition, body) => {
+                scan_named_argument_stmts(std::slice::from_ref(body), finder);
+                scan_named_argument_expr(condition, finder);
+            }
+            StmtKind::Emit(_, arguments) | StmtKind::Revert(_, arguments) => {
+                for argument in arguments.exprs() {
+                    scan_named_argument_expr(argument, finder);
+                }
+            }
+            StmtKind::For {
+                init,
+                cond,
+                next,
+                body,
+            } => {
+                if let Some(init) = init {
+                    scan_named_argument_stmts(std::slice::from_ref(init), finder);
+                }
+                if let Some(condition) = cond {
+                    scan_named_argument_expr(condition, finder);
+                }
+                if let Some(next) = next {
+                    scan_named_argument_expr(next, finder);
+                }
+                scan_named_argument_stmts(std::slice::from_ref(body), finder);
+            }
+            StmtKind::If(condition, then_branch, else_branch) => {
+                scan_named_argument_expr(condition, finder);
+                scan_named_argument_stmts(std::slice::from_ref(then_branch), finder);
+                if let Some(else_branch) = else_branch {
+                    scan_named_argument_stmts(std::slice::from_ref(else_branch), finder);
+                }
+            }
+            StmtKind::Try(try_stmt) => {
+                scan_named_argument_expr(try_stmt.expr, finder);
+                for clause in try_stmt.clauses.iter() {
+                    scan_named_argument_stmts(clause.block.stmts, finder);
+                }
+            }
+        }
+    }
+}
+
+fn scan_named_argument_expr(expr: &solar_ast::Expr<'_>, finder: &mut NamedArgumentFinder<'_>) {
+    use solgrid_parser::solar_interface::SpannedOption;
+
+    if let solar_ast::ExprKind::Call(callee, arguments) = &expr.kind {
+        if let CallArgsKind::Named(arguments) = &arguments.kind {
+            if let Some(argument) = arguments.iter().find(|argument| {
+                solgrid_ast::span_to_range(argument.name.span) == *finder.target_span
+            }) {
+                finder.saw_named_argument = true;
+                let argument_names = arguments
+                    .iter()
+                    .map(|argument| argument.name.as_str())
+                    .collect::<Vec<_>>();
+                for target in named_call_argument_targets(
+                    finder.snapshot,
+                    callee,
+                    &argument_names,
+                    argument.name.as_str(),
+                    finder.get_source,
+                    finder.resolver,
+                ) {
+                    if !finder.targets.contains(&target) {
+                        finder.targets.push(target);
+                    }
+                }
+            }
+        }
+    }
+
+    match &expr.kind {
+        solar_ast::ExprKind::Array(expressions) => {
+            for expression in expressions.iter() {
+                scan_named_argument_expr(expression, finder);
+            }
+        }
+        solar_ast::ExprKind::Assign(left, _, right)
+        | solar_ast::ExprKind::Binary(left, _, right) => {
+            scan_named_argument_expr(left, finder);
+            scan_named_argument_expr(right, finder);
+        }
+        solar_ast::ExprKind::Call(callee, arguments) => {
+            scan_named_argument_expr(callee, finder);
+            for argument in arguments.exprs() {
+                scan_named_argument_expr(argument, finder);
+            }
+        }
+        solar_ast::ExprKind::CallOptions(callee, arguments) => {
+            scan_named_argument_expr(callee, finder);
+            for argument in arguments.iter() {
+                scan_named_argument_expr(argument.value, finder);
+            }
+        }
+        solar_ast::ExprKind::Delete(expression) | solar_ast::ExprKind::Unary(_, expression) => {
+            scan_named_argument_expr(expression, finder);
+        }
+        solar_ast::ExprKind::Index(expression, index) => {
+            scan_named_argument_expr(expression, finder);
+            match index {
+                solar_ast::IndexKind::Index(Some(index)) => scan_named_argument_expr(index, finder),
+                solar_ast::IndexKind::Range(start, end) => {
+                    if let Some(start) = start {
+                        scan_named_argument_expr(start, finder);
+                    }
+                    if let Some(end) = end {
+                        scan_named_argument_expr(end, finder);
+                    }
+                }
+                solar_ast::IndexKind::Index(None) => {}
+            }
+        }
+        solar_ast::ExprKind::Member(expression, _) => scan_named_argument_expr(expression, finder),
+        solar_ast::ExprKind::Payable(arguments) => {
+            for argument in arguments.exprs() {
+                scan_named_argument_expr(argument, finder);
+            }
+        }
+        solar_ast::ExprKind::Ternary(condition, if_true, if_false) => {
+            scan_named_argument_expr(condition, finder);
+            scan_named_argument_expr(if_true, finder);
+            scan_named_argument_expr(if_false, finder);
+        }
+        solar_ast::ExprKind::Tuple(expressions) => {
+            for expression in expressions.iter() {
+                if let SpannedOption::Some(expression) = expression {
+                    scan_named_argument_expr(expression, finder);
+                }
+            }
+        }
+        solar_ast::ExprKind::Ident(_)
+        | solar_ast::ExprKind::Lit(_, _)
+        | solar_ast::ExprKind::New(_)
+        | solar_ast::ExprKind::TypeCall(_)
+        | solar_ast::ExprKind::Type(_) => {}
+    }
 }
 
 fn callable_target_at_offset(
@@ -4948,6 +5872,10 @@ fn callable_target_at_offset(
     }
 
     let (name, ident_range) = symbols::find_ident_at_offset(&snapshot.source, offset)?;
+    if let Some(definition) = snapshot.table.definition_at_name_span(&ident_range) {
+        return is_call_hierarchy_kind(definition.kind)
+            .then(|| reference_target_from_def(&snapshot.path, definition, None));
+    }
     let defs = snapshot
         .table
         .resolve_all(&name, offset)
@@ -5009,8 +5937,11 @@ fn import_clause_reference_target(
         let imported_source = get_source(&resolved)?;
         let filename = resolved.to_string_lossy().to_string();
         let imported_table = symbols::build_symbol_table(&imported_source, &filename)?;
-        let def = imported_table.resolve(name, 0)?;
-        return Some(reference_target_from_def(&resolved, def, None));
+        let definitions = imported_table.resolve_all(name, 0);
+        if definitions.len() == 1 {
+            return Some(reference_target_from_def(&resolved, definitions[0], None));
+        }
+        return None;
     }
 
     None
@@ -5212,10 +6143,19 @@ fn inherited_member_key(def: &SymbolDef) -> Option<InheritedMemberKey> {
             name: def.name.clone(),
             signature: callable_signature_identity(def)?,
         }),
-        SymbolKind::StateVariable => Some(InheritedMemberKey::StateVariable {
-            name: def.name.clone(),
-            ty: def.type_info.as_ref().map(|ty| ty.display().to_string()),
-        }),
+        SymbolKind::StateVariable => {
+            if let Some(signature) = public_state_getter_signature(def) {
+                Some(InheritedMemberKey::Function {
+                    name: def.name.clone(),
+                    signature,
+                })
+            } else {
+                Some(InheritedMemberKey::StateVariable {
+                    name: def.name.clone(),
+                    ty: def.type_info.as_ref().map(|ty| ty.display().to_string()),
+                })
+            }
+        }
         _ => None,
     }
 }
@@ -5230,10 +6170,19 @@ fn inherited_surface_key(def: &SymbolDef) -> Option<InheritedSurfaceKey> {
             name: def.name.clone(),
             signature: callable_signature_identity(def)?,
         }),
-        SymbolKind::StateVariable => Some(InheritedSurfaceKey::StateVariable {
-            name: def.name.clone(),
-            ty: def.type_info.as_ref().map(|ty| ty.display().to_string()),
-        }),
+        SymbolKind::StateVariable => {
+            if let Some(signature) = public_state_getter_signature(def) {
+                Some(InheritedSurfaceKey::Function {
+                    name: def.name.clone(),
+                    signature,
+                })
+            } else {
+                Some(InheritedSurfaceKey::StateVariable {
+                    name: def.name.clone(),
+                    ty: def.type_info.as_ref().map(|ty| ty.display().to_string()),
+                })
+            }
+        }
         SymbolKind::Event => Some(InheritedSurfaceKey::Event {
             name: def.name.clone(),
         }),
@@ -5288,16 +6237,69 @@ fn callable_signature_identity(def: &SymbolDef) -> Option<String> {
     Some(format!("{}({})", def.name, parameters.join(",")))
 }
 
+fn public_state_getter_signature(def: &SymbolDef) -> Option<String> {
+    if def.kind != SymbolKind::StateVariable || def.visibility != Some(Visibility::Public) {
+        return None;
+    }
+    let mut parameters = Vec::new();
+    collect_public_getter_parameters(def.type_info.as_ref()?, &mut parameters);
+    Some(format!("{}({})", def.name, parameters.join(",")))
+}
+
+fn collect_public_getter_parameters(ty: &symbols::TypeSpec, parameters: &mut Vec<String>) {
+    match ty {
+        symbols::TypeSpec::Mapping { key, value, .. } => {
+            parameters.push(type_spec_signature_identity(key));
+            collect_public_getter_parameters(value, parameters);
+        }
+        symbols::TypeSpec::Array { element, .. } => {
+            parameters.push("uint256".to_string());
+            collect_public_getter_parameters(element, parameters);
+        }
+        _ => {}
+    }
+}
+
+fn type_spec_signature_identity(ty: &symbols::TypeSpec) -> String {
+    match ty {
+        symbols::TypeSpec::Custom { path, .. } => path.as_display(),
+        _ => parameter_type_identity(ty.display()),
+    }
+}
+
 fn parameter_type_identity(label: &str) -> String {
     let trimmed = label.trim();
-    let Some((prefix, last)) = trimmed.rsplit_once(char::is_whitespace) else {
-        return trimmed.to_string();
+    let type_text = match trimmed.rsplit_once(char::is_whitespace) {
+        Some((prefix, last)) if is_signature_identifier(last) && !is_signature_modifier(last) => {
+            prefix.trim_end()
+        }
+        _ => trimmed,
     };
-    if is_signature_identifier(last) && !is_signature_modifier(last) {
-        prefix.trim_end().to_string()
-    } else {
-        trimmed.to_string()
+    let normalized = type_text
+        .split_whitespace()
+        .filter(|part| !matches!(*part, "memory" | "storage" | "calldata"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    canonicalize_elementary_signature_alias(&normalized)
+}
+
+fn canonicalize_elementary_signature_alias(value: &str) -> String {
+    for (short, canonical) in [
+        ("uint", "uint256"),
+        ("int", "int256"),
+        ("fixed", "fixed128x18"),
+        ("ufixed", "ufixed128x18"),
+    ] {
+        if value == short {
+            return canonical.to_string();
+        }
+        if let Some(suffix) = value.strip_prefix(short) {
+            if suffix.starts_with('[') {
+                return format!("{canonical}{suffix}");
+            }
+        }
     }
+    value.to_string()
 }
 
 fn is_signature_identifier(value: &str) -> bool {
@@ -5630,6 +6632,13 @@ fn find_identifier_occurrences(source: &str, needle: &str) -> Vec<ByteRange<usiz
         return Vec::new();
     }
 
+    find_all_identifier_occurrences(source)
+        .into_iter()
+        .filter(|span| &source[span.clone()] == needle)
+        .collect()
+}
+
+fn find_all_identifier_occurrences(source: &str) -> Vec<ByteRange<usize>> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Normal,
@@ -5674,9 +6683,7 @@ fn find_identifier_occurrences(source: &str, needle: &str) -> Vec<ByteRange<usiz
                     while index < bytes.len() && is_identifier_continue(bytes[index]) {
                         index += 1;
                     }
-                    if &source[start..index] == needle {
-                        matches.push(start..index);
-                    }
+                    matches.push(start..index);
                     continue;
                 }
 
@@ -5722,6 +6729,71 @@ fn find_identifier_occurrences(source: &str, needle: &str) -> Vec<ByteRange<usiz
     matches
 }
 
+fn find_natspec_identifier_occurrences(source: &str, needle: &str) -> Vec<ByteRange<usize>> {
+    let mut matches = Vec::new();
+    for tag in ["@param", "@return", "@inheritdoc", "@link"] {
+        for (tag_start, _) in source.match_indices(tag) {
+            if !is_natspec_comment_offset(source, tag_start) {
+                continue;
+            }
+
+            let mut cursor = tag_start + tag.len();
+            while source
+                .as_bytes()
+                .get(cursor)
+                .is_some_and(u8::is_ascii_whitespace)
+            {
+                cursor += 1;
+            }
+
+            loop {
+                let Some(byte) = source.as_bytes().get(cursor).copied() else {
+                    break;
+                };
+                if !is_identifier_start(byte) {
+                    break;
+                }
+                let start = cursor;
+                cursor += 1;
+                while source
+                    .as_bytes()
+                    .get(cursor)
+                    .is_some_and(|byte| is_identifier_continue(*byte))
+                {
+                    cursor += 1;
+                }
+                if &source[start..cursor] == needle {
+                    matches.push(start..cursor);
+                }
+
+                if source.as_bytes().get(cursor) != Some(&b'.') {
+                    break;
+                }
+                cursor += 1;
+            }
+        }
+    }
+    matches.sort_by_key(|span| span.start);
+    matches.dedup();
+    matches
+}
+
+fn is_natspec_comment_offset(source: &str, offset: usize) -> bool {
+    let line_start = solgrid_ast::natspec::line_start(source, offset);
+    if source[line_start..offset].trim_start().starts_with("///") {
+        return true;
+    }
+
+    let prefix = &source[..offset];
+    let Some(comment_start) = prefix.rfind("/*") else {
+        return false;
+    };
+    if prefix[comment_start..].contains("*/") {
+        return false;
+    }
+    source[comment_start..].starts_with("/**")
+}
+
 fn is_identifier_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_' || byte == b'$'
 }
@@ -5734,6 +6806,19 @@ fn is_identifier_continue(byte: u8) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Default)]
+    struct CountingNavBackend {
+        snapshots: Arc<AtomicUsize>,
+    }
+
+    impl NavBackend for CountingNavBackend {
+        fn snapshot(&self, path: &Path, source: &str) -> Option<ProjectSnapshot> {
+            self.snapshots.fetch_add(1, Ordering::Relaxed);
+            SolarNavBackend.snapshot(path, source)
+        }
+    }
 
     #[test]
     fn test_build_indexes_exported_symbols() {
@@ -5832,6 +6917,42 @@ contract Main is ERC20 {}
     }
 
     #[test]
+    fn test_transitive_import_dependents_are_cycle_safe_and_exclude_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("A.sol");
+        let b = dir.path().join("B.sol");
+        let c = dir.path().join("C.sol");
+        let unrelated = dir.path().join("Unrelated.sol");
+        fs::write(
+            &a,
+            "pragma solidity ^0.8.0; import \"./B.sol\"; contract A {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &b,
+            "pragma solidity ^0.8.0; import \"./A.sol\"; contract B {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &c,
+            "pragma solidity ^0.8.0; import \"./A.sol\"; contract C {}\n",
+        )
+        .unwrap();
+        fs::write(
+            &unrelated,
+            "pragma solidity ^0.8.0; contract Unrelated {}\n",
+        )
+        .unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let dependents = index.transitive_import_dependents(&a);
+
+        assert_eq!(dependents, vec![normalize_path(&b), normalize_path(&c)]);
+        assert!(!dependents.contains(&normalize_path(&a)));
+        assert!(!dependents.contains(&normalize_path(&unrelated)));
+    }
+
+    #[test]
     fn test_find_references_same_file_lexical_symbol() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Token.sol");
@@ -5890,6 +7011,77 @@ contract Token {
     }
 
     #[test]
+    fn test_code_lenses_batch_reference_results_and_warm_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Token.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Token {
+    function ping() public {}
+    function invoke() external { ping(); ping(); }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let lenses = index.code_lenses(&path, source, &|candidate| {
+            fs::read_to_string(candidate).ok()
+        });
+        let ping_line = offset_to_position(source, source.find("ping()").unwrap()).line;
+        let ping_lens = lenses
+            .iter()
+            .find(|lens| lens.range.start.line == ping_line)
+            .expect("ping code lens");
+
+        assert_eq!(
+            ping_lens
+                .command
+                .as_ref()
+                .map(|command| command.title.as_str()),
+            Some("2 references")
+        );
+        assert_eq!(index.reference_cache_entry_count(), lenses.len());
+    }
+
+    #[test]
+    fn test_code_lenses_reuse_cached_reference_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Token.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Token {
+    function ping() public {}
+    function invoke() external { ping(); }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let backend = CountingNavBackend::default();
+        let snapshots = backend.snapshots.clone();
+        let mut index = ProjectIndex::with_backend(Some(dir.path().to_path_buf()), backend);
+        index.update_file(&path, source);
+        snapshots.store(0, Ordering::Relaxed);
+
+        let first = index.code_lenses(&path, source, &|candidate| {
+            fs::read_to_string(candidate).ok()
+        });
+        let after_first = snapshots.load(Ordering::Relaxed);
+        let second = index.code_lenses(&path, source, &|candidate| {
+            fs::read_to_string(candidate).ok()
+        });
+        let after_second = snapshots.load(Ordering::Relaxed);
+
+        assert_eq!(first, second);
+        assert_eq!(
+            after_first, 2,
+            "initial request parses the lens and scan snapshots"
+        );
+        assert_eq!(
+            after_second,
+            after_first + 1,
+            "cached request should only parse the requested lens snapshot"
+        );
+    }
+
+    #[test]
     fn test_find_references_cross_file_named_import_and_alias() {
         let dir = tempfile::tempdir().unwrap();
         let token_path = dir.path().join("Token.sol");
@@ -5941,6 +7133,203 @@ contract Main {
         assert_eq!(plan.placeholder, "localAmount");
         assert_eq!(plan.locations.len(), 2);
         assert_eq!(plan.range.start.line, 3);
+    }
+
+    #[test]
+    fn test_rename_plan_keeps_overload_declarations_and_ambiguous_calls_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(uint256 value) public {}
+    function run(address value) public {}
+    function invoke(uint256 value) external { run(value); }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("run(uint256").unwrap();
+        let position = offset_to_position(source, declaration);
+        let plan = index
+            .rename_plan(&path, source, position, &|candidate| {
+                fs::read_to_string(candidate).ok()
+            })
+            .unwrap();
+
+        assert_eq!(plan.placeholder, "run");
+        assert_eq!(plan.locations.len(), 1);
+        assert_eq!(
+            plan.locations[0].range,
+            span_to_range(source, &(declaration..declaration + "run".len()))
+        );
+    }
+
+    #[test]
+    fn test_rename_plan_includes_semantically_resolved_named_argument_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function configure(uint256 amount, address recipient) internal {}
+    function invoke() external {
+        configure({recipient: address(0), amount: 1});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("amount, address").unwrap();
+        let plan = index
+            .rename_plan(
+                &path,
+                source,
+                offset_to_position(source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 2);
+        assert!(plan.locations.iter().any(|location| {
+            location.range
+                == span_to_range(
+                    source,
+                    &(source.rfind("amount: 1").unwrap()
+                        ..source.rfind("amount: 1").unwrap() + "amount".len()),
+                )
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_resolves_named_argument_keys_through_typed_instances() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface Token {
+    function transfer(address recipient, uint256 amount) external;
+}
+contract Main {
+    function send(Token token) external {
+        token.transfer({amount: 1, recipient: address(0)});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("recipient, uint256").unwrap();
+        let plan = index
+            .rename_plan(
+                &path,
+                source,
+                offset_to_position(source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 2);
+        let named_key = source.rfind("recipient: address").unwrap();
+        assert!(plan.locations.iter().any(|location| {
+            location.range == span_to_range(source, &(named_key..named_key + "recipient".len()))
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_struct_literal_field_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    struct Quote { address token; uint256 amount; }
+    function build() external pure returns (Quote memory) {
+        return Quote({amount: 1, token: address(0)});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("amount; }").unwrap();
+        let plan = index
+            .rename_plan(
+                &path,
+                source,
+                offset_to_position(source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 2);
+        assert!(plan.locations.iter().any(|location| {
+            location.range
+                == span_to_range(
+                    source,
+                    &(source.rfind("amount: 1").unwrap()
+                        ..source.rfind("amount: 1").unwrap() + "amount".len()),
+                )
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_attached_natspec_parameter_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    /// @param amount Amount to return.
+    function echo(uint256 amount) external pure returns (uint256) {
+        return amount;
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("amount) external").unwrap();
+        let plan = index
+            .rename_plan(
+                &path,
+                source,
+                offset_to_position(source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 3);
+        let documented = source.find("amount Amount").unwrap();
+        assert!(plan.locations.iter().any(|location| {
+            location.range == span_to_range(source, &(documented..documented + "amount".len()))
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_natspec_inheritdoc_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {}
+/// @inheritdoc Base
+contract Derived is Base {}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("Base {}").unwrap();
+        let plan = index
+            .rename_plan(
+                &path,
+                source,
+                offset_to_position(source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 3);
+        let documented = source.find("Base\ncontract").unwrap();
+        assert!(plan.locations.iter().any(|location| {
+            location.range == span_to_range(source, &(documented..documented + "Base".len()))
+        }));
     }
 
     #[test]
@@ -6297,6 +7686,85 @@ contract Main {
     }
 
     #[test]
+    fn test_control_flow_graph_routes_returns_through_modifier_postludes() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    bool cleaned;
+
+    modifier cleanup() {
+        _;
+        cleaned = true;
+    }
+
+    function run() public cleanup returns (uint256) {
+        return 1;
+    }
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let graph = index
+            .control_flow_graph(&main, source, source.find("run").unwrap())
+            .expect("control-flow graph");
+        let return_id = graph
+            .nodes
+            .iter()
+            .find(|node| node.label == "return")
+            .map(|node| node.id.as_str())
+            .expect("return node");
+        let cleanup_id = graph
+            .nodes
+            .iter()
+            .find(|node| node.label == "assign cleaned")
+            .map(|node| node.id.as_str())
+            .expect("modifier postlude node");
+        let exit_id = graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == Some(GraphNodeKind::Exit))
+            .map(|node| node.id.as_str())
+            .expect("exit node");
+
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == return_id
+                && edge.to == cleanup_id
+                && edge.kind == Some(GraphEdgeKind::Return)
+        }));
+        assert!(!graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == return_id && edge.to == exit_id));
+    }
+
+    #[test]
+    fn test_graph_lenses_preserve_function_pointer_type_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(function(uint) internal returns (uint) callback) internal {}
+    function run(function(address) internal returns (address) callback) internal {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let symbols = index
+            .graph_lenses(&main, source)
+            .into_iter()
+            .filter(|lens| lens.kind == GraphKind::ControlFlow)
+            .filter_map(|lens| lens.symbol_name)
+            .collect::<HashSet<_>>();
+
+        assert!(symbols.contains("Main.run(function(uint256) internal returns(uint256))"));
+        assert!(symbols.contains("Main.run(function(address) internal returns(address))"));
+        assert_eq!(symbols.len(), 2);
+    }
+
+    #[test]
     fn test_control_flow_graph_expands_cross_file_inherited_modifiers() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("Base.sol");
@@ -6420,6 +7888,9 @@ contract Main {
                 if gt(value, 10) {
                     revert(0, 0)
                 }
+                if iszero(value) {
+                    leave
+                }
                 result := add(value, 1)
             }
 
@@ -6475,6 +7946,43 @@ contract Main {
             .iter()
             .any(|edge| edge.label.as_deref() == Some("return")
                 && edge.kind == Some(GraphEdgeKind::Return)));
+
+        let global_exit = graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == Some(GraphNodeKind::Exit))
+            .map(|node| node.id.as_str())
+            .expect("global exit");
+        let helper_exit = graph
+            .nodes
+            .iter()
+            .find(|node| node.label == "end helper")
+            .map(|node| node.id.as_str())
+            .expect("helper exit");
+        let revert = graph
+            .nodes
+            .iter()
+            .find(|node| node.label == "revert")
+            .map(|node| node.id.as_str())
+            .expect("revert node");
+        let leave = graph
+            .nodes
+            .iter()
+            .find(|node| node.label == "leave")
+            .map(|node| node.id.as_str())
+            .expect("leave node");
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == revert && edge.to == global_exit));
+        assert!(!graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == revert && edge.to == helper_exit));
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == leave && edge.to == helper_exit));
     }
 
     #[test]
@@ -6527,6 +8035,78 @@ contract Router is BaseRouter, IRouter {
         assert!(hints
             .iter()
             .any(|hint| hint.tooltip.contains("IRouter.swap")));
+    }
+
+    #[test]
+    fn test_inheritance_hints_ignore_parameter_data_locations_for_override_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface IReceiver {
+    function receiveData(bytes calldata data) external;
+}
+contract Receiver is IReceiver {
+    function receiveData(bytes memory data) public override {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let hints = index.inheritance_hints(&main, source, &|path| fs::read_to_string(path).ok());
+
+        assert!(hints
+            .iter()
+            .any(|hint| hint.label == "implements IReceiver"));
+    }
+
+    #[test]
+    fn test_inheritance_hints_match_public_state_getters_to_interface_functions() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface IOwned {
+    function owner() external view returns (address);
+}
+contract Owned is IOwned {
+    address public override owner;
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let hints = index.inheritance_hints(&main, source, &|path| fs::read_to_string(path).ok());
+
+        assert!(hints.iter().any(|hint| hint.label == "implements IOwned"));
+    }
+
+    #[test]
+    fn test_inheritance_hints_match_mapping_and_array_getters_to_interfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface IReadStore {
+    function balanceOf(address) external view returns (uint256);
+    function values(uint256) external view returns (uint256);
+    function fixedValues(uint256) external view returns (uint256);
+}
+contract ReadStore is IReadStore {
+    mapping(address => uint256) public override balanceOf;
+    uint256[] public override values;
+    uint256[4] public override fixedValues;
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let hints = index.inheritance_hints(&main, source, &|path| fs::read_to_string(path).ok());
+
+        assert_eq!(
+            hints
+                .iter()
+                .filter(|hint| hint.label == "implements IReadStore")
+                .count(),
+            3
+        );
     }
 
     #[test]

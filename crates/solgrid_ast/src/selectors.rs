@@ -4,7 +4,8 @@ use crate::resolve::ImportResolver;
 use crate::symbols::{build_symbol_table, ImportInfo, ImportedSymbols};
 use sha3::{Digest, Keccak256};
 use solgrid_parser::solar_ast::{
-    ElementaryType, FunctionKind, ItemFunction, ItemKind, Type, TypeKind, VariableDefinition,
+    ElementaryType, ExprKind, FunctionKind, ItemFunction, ItemKind, LitKind, Type, TypeKind,
+    VariableDefinition,
 };
 use solgrid_parser::with_parsed_ast_sequential;
 use std::collections::{HashMap, HashSet};
@@ -23,7 +24,6 @@ pub struct InterfaceIdInfo {
 }
 
 pub struct SelectorContext<'a> {
-    source: &'a str,
     current_file: PathBuf,
     db: TypeDatabase<'a>,
 }
@@ -37,7 +37,6 @@ impl<'a> SelectorContext<'a> {
     ) -> Self {
         let current_file = canonicalize_path(current_file);
         Self {
-            source,
             current_file: current_file.clone(),
             db: TypeDatabase::new(source, &current_file, resolver, get_source),
         }
@@ -61,7 +60,7 @@ impl<'a> SelectorContext<'a> {
                 self.db.canonical_type(
                     &self.current_file,
                     current_contract,
-                    &type_shape_from_ast(self.source, &param.ty),
+                    &type_shape_from_ast(&param.ty),
                 )
             })
             .collect::<Option<Vec<_>>>()?;
@@ -87,7 +86,7 @@ impl<'a> SelectorContext<'a> {
                 self.db.canonical_type(
                     &self.current_file,
                     current_contract,
-                    &type_shape_from_ast(self.source, &param.ty),
+                    &type_shape_from_ast(&param.ty),
                 )
             })
             .collect::<Option<Vec<_>>>()?;
@@ -154,14 +153,29 @@ enum StoredTypeKind {
 enum TypeShape {
     Elementary(String),
     Custom(Vec<String>),
-    Array(Box<TypeShape>, Option<String>),
-    Raw(String),
+    Array(Box<TypeShape>, ArrayLength),
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
+enum ArrayLength {
+    Dynamic,
+    Fixed(String),
+    Unevaluable,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedTypeDef {
     file: PathBuf,
+    name: String,
     def: StoredTypeDef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ResolvedTypeKey {
+    file: PathBuf,
+    owner: Option<String>,
+    name: String,
 }
 
 struct TypeDatabase<'a> {
@@ -194,45 +208,68 @@ impl<'a> TypeDatabase<'a> {
         current_contract: Option<&str>,
         shape: &TypeShape,
     ) -> Option<String> {
+        self.canonical_type_inner(file, current_contract, shape, &mut HashSet::new())
+    }
+
+    fn canonical_type_inner(
+        &mut self,
+        file: &Path,
+        current_contract: Option<&str>,
+        shape: &TypeShape,
+        active_types: &mut HashSet<ResolvedTypeKey>,
+    ) -> Option<String> {
         match shape {
-            TypeShape::Elementary(value) | TypeShape::Raw(value) => Some(value.clone()),
+            TypeShape::Elementary(value) => Some(value.clone()),
+            TypeShape::Unsupported => None,
             TypeShape::Array(element, size) => match size {
-                Some(size) => Some(format!(
+                ArrayLength::Fixed(size) => Some(format!(
                     "{}[{size}]",
-                    self.canonical_type(file, current_contract, element)?
+                    self.canonical_type_inner(file, current_contract, element, active_types)?
                 )),
-                None => Some(format!(
+                ArrayLength::Dynamic => Some(format!(
                     "{}[]",
-                    self.canonical_type(file, current_contract, element)?
+                    self.canonical_type_inner(file, current_contract, element, active_types)?
                 )),
+                ArrayLength::Unevaluable => None,
             },
             TypeShape::Custom(segments) => {
-                let mut visited = HashSet::new();
-                match self.resolve_type(file, current_contract, segments, &mut visited) {
-                    Some(resolved) => Some(match resolved.def.kind {
-                        StoredTypeKind::Struct(fields) => {
-                            let fields = fields
-                                .iter()
-                                .map(|field| {
-                                    self.canonical_type(
-                                        &resolved.file,
-                                        resolved.def.owner.as_deref(),
-                                        field,
-                                    )
-                                })
-                                .collect::<Option<Vec<_>>>()?;
-                            format!("({})", fields.join(","))
-                        }
-                        StoredTypeKind::Enum => "uint8".to_string(),
-                        StoredTypeKind::ContractLike => "address".to_string(),
-                        StoredTypeKind::Udvt(inner) => self.canonical_type(
-                            &resolved.file,
-                            resolved.def.owner.as_deref(),
-                            &inner,
-                        )?,
-                    }),
-                    None => None,
+                let resolved =
+                    self.resolve_type(file, current_contract, segments, &mut HashSet::new())?;
+                let key = ResolvedTypeKey {
+                    file: resolved.file.clone(),
+                    owner: resolved.def.owner.clone(),
+                    name: resolved.name.clone(),
+                };
+                if !active_types.insert(key.clone()) {
+                    return None;
                 }
+
+                let result = match &resolved.def.kind {
+                    StoredTypeKind::Struct(fields) => {
+                        let fields = fields
+                            .iter()
+                            .map(|field| {
+                                self.canonical_type_inner(
+                                    &resolved.file,
+                                    resolved.def.owner.as_deref(),
+                                    field,
+                                    active_types,
+                                )
+                            })
+                            .collect::<Option<Vec<_>>>()?;
+                        Some(format!("({})", fields.join(",")))
+                    }
+                    StoredTypeKind::Enum => Some("uint8".to_string()),
+                    StoredTypeKind::ContractLike => Some("address".to_string()),
+                    StoredTypeKind::Udvt(inner) => self.canonical_type_inner(
+                        &resolved.file,
+                        resolved.def.owner.as_deref(),
+                        inner,
+                        active_types,
+                    ),
+                };
+                active_types.remove(&key);
+                result
             }
         }
     }
@@ -256,6 +293,7 @@ impl<'a> TypeDatabase<'a> {
                 if let Some(def) = info.nested.get(&(owner.to_string(), segments[0].clone())) {
                     return Some(ResolvedTypeDef {
                         file,
+                        name: segments[0].clone(),
                         def: def.clone(),
                     });
                 }
@@ -264,6 +302,7 @@ impl<'a> TypeDatabase<'a> {
             if let Some(def) = info.top_level.get(&segments[0]) {
                 return Some(ResolvedTypeDef {
                     file,
+                    name: segments[0].clone(),
                     def: def.clone(),
                 });
             }
@@ -275,17 +314,16 @@ impl<'a> TypeDatabase<'a> {
             if let Some(def) = info.nested.get(&(segments[0].clone(), segments[1].clone())) {
                 return Some(ResolvedTypeDef {
                     file,
+                    name: segments[1].clone(),
                     def: def.clone(),
                 });
             }
 
-            return self.resolve_qualified_import(
-                &file,
-                &info.imports,
-                &segments[0],
-                &segments[1],
-                visited,
-            );
+            return self.resolve_qualified_import(&file, &info.imports, segments, visited);
+        }
+
+        if segments.len() == 3 {
+            return self.resolve_qualified_import(&file, &info.imports, segments, visited);
         }
 
         None
@@ -323,6 +361,7 @@ impl<'a> TypeDatabase<'a> {
             if let Some(def) = info.top_level.get(&target_name) {
                 return Some(ResolvedTypeDef {
                     file: resolved_path,
+                    name: target_name,
                     def: def.clone(),
                 });
             }
@@ -341,22 +380,32 @@ impl<'a> TypeDatabase<'a> {
         &mut self,
         importing_file: &Path,
         imports: &[ImportInfo],
-        namespace: &str,
-        name: &str,
+        segments: &[String],
         visited: &mut HashSet<PathBuf>,
     ) -> Option<ResolvedTypeDef> {
+        let namespace = segments.first()?;
         for import in imports {
-            let qualifies = match &import.symbols {
-                ImportedSymbols::Plain(Some(alias)) => alias == namespace,
-                ImportedSymbols::Glob(alias) => alias == namespace,
-                ImportedSymbols::Named(names) => names.iter().any(|(original, alias)| {
-                    alias.as_deref().unwrap_or(original.as_str()) == namespace
-                }),
-                ImportedSymbols::Plain(None) => false,
-            };
-            if !qualifies {
-                continue;
+            #[derive(Clone, Copy)]
+            enum QualifiedImport<'a> {
+                Namespace,
+                Named(&'a str),
             }
+
+            let qualification = match &import.symbols {
+                ImportedSymbols::Plain(Some(alias)) | ImportedSymbols::Glob(alias)
+                    if alias == namespace =>
+                {
+                    Some(QualifiedImport::Namespace)
+                }
+                ImportedSymbols::Named(names) => names.iter().find_map(|(original, alias)| {
+                    let local = alias.as_deref().unwrap_or(original.as_str());
+                    (local == namespace).then_some(QualifiedImport::Named(original))
+                }),
+                _ => None,
+            };
+            let Some(qualification) = qualification else {
+                continue;
+            };
 
             let Some(resolved_path) = self.resolver.resolve(&import.path, importing_file) else {
                 continue;
@@ -367,21 +416,40 @@ impl<'a> TypeDatabase<'a> {
             }
             let info = self.file_info(&resolved_path)?;
 
-            if let Some(def) = info
-                .nested
-                .get(&(namespace.to_string(), name.to_string()))
-                .or_else(|| info.top_level.get(name))
-            {
+            let resolved = match qualification {
+                QualifiedImport::Namespace => match &segments[1..] {
+                    [name] => info.top_level.get(name).map(|def| (name.clone(), def)),
+                    [owner, name] => info
+                        .nested
+                        .get(&(owner.clone(), name.clone()))
+                        .map(|def| (name.clone(), def)),
+                    _ => None,
+                },
+                QualifiedImport::Named(original) => match &segments[1..] {
+                    [name] => info
+                        .nested
+                        .get(&(original.to_string(), name.clone()))
+                        .map(|def| (name.clone(), def)),
+                    _ => None,
+                },
+            };
+
+            if let Some((name, def)) = resolved {
                 return Some(ResolvedTypeDef {
                     file: resolved_path,
+                    name,
                     def: def.clone(),
                 });
             }
 
-            if let Some(def) =
-                self.resolve_imported_type(&resolved_path, &info.imports, name, visited)
-            {
-                return Some(def);
+            if let QualifiedImport::Namespace = qualification {
+                if let [name] = &segments[1..] {
+                    if let Some(def) =
+                        self.resolve_imported_type(&resolved_path, &info.imports, name, visited)
+                    {
+                        return Some(def);
+                    }
+                }
             }
         }
 
@@ -419,7 +487,7 @@ impl<'a> TypeDatabase<'a> {
                                     struct_def
                                         .fields
                                         .iter()
-                                        .map(|field| type_shape_from_ast(&source, &field.ty))
+                                        .map(|field| type_shape_from_ast(&field.ty))
                                         .collect(),
                                 ),
                             },
@@ -439,7 +507,7 @@ impl<'a> TypeDatabase<'a> {
                             udvt.name.as_str().to_string(),
                             StoredTypeDef {
                                 owner: None,
-                                kind: StoredTypeKind::Udvt(type_shape_from_ast(&source, &udvt.ty)),
+                                kind: StoredTypeKind::Udvt(type_shape_from_ast(&udvt.ty)),
                             },
                         );
                     }
@@ -466,9 +534,7 @@ impl<'a> TypeDatabase<'a> {
                                                 struct_def
                                                     .fields
                                                     .iter()
-                                                    .map(|field| {
-                                                        type_shape_from_ast(&source, &field.ty)
-                                                    })
+                                                    .map(|field| type_shape_from_ast(&field.ty))
                                                     .collect(),
                                             ),
                                         },
@@ -495,7 +561,7 @@ impl<'a> TypeDatabase<'a> {
                                         StoredTypeDef {
                                             owner: Some(contract.name.as_str().to_string()),
                                             kind: StoredTypeKind::Udvt(type_shape_from_ast(
-                                                &source, &udvt.ty,
+                                                &udvt.ty,
                                             )),
                                         },
                                     );
@@ -515,7 +581,7 @@ impl<'a> TypeDatabase<'a> {
     }
 }
 
-fn type_shape_from_ast(source: &str, ty: &Type<'_>) -> TypeShape {
+fn type_shape_from_ast(ty: &Type<'_>) -> TypeShape {
     match &ty.kind {
         TypeKind::Elementary(elementary) => {
             TypeShape::Elementary(canonical_elementary_type(elementary))
@@ -527,13 +593,20 @@ fn type_shape_from_ast(source: &str, ty: &Type<'_>) -> TypeShape {
                 .collect(),
         ),
         TypeKind::Array(array) => TypeShape::Array(
-            Box::new(type_shape_from_ast(source, &array.element)),
-            array
-                .size
-                .as_ref()
-                .map(|size| crate::span_text(source, size.span).trim().to_string()),
+            Box::new(type_shape_from_ast(&array.element)),
+            match &array.size {
+                Some(size) => match &size.kind {
+                    ExprKind::Lit(literal, None) => match literal.kind {
+                        LitKind::Number(value) => ArrayLength::Fixed(value.to_string()),
+                        _ => ArrayLength::Unevaluable,
+                    },
+                    _ => ArrayLength::Unevaluable,
+                },
+                None => ArrayLength::Dynamic,
+            },
         ),
-        _ => TypeShape::Raw(crate::span_text(source, ty.span).trim().to_string()),
+        TypeKind::Function(_) => TypeShape::Elementary("function".to_string()),
+        TypeKind::Mapping(_) => TypeShape::Unsupported,
     }
 }
 
@@ -625,5 +698,147 @@ interface IRouter {
             vec!["quote((address,uint256))".to_string()]
         );
         assert!(info.hex.starts_with("0x"));
+    }
+
+    #[test]
+    fn test_selector_context_rejects_recursive_structs_without_recursing_forever() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("Recursive.sol");
+        let source = r#"pragma solidity ^0.8.0;
+
+struct Node {
+    Node[] children;
+}
+
+interface INode {
+    function visit(Node calldata node) external;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let info = with_parsed_ast_sequential(source, &path.to_string_lossy(), |source_unit| {
+            let mut context = SelectorContext::new(source, &path, &resolver, &get_source);
+            let interface = source_unit.items.iter().find_map(|item| {
+                let ItemKind::Contract(contract) = &item.kind else {
+                    return None;
+                };
+                (contract.name.as_str() == "INode").then_some(contract)
+            })?;
+            context.interface_id_info_for_items(interface.name.as_str(), interface.body)
+        })
+        .unwrap();
+
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_selector_context_resolves_named_alias_and_namespace_nested_types() {
+        let dir = tempdir().unwrap();
+        let dep = dir.path().join("Types.sol");
+        fs::write(
+            &dep,
+            r#"pragma solidity ^0.8.0;
+contract Types {
+    struct Quote {
+        address token;
+        uint256 amount;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        for (filename, import, type_name) in [
+            (
+                "Named.sol",
+                "import {Types as Alias} from \"./Types.sol\";",
+                "Alias.Quote",
+            ),
+            (
+                "Namespace.sol",
+                "import * as NS from \"./Types.sol\";",
+                "NS.Types.Quote",
+            ),
+        ] {
+            let path = dir.path().join(filename);
+            let source = format!(
+                "pragma solidity ^0.8.0;\n{import}\ninterface I {{ function quote({type_name} calldata value) external; }}\n"
+            );
+            fs::write(&path, &source).unwrap();
+            let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+            let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+            let info = with_parsed_ast_sequential(&source, &path.to_string_lossy(), |unit| {
+                let mut context = SelectorContext::new(&source, &path, &resolver, &get_source);
+                let interface = unit.items.iter().find_map(|item| {
+                    let ItemKind::Contract(contract) = &item.kind else {
+                        return None;
+                    };
+                    (contract.name.as_str() == "I").then_some(contract)
+                })?;
+                context.interface_id_info_for_items(interface.name.as_str(), interface.body)
+            })
+            .unwrap()
+            .unwrap();
+
+            assert_eq!(info.signatures, vec!["quote((address,uint256))"]);
+        }
+    }
+
+    #[test]
+    fn test_selector_context_canonicalizes_function_and_literal_array_types() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("Types.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface I {
+    function register(function(uint256) external returns (bool) callback, uint256[0x20] memory values) external;
+}
+"#;
+        fs::write(&path, source).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let info = with_parsed_ast_sequential(source, &path.to_string_lossy(), |unit| {
+            let mut context = SelectorContext::new(source, &path, &resolver, &get_source);
+            let interface = unit.items.iter().find_map(|item| {
+                let ItemKind::Contract(contract) = &item.kind else {
+                    return None;
+                };
+                (contract.name.as_str() == "I").then_some(contract)
+            })?;
+            context.interface_id_info_for_items(interface.name.as_str(), interface.body)
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(info.signatures, vec!["register(function,uint256[32])"]);
+    }
+
+    #[test]
+    fn test_selector_context_suppresses_unevaluable_fixed_array_lengths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("Types.sol");
+        let source = r#"pragma solidity ^0.8.0;
+uint256 constant ARRAY_LENGTH = 4;
+interface I {
+    function register(uint256[ARRAY_LENGTH] memory values) external;
+}
+"#;
+        fs::write(&path, source).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let info = with_parsed_ast_sequential(source, &path.to_string_lossy(), |unit| {
+            let mut context = SelectorContext::new(source, &path, &resolver, &get_source);
+            let interface = unit.items.iter().find_map(|item| {
+                let ItemKind::Contract(contract) = &item.kind else {
+                    return None;
+                };
+                (contract.name.as_str() == "I").then_some(contract)
+            })?;
+            context.interface_id_info_for_items(interface.name.as_str(), interface.body)
+        })
+        .unwrap();
+
+        assert!(info.is_none());
     }
 }
