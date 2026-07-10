@@ -1,9 +1,10 @@
 //! Inline suppression comment parsing.
 //!
 //! Supports:
-//! - `// solgrid-disable-next-line [rule-id]`
-//! - `// solgrid-disable-line [rule-id]`
-//! - `// solgrid-disable [rule-id]` / `// solgrid-enable [rule-id]`
+//! - `// solgrid-disable-next-line [rule-id[, rule-id...]]`
+//! - `// solgrid-disable-line [rule-id[, rule-id...]]`
+//! - `// solgrid-disable [rule-id[, rule-id...]]` /
+//!   `// solgrid-enable [rule-id[, rule-id...]]`
 
 use std::collections::{HashMap, HashSet};
 
@@ -59,6 +60,17 @@ pub fn parse_suppressions(source: &str) -> Suppressions {
         }
     }
 
+    let last_line = source.lines().count().max(1);
+    for (rule, start) in disable_ranges {
+        for line in start..=last_line {
+            if let Some(id) = &rule {
+                suppressed_lines.entry(line).or_default().insert(id.clone());
+            } else {
+                blanket_suppressed_lines.insert(line);
+            }
+        }
+    }
+
     Suppressions {
         suppressed_lines,
         blanket_suppressed_lines,
@@ -84,42 +96,152 @@ fn parse_comment_directive(
 
     for prefix in &prefixes {
         if let Some(rest) = comment.strip_prefix(prefix) {
-            let rule_id = rest.trim().to_string();
-            let rule_id = if rule_id.is_empty() {
-                None
-            } else {
-                Some(rule_id)
-            };
+            let rule_ids = parse_rule_ids(rest);
 
             if prefix.ends_with("next-line") {
                 let target_line = line_num + 1;
-                if let Some(id) = rule_id {
-                    suppressed_lines.entry(target_line).or_default().insert(id);
+                if let Some(ids) = rule_ids {
+                    suppressed_lines.entry(target_line).or_default().extend(ids);
                 } else {
                     blanket_suppressed_lines.insert(target_line);
                 }
             } else if prefix.ends_with("disable-line") {
-                if let Some(id) = rule_id {
-                    suppressed_lines.entry(line_num).or_default().insert(id);
+                if let Some(ids) = rule_ids {
+                    suppressed_lines.entry(line_num).or_default().extend(ids);
                 } else {
                     blanket_suppressed_lines.insert(line_num);
                 }
             } else if prefix.ends_with("disable") {
-                disable_ranges.push((rule_id, line_num));
+                if let Some(ids) = rule_ids {
+                    disable_ranges.extend(ids.into_iter().map(|id| (Some(id), line_num)));
+                } else {
+                    disable_ranges.push((None, line_num));
+                }
             } else if prefix.ends_with("enable") {
-                // Find matching disable and suppress all lines in range
-                if let Some(pos) = disable_ranges.iter().rposition(|(r, _)| *r == rule_id) {
-                    let (rule, start) = disable_ranges.remove(pos);
-                    for l in start..=line_num {
-                        if let Some(id) = &rule {
-                            suppressed_lines.entry(l).or_default().insert(id.clone());
-                        } else {
-                            blanket_suppressed_lines.insert(l);
-                        }
+                if let Some(ids) = rule_ids {
+                    for id in ids {
+                        close_disable_range(
+                            Some(&id),
+                            line_num,
+                            suppressed_lines,
+                            blanket_suppressed_lines,
+                            disable_ranges,
+                        );
                     }
+                } else {
+                    close_disable_range(
+                        None,
+                        line_num,
+                        suppressed_lines,
+                        blanket_suppressed_lines,
+                        disable_ranges,
+                    );
                 }
             }
             break;
         }
+    }
+}
+
+fn parse_rule_ids(rest: &str) -> Option<HashSet<String>> {
+    let ids: HashSet<_> = rest
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
+fn close_disable_range(
+    rule_id: Option<&str>,
+    line_num: usize,
+    suppressed_lines: &mut HashMap<usize, HashSet<String>>,
+    blanket_suppressed_lines: &mut HashSet<usize>,
+    disable_ranges: &mut Vec<(Option<String>, usize)>,
+) {
+    let Some(pos) = disable_ranges
+        .iter()
+        .rposition(|(rule, _)| rule.as_deref() == rule_id)
+    else {
+        return;
+    };
+
+    let (rule, start) = disable_ranges.remove(pos);
+    for line in start..=line_num {
+        if let Some(id) = &rule {
+            suppressed_lines.entry(line).or_default().insert(id.clone());
+        } else {
+            blanket_suppressed_lines.insert(line);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_suppressions;
+
+    #[test]
+    fn comma_separated_next_line_ids_are_trimmed_and_empty_entries_ignored() {
+        let suppressions = parse_suppressions(
+            "// solgrid-disable-next-line security/tx-origin, , best-practices/no-empty-blocks,,\ncode\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 2));
+        assert!(suppressions.is_suppressed("best-practices/no-empty-blocks", 2));
+        assert!(!suppressions.is_suppressed("security/reentrancy", 2));
+    }
+
+    #[test]
+    fn comma_separated_disable_line_suppresses_each_rule() {
+        let suppressions = parse_suppressions(
+            "code; // solgrid-disable-line security/tx-origin, best-practices/no-empty-blocks\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 1));
+        assert!(suppressions.is_suppressed("best-practices/no-empty-blocks", 1));
+        assert!(!suppressions.is_suppressed("security/reentrancy", 1));
+    }
+
+    #[test]
+    fn comma_separated_disable_enable_group_suppresses_each_rule() {
+        let suppressions = parse_suppressions(
+            "// solgrid-disable security/tx-origin, best-practices/no-empty-blocks\n\
+             code\n\
+             // solgrid-enable best-practices/no-empty-blocks, security/tx-origin\n\
+             code\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 2));
+        assert!(suppressions.is_suppressed("best-practices/no-empty-blocks", 2));
+        assert!(!suppressions.is_suppressed("security/tx-origin", 4));
+        assert!(!suppressions.is_suppressed("best-practices/no-empty-blocks", 4));
+    }
+
+    #[test]
+    fn single_id_and_blanket_directives_keep_their_existing_behavior() {
+        let suppressions = parse_suppressions(
+            "// solgrid-disable-next-line security/tx-origin\n\
+             code\n\
+             // solgrid-disable-next-line , ,\n\
+             code\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 2));
+        assert!(!suppressions.is_suppressed("security/reentrancy", 2));
+        assert!(suppressions.is_suppressed("any/rule", 4));
+    }
+
+    #[test]
+    fn unclosed_disable_group_applies_through_end_of_file() {
+        let suppressions = parse_suppressions(
+            "// solgrid-disable security/tx-origin, best-practices/no-empty-blocks\n\
+             code\n\
+             code\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 3));
+        assert!(suppressions.is_suppressed("best-practices/no-empty-blocks", 3));
+        assert!(!suppressions.is_suppressed("security/reentrancy", 3));
     }
 }
