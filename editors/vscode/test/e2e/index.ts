@@ -6,7 +6,7 @@
  * discovers test files, and runs them.
  */
 
-import * as path from "path";
+import * as path from "node:path";
 import Mocha from "mocha";
 
 export function run(): Promise<void> {

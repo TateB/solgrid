@@ -77,6 +77,10 @@ rules-doc:
 vscode-compile: install
     pnpm --filter solgrid-vscode run compile
 
+# Lint the VSCode extension
+vscode-lint: install
+    pnpm --filter solgrid-vscode run lint
+
 # Run VSCode unit tests
 vscode-test: install
     pnpm --filter solgrid-vscode run compile
@@ -148,4 +152,4 @@ npm-shim-test:
 ci-rust: check test test-doc fmt clippy deny rules-doc
 
 # Run all CI checks locally
-ci: ci-rust vscode-test-all prettier-test
+ci: ci-rust vscode-lint vscode-test-all prettier-test

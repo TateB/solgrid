@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
-import { CoverageExtensionConfig } from "./config";
+import type { CoverageExtensionConfig } from "./config";
 
 export type CoverageRunKind =
   | "foundry-lcov"
@@ -147,10 +147,16 @@ export function availableCoverageRunSpecs(
 ): CoverageRunSpec[] {
   const specs: CoverageRunSpec[] = [];
   if (availability.hasFoundry) {
-    specs.push(coverageRunSpec("foundry-lcov", config)!);
+    const foundry = coverageRunSpec("foundry-lcov", config);
+    if (foundry) {
+      specs.push(foundry);
+    }
   }
   if (availability.hasHardhat) {
-    specs.push(coverageRunSpec("hardhat-lcov", config)!);
+    const hardhat = coverageRunSpec("hardhat-lcov", config);
+    if (hardhat) {
+      specs.push(hardhat);
+    }
   }
   if (availability.hasCustomCommand) {
     const custom = coverageRunSpec("custom", config);

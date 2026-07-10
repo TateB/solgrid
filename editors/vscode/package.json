@@ -528,7 +528,8 @@
     "test:integration:release": "node scripts/run-lsp-tests.mjs --release",
     "test:e2e": "pnpm run compile:tests && node out/test/e2e/run.js",
     "test:all": "pnpm test:unit && pnpm test:integration",
-    "lint": "eslint src --ext ts",
+    "lint": "biome lint --error-on-warnings --max-diagnostics=none .",
+    "lint:ci": "biome ci --error-on-warnings --max-diagnostics=none .",
     "package": "pnpm run compile && node scripts/package-vsix.cjs",
     "package:target": "pnpm run compile && node scripts/package-vsix.cjs --target",
     "publish": "pnpm run compile && node scripts/package-vsix.cjs --publish"
@@ -537,13 +538,14 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.3",
     "@types/mocha": "^10.0.0",
-    "mocha": "^10.0.0",
     "@types/node": "18.15.0",
     "@types/vscode": "1.82.0",
     "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.25.0",
+    "mocha": "^10.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.0.18"
   }

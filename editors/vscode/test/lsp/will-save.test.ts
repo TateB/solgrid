@@ -19,6 +19,7 @@ import {
   readFixture,
   fixtureUri,
   resetDocumentVersions,
+  requireDefined,
 } from "./helpers";
 
 describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
@@ -53,8 +54,11 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
     // fixable.sol has `uint` declarations that the configured safe fixes
     // canonicalize to `uint256` (alongside any formatting changes).
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
-    const fixed = applyEdits(content, edits!);
+    expect(edits?.length).toBeGreaterThan(0);
+    const fixed = applyEdits(
+      content,
+      requireDefined(edits, "will-save edits")
+    );
     expect(fixed).toContain("uint256 public x;");
     expect(fixed).toContain("uint256 public y;");
     expect(fixed).toContain("uint256 public z;");
@@ -71,9 +75,9 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
 
     // Unformatted file should get formatting edits on save
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
-    expect(edits![0].range).toBeDefined();
-    expect(edits![0].newText).toBeDefined();
+    expect(edits?.length).toBeGreaterThan(0);
+    expect(edits?.[0].range).toBeDefined();
+    expect(edits?.[0].newText).toBeDefined();
   });
 
   it("applies import formatting and ordering in one save edit", async () => {

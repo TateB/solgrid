@@ -1344,6 +1344,7 @@ function nodeKindLabel(kind?: GraphNodeKind): string {
       return "Catch";
     case "block":
       return "Block";
+    // biome-ignore lint/complexity/noUselessSwitchCase: Keep the supported fallback kind explicit while safely handling unknown server payloads.
     case "statement":
     default:
       return "Statement";
@@ -1372,6 +1373,7 @@ function edgeKindLabel(kind?: GraphEdgeKind): string {
       return "breaks to";
     case "continue":
       return "continues to";
+    // biome-ignore lint/complexity/noUselessSwitchCase: Keep the supported fallback kind explicit while safely handling unknown server payloads.
     case "normal":
     default:
       return "flows to";

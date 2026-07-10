@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TestLspClient } from "./client";
-import { initializeServer, InitializeResult } from "./helpers";
+import { initializeServer } from "./helpers";
 
 describe("LSP Server Lifecycle", () => {
   let client: TestLspClient;
@@ -30,8 +30,8 @@ describe("LSP Server Lifecycle", () => {
   it("reports server info with name and version", async () => {
     const result = await initializeServer(client);
     expect(result.serverInfo).toBeDefined();
-    expect(result.serverInfo!.name).toBe("solgrid");
-    expect(result.serverInfo!.version).toBeDefined();
+    expect(result.serverInfo?.name).toBe("solgrid");
+    expect(result.serverInfo?.version).toBeDefined();
   });
 
   it("declares full text document sync", async () => {
@@ -115,17 +115,17 @@ describe("LSP Server Lifecycle", () => {
     const result = await initializeServer(client);
     const completion = result.capabilities.completionProvider;
     expect(completion).toBeDefined();
-    expect(completion!.triggerCharacters).toBeDefined();
-    expect(completion!.triggerCharacters).toContain("/");
-    expect(completion!.triggerCharacters).toContain(" ");
+    expect(completion?.triggerCharacters).toBeDefined();
+    expect(completion?.triggerCharacters).toContain("/");
+    expect(completion?.triggerCharacters).toContain(" ");
   });
 
   it("declares signature help provider with trigger characters", async () => {
     const result = await initializeServer(client);
     const signatureHelp = result.capabilities.signatureHelpProvider;
     expect(signatureHelp).toBeDefined();
-    expect(signatureHelp!.triggerCharacters).toContain("(");
-    expect(signatureHelp!.triggerCharacters).toContain(",");
+    expect(signatureHelp?.triggerCharacters).toContain("(");
+    expect(signatureHelp?.triggerCharacters).toContain(",");
   });
 
   it("handles shutdown request gracefully", async () => {

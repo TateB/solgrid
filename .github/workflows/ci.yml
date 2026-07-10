@@ -97,6 +97,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter solgrid-vscode run lint:ci
       - run: pnpm --filter solgrid-vscode run compile
       - run: pnpm --filter solgrid-vscode test
 

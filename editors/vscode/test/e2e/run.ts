@@ -11,8 +11,8 @@
  * These e2e tests validate behavior that applies to both editors.
  */
 
-import * as path from "path";
-import * as fs from "fs";
+import * as path from "node:path";
+import * as fs from "node:fs";
 import { runTests } from "@vscode/test-electron";
 
 async function main() {

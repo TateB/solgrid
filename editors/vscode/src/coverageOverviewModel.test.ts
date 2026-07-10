@@ -557,7 +557,12 @@ describe("actionableDecorationPlan", () => {
       ["/workspace"]
     );
 
-    expect(actionableDecorationPlan(summary.files[0]!)).toEqual({
+    const [file] = summary.files;
+    if (!file) {
+      throw new Error("expected one coverage file summary");
+    }
+
+    expect(actionableDecorationPlan(file)).toEqual({
       uncoveredLines: [10],
       partialLines: [11],
     });

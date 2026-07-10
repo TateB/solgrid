@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-import { fileURLToPath, pathToFileURL } from "url";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { TestLspClient } from "./client";
 import {
   changeDocument,
   closeDocument,
-  CallHierarchyItem,
-  CodeLens,
-  DocumentSymbol,
+  type CallHierarchyItem,
+  type CodeLens,
+  type DocumentSymbol,
   requestIncomingCalls,
   initializeServer,
-  InlayHint,
+  type InlayHint,
   notifyWatchedFilesChanged,
   openDocument,
   requestOutgoingCalls,

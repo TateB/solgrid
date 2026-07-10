@@ -5,10 +5,10 @@
  * VSCode and Cursor (and any other LSP-compatible editor) rely on.
  */
 
-import { ChildProcess, spawn } from "child_process";
-import { EventEmitter } from "events";
-import * as fs from "fs";
-import * as path from "path";
+import { type ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,13 +99,18 @@ export class TestLspClient extends EventEmitter {
     const child = spawn(bin, ["server"], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    const { stdin, stdout, stderr } = child;
+    if (!stdin || !stdout || !stderr) {
+      child.kill();
+      throw new Error("LSP test process did not expose piped stdio");
+    }
     this.process = child;
 
-    child.stdout!.on("data", (data: Buffer) => {
+    stdout.on("data", (data: Buffer) => {
       this.onData(data);
     });
 
-    child.stderr!.on("data", (data: Buffer) => {
+    stderr.on("data", (data: Buffer) => {
       // Log server stderr for debugging but don't fail
       const text = data.toString("utf-8").trim();
       if (text) {
@@ -114,7 +119,7 @@ export class TestLspClient extends EventEmitter {
       }
     });
 
-    child.stdin!.on("error", (error: NodeJS.ErrnoException) => {
+    stdin.on("error", (error: NodeJS.ErrnoException) => {
       if (!this.isExpectedShutdownError(error)) {
         this.emit("stderr", `LSP stdin error: ${error.message}`);
       }

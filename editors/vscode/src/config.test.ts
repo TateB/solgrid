@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import {
   DEFAULT_COVERAGE_CONFIG,
   DEFAULT_EDITOR_SAVE_CONFIG,
-  SolgridConfig,
+  type SolgridConfig,
   DEFAULT_CONFIG,
   getEffectiveServerFormatOnSave,
   getServerPath,

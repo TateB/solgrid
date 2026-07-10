@@ -879,7 +879,7 @@ describe("isGraphDocumentLike", () => {
     expect(
       isGraphDocumentLike({
         ...validGraph,
-        edges: [{ from: "main", to: "dep", kind: 'normal\" onclick=\"x' }],
+        edges: [{ from: "main", to: "dep", kind: 'normal" onclick="x' }],
       })
     ).toBe(false);
   });

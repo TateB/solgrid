@@ -8,10 +8,10 @@
  * validate behavior for both editors.
  */
 
-import * as assert from "assert";
-import * as fs from "fs";
+import * as assert from "node:assert";
+import * as fs from "node:fs";
 import * as vscode from "vscode";
-import * as path from "path";
+import * as path from "node:path";
 
 describe("solgrid Extension E2E", () => {
   // __dirname at runtime is out/test/e2e/, so resolve to source fixtures
@@ -23,7 +23,7 @@ describe("solgrid Extension E2E", () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   });
 
-  afterEach(async function () {
+  afterEach(async () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     while (e2eTempPaths.length > 0) {
       const filePath = e2eTempPaths.pop();

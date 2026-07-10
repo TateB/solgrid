@@ -16,8 +16,8 @@ import {
   fixtureUri,
   fullFileRange,
   resetDocumentVersions,
-  CodeAction,
-  Diagnostic,
+  type CodeAction,
+  type Diagnostic,
 } from "./helpers";
 
 describe("LSP Code Actions", () => {
@@ -187,8 +187,8 @@ describe("LSP Code Actions", () => {
     );
 
     for (const action of actionsWithEdits) {
-      expect(action.edit!.changes).toBeDefined();
-      const edits = action.edit!.changes![uri];
+      expect(action.edit?.changes).toBeDefined();
+      const edits = action.edit?.changes?.[uri];
       if (edits) {
         for (const edit of edits) {
           expect(edit.range).toBeDefined();

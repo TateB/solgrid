@@ -11,12 +11,12 @@ import {
   findingFingerprint,
   groupContextValue,
   pickPreferredCodeActionForFinding,
-  PublishDiagnosticsParamsLike,
-  SecurityFinding,
-  SecurityOverviewFilterMode,
-  SecurityOverviewFindingNode,
-  SecurityOverviewGroupMode,
-  SecurityOverviewGroupNode,
+  type PublishDiagnosticsParamsLike,
+  type SecurityFinding,
+  type SecurityOverviewFilterMode,
+  type SecurityOverviewFindingNode,
+  type SecurityOverviewGroupMode,
+  type SecurityOverviewGroupNode,
   shouldExpandSecurityGroup,
   summarizeOverview,
 } from "./securityOverviewModel";
@@ -161,7 +161,7 @@ export class SecurityOverviewProvider
   }
 
   async restoreFinding(node?: SecurityOverviewFindingNode): Promise<void> {
-    if (!node || !node.ignored) {
+    if (!node?.ignored) {
       return;
     }
     await this.restoreFindings([node.finding]);

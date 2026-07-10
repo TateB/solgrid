@@ -17,7 +17,7 @@ import {
   resetDocumentVersions,
   fixtureUri,
   readFixture,
-  CompletionItem,
+  type CompletionItem,
 } from "./helpers";
 
 describe("LSP Completion", () => {
@@ -260,7 +260,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
 
     expect(functionItem).toBeDefined();
     // CompletionItemKind.Keyword = 14
-    expect(functionItem!.kind).toBe(14);
+    expect(functionItem?.kind).toBe(14);
   });
 
   it("types have TYPE_PARAMETER kind", async () => {
@@ -280,7 +280,7 @@ describe("LSP Completion — Builtins & Keywords", () => {
 
     expect(uint256Item).toBeDefined();
     // CompletionItemKind.TypeParameter = 25
-    expect(uint256Item!.kind).toBe(25);
+    expect(uint256Item?.kind).toBe(25);
   });
 
   it("returns builtin global functions", async () => {
@@ -423,7 +423,7 @@ describe("LSP Completion — Dot Completions", () => {
 
     expect(senderItem).toBeDefined();
     // CompletionItemKind.Field = 5
-    expect(senderItem!.kind).toBe(5);
+    expect(senderItem?.kind).toBe(5);
   });
 
   it("dot completion members include type signatures", async () => {
@@ -443,8 +443,8 @@ describe("LSP Completion — Dot Completions", () => {
     const senderItem = items.find((i) => i.label === "sender");
 
     expect(senderItem).toBeDefined();
-    expect(senderItem!.detail).toBeDefined();
-    expect(senderItem!.detail).toBeTruthy();
+    expect(senderItem?.detail).toBeDefined();
+    expect(senderItem?.detail).toBeTruthy();
   });
 
   it("returns members for custom-typed contract instances", async () => {
@@ -484,7 +484,7 @@ describe("LSP Completion — Dot Completions", () => {
     const thisThingItem = items.find((item) => item.label === "thisThing");
 
     expect(thisThingItem).toBeDefined();
-    expect(thisThingItem!.detail).toContain("function thisThing()");
+    expect(thisThingItem?.detail).toContain("function thisThing()");
   });
 
   it("resolves chained call and index receivers for member completion", async () => {
@@ -711,7 +711,7 @@ describe("LSP Completion — Auto-Import", () => {
 
     const items = normalizeCompletionResult(result);
     const autoImportItems = items.filter(
-      (i) => i.detail && i.detail.startsWith("Auto import")
+      (i) => i.detail?.startsWith("Auto import")
     );
 
     // Should have at least one auto-import suggestion
@@ -736,7 +736,7 @@ describe("LSP Completion — Auto-Import", () => {
 
     const items = normalizeCompletionResult(result);
     const autoImportItems = items.filter(
-      (i) => i.detail && i.detail.startsWith("Auto import")
+      (i) => i.detail?.startsWith("Auto import")
     );
 
     expect(autoImportItems.length).toBeGreaterThan(0);
@@ -748,7 +748,7 @@ describe("LSP Completion — Auto-Import", () => {
     expect(withEdits.length).toBeGreaterThan(0);
 
     // The edit should contain an import statement.
-    const edit = withEdits[0].additionalTextEdits![0];
+    const edit = withEdits[0].additionalTextEdits?.[0];
     expect(edit.newText).toContain("import");
   });
 });

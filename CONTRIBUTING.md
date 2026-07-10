@@ -13,6 +13,7 @@
 just --list        # Show all available commands
 just check         # Verify workspace compiles
 just test          # Run all Rust tests
+just vscode-lint   # Lint the VSCode extension with Biome
 just vscode-test   # Run VSCode extension tests
 just prettier-test # Run Prettier plugin tests
 just ci            # Run all CI checks locally
@@ -30,6 +31,15 @@ cargo build --release -p solgrid
 ```
 
 ## Testing
+
+### VSCode extension — linting
+
+```bash
+just vscode-lint
+
+# Or directly:
+pnpm --filter solgrid-vscode run lint
+```
 
 ### Rust tests
 
@@ -108,6 +118,7 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs the full test suit
 - `cargo test --workspace`
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
+- VSCode extension Biome linting
 - VSCode extension unit tests
 - VSCode LSP integration tests
 - VSCode e2e tests

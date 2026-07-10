@@ -25,7 +25,7 @@ import {
   readFixture,
   fixtureUri,
   resetDocumentVersions,
-  PublishDiagnosticsParams,
+  type PublishDiagnosticsParams,
 } from "./helpers";
 
 function tempWorkspace(): string {

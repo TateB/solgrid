@@ -69,7 +69,11 @@ describe("security overview accessibility labels", () => {
   });
 
   it("includes severity, confidence, type, path, state, and fixability", () => {
-    const label = securityFindingAccessibilityLabel(findings[0]!, true);
+    const [finding] = findings;
+    if (!finding) {
+      throw new Error("expected a security finding fixture");
+    }
+    const label = securityFindingAccessibilityLabel(finding, true);
 
     expect(label).toContain("error severity");
     expect(label).toContain("high confidence");
@@ -81,9 +85,16 @@ describe("security overview accessibility labels", () => {
   });
 
   it("aggregates finding state and fixability for groups", () => {
-    const ignored = new Set([findingFingerprint(findings[0]!)]);
+    const [finding] = findings;
+    if (!finding) {
+      throw new Error("expected a security finding fixture");
+    }
+    const ignored = new Set([findingFingerprint(finding)]);
     const [group] = buildOverviewTree(findings, "file", "all", ignored, true);
-    const label = securityGroupAccessibilityLabel(group!);
+    if (!group) {
+      throw new Error("expected a security overview group");
+    }
+    const label = securityGroupAccessibilityLabel(group);
 
     expect(label).toContain("2 findings");
     expect(label).toContain("severity: 1 error finding");

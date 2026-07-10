@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 import {
   buildCoverageTree,
-  CoverageFileSummary,
-  CoverageLineDetail,
-  CoverageOverviewFileNode,
-  CoverageOverviewFilterMode,
-  CoverageOverviewLineNode,
-  CoverageWorkspaceSummary,
+  type CoverageFileSummary,
+  type CoverageLineDetail,
+  type CoverageOverviewFileNode,
+  type CoverageOverviewFilterMode,
+  type CoverageOverviewLineNode,
+  type CoverageWorkspaceSummary,
   parseCoverageArtifact,
   shouldExpandCoverageFile,
   summarizeCoverageArtifacts,

@@ -1,12 +1,12 @@
 import {
   commands,
-  ExtensionContext,
+  type ExtensionContext,
   languages,
   Location,
   Position,
   Range,
   StatusBarAlignment,
-  StatusBarItem,
+  type StatusBarItem,
   ThemeColor,
   Uri,
   window,
@@ -17,22 +17,22 @@ import {
   type CodeActionParams,
   type Command as ProtocolCommand,
   LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
+  type LanguageClientOptions,
+  type ServerOptions,
   State as LanguageClientState,
 } from "vscode-languageclient/node";
 import {
-  CoverageExtensionConfig,
+  type CoverageExtensionConfig,
   DEFAULT_COVERAGE_CONFIG,
-  EditorSaveConfig,
-  SolgridConfig,
+  type EditorSaveConfig,
+  type SolgridConfig,
   getServerPath,
   getInitializationOptions,
   getSettings,
 } from "./config";
 import {
   CoverageOverviewFeature,
-  CoverageOverviewNode,
+  type CoverageOverviewNode,
 } from "./coverageOverview";
 import { runCoverageCommand, runPreferredCoverageCommand } from "./coverageRun";
 import {
@@ -43,13 +43,13 @@ import {
   openFindingHelp,
   openSecurityFinding,
   previewFindingFix,
-  SecurityOverviewNode,
+  type SecurityOverviewNode,
   SecurityOverviewProvider,
   setSecurityCodeActionResolver,
   suppressGroupNextLine,
   suppressFindingNextLine,
 } from "./securityOverview";
-import { SecurityOverviewFindingNode } from "./securityOverviewModel";
+import type { SecurityOverviewFindingNode } from "./securityOverviewModel";
 import {
   activeImportsGraphArgs,
   getGraphPreviewSnapshot,
@@ -57,7 +57,7 @@ import {
 } from "./graphPreview";
 import {
   LanguageServerLifecycle,
-  LanguageServerLifecycleUpdate,
+  type LanguageServerLifecycleUpdate,
 } from "./languageServerLifecycle";
 import {
   requestSecurityAnalysisRerun,

@@ -18,7 +18,8 @@ import {
   readFixture,
   fixtureUri,
   resetDocumentVersions,
-  Hover,
+  requireDefined,
+  type Hover,
 } from "./helpers";
 
 function tempWorkspace(): string {
@@ -64,10 +65,10 @@ describe("LSP Hover", () => {
     expect(txOriginDiag).toBeDefined();
 
     // Hover in the middle of the diagnostic range
-    const hoverLine = txOriginDiag!.range.start.line;
+    const hoverLine = txOriginDiag?.range.start.line;
     const hoverChar = Math.floor(
-      (txOriginDiag!.range.start.character +
-        txOriginDiag!.range.end.character) /
+      (txOriginDiag?.range.start.character +
+        txOriginDiag?.range.end.character) /
         2
     );
 
@@ -91,14 +92,16 @@ describe("LSP Hover", () => {
     expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag!.range.start.line,
-      character: diag!.range.start.character,
+      line: diag?.range.start.line,
+      character: diag?.range.start.character,
     });
 
     expect(hover).not.toBeNull();
-    const hoverContent = extractHoverText(hover!);
+    const hoverContent = extractHoverText(
+      requireDefined(hover, "hover response")
+    );
     // The hover content should contain the rule ID from the diagnostic
-    const ruleId = diag!.code as string;
+    const ruleId = diag?.code as string;
     const ruleName = ruleId.split("/")[1];
     expect(hoverContent).toContain(ruleName);
   });
@@ -116,12 +119,14 @@ describe("LSP Hover", () => {
     expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag!.range.start.line,
-      character: diag!.range.start.character,
+      line: diag?.range.start.line,
+      character: diag?.range.start.character,
     });
 
     expect(hover).not.toBeNull();
-    const hoverContent = extractHoverText(hover!);
+    const hoverContent = extractHoverText(
+      requireDefined(hover, "hover response")
+    );
     expect(hoverContent).toContain("solgrid-disable-next-line");
   });
 
@@ -138,12 +143,12 @@ describe("LSP Hover", () => {
     expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag!.range.start.line,
-      character: diag!.range.start.character,
+      line: diag?.range.start.line,
+      character: diag?.range.start.character,
     });
 
     expect(hover).not.toBeNull();
-    const contents = hover!.contents;
+    const contents = hover?.contents;
     expect(typeof contents).toBe("object");
     expect(Array.isArray(contents)).toBe(false);
     expect(contents).toMatchObject({ kind: "markdown" });
@@ -159,13 +164,15 @@ describe("LSP Hover", () => {
     const diag = diagResult.diagnostics[0];
     expect(diag).toBeDefined();
     const hover = await requestHover(client, uri, {
-      line: diag!.range.start.line,
-      character: diag!.range.start.character,
+      line: diag?.range.start.line,
+      character: diag?.range.start.character,
     });
 
     expect(hover).not.toBeNull();
     // Should mention auto-fix availability.
-    expect(extractHoverText(hover!)).toMatch(/auto-fix/i);
+    expect(
+      extractHoverText(requireDefined(hover, "hover response"))
+    ).toMatch(/auto-fix/i);
   });
 
   it("returns null for position without diagnostic", async () => {
@@ -229,12 +236,14 @@ contract UncheckedCall {
     expect(diag).toBeDefined();
 
     const hover = await requestHover(client, uri, {
-      line: diag!.range.start.line,
-      character: diag!.range.start.character,
+      line: diag?.range.start.line,
+      character: diag?.range.start.character,
     });
 
     expect(hover).not.toBeNull();
-    const hoverContent = extractHoverText(hover!);
+    const hoverContent = extractHoverText(
+      requireDefined(hover, "hover response")
+    );
     expect(hoverContent).toContain("security/unchecked-low-level-call");
     expect(hoverContent).toContain("detector");
   });

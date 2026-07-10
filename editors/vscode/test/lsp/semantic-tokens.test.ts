@@ -12,6 +12,7 @@ import {
   requestSemanticTokens,
   requestSemanticTokensFullDelta,
   requestSemanticTokensRange,
+  requireDefined,
   resetDocumentVersions,
 } from "./helpers";
 
@@ -87,7 +88,10 @@ contract Token {
 
       const result = await requestSemanticTokens(client, uri);
       expect(result).toBeDefined();
-      const tokens = decodeSemanticTokens(result!, legend!);
+      const tokens = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      );
       const entries = tokens.map((token) => ({
         ...token,
         text: tokenText(content, token.line, token.startChar, token.length),
@@ -195,7 +199,10 @@ contract Token {
         end: { line: 12, character: lineText.length },
       });
       expect(result).toBeDefined();
-      const tokens = decodeSemanticTokens(result!, legend!);
+      const tokens = decodeSemanticTokens(
+        requireDefined(result, "range semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      );
       const entries = tokens.map((token) => ({
         ...token,
         text: tokenText(content, token.line, token.startChar, token.length),
@@ -288,17 +295,25 @@ contract Delta {
 
       const full = await requestSemanticTokens(client, uri);
       expect(full?.resultId).toBeDefined();
+      const fullResultId = requireDefined(
+        full?.resultId,
+        "semantic token result ID"
+      );
 
       const unchanged = await requestSemanticTokensFullDelta(
         client,
         uri,
-        full!.resultId!
+        fullResultId
       );
       expect(unchanged).toBeDefined();
-      expect("edits" in unchanged!).toBe(true);
-      if (unchanged && "edits" in unchanged) {
-        expect(unchanged.resultId).toBe(full!.resultId);
-        expect(unchanged.edits).toEqual([]);
+      const unchangedResult = requireDefined(
+        unchanged,
+        "unchanged semantic token delta"
+      );
+      expect("edits" in unchangedResult).toBe(true);
+      if ("edits" in unchangedResult) {
+        expect(unchangedResult.resultId).toBe(fullResultId);
+        expect(unchangedResult.edits).toEqual([]);
       }
 
       changeDocument(client, uri, updated);
@@ -306,15 +321,22 @@ contract Delta {
       const changed = await requestSemanticTokensFullDelta(
         client,
         uri,
-        full!.resultId!
+        fullResultId
       );
       expect(changed).toBeDefined();
-      expect("data" in changed!).toBe(true);
-      if (changed && "data" in changed) {
-        expect(changed.resultId).not.toBe(full!.resultId);
+      const changedResult = requireDefined(
+        changed,
+        "changed semantic tokens"
+      );
+      expect("data" in changedResult).toBe(true);
+      if ("data" in changedResult) {
+        expect(changedResult.resultId).not.toBe(fullResultId);
         const legend = init.capabilities.semanticTokensProvider?.legend;
         expect(legend).toBeDefined();
-        const entries = decodeSemanticTokens(changed, legend!).map((token) => ({
+        const entries = decodeSemanticTokens(
+          changedResult,
+          requireDefined(legend, "semantic token legend")
+        ).map((token) => ({
           ...token,
           text: tokenText(updated, token.line, token.startChar, token.length),
         }));
@@ -367,7 +389,15 @@ contract Main {
 
       const initial = await requestSemanticTokens(client, mainUri);
       expect(initial?.resultId).toBeDefined();
-      const initialEntries = decodeSemanticTokens(initial!, legend!).map((token) => ({
+      const initialTokens = requireDefined(initial, "initial semantic tokens");
+      const initialResultId = requireDefined(
+        initialTokens.resultId,
+        "initial semantic token result ID"
+      );
+      const initialEntries = decodeSemanticTokens(
+        initialTokens,
+        requireDefined(legend, "semantic token legend")
+      ).map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
       }));
@@ -379,15 +409,22 @@ contract Main {
       const changed = await requestSemanticTokensFullDelta(
         client,
         mainUri,
-        initial!.resultId!
+        initialResultId
       );
 
       expect(changed).toBeDefined();
-      expect("data" in changed!).toBe(true);
-      if (changed && "data" in changed) {
-        expect(changed.resultId).not.toBe(initial!.resultId);
-        expect(changed.data).not.toEqual(initial!.data);
-        const changedEntries = decodeSemanticTokens(changed, legend!).map((token) => ({
+      const changedResult = requireDefined(
+        changed,
+        "changed semantic tokens"
+      );
+      expect("data" in changedResult).toBe(true);
+      if ("data" in changedResult) {
+        expect(changedResult.resultId).not.toBe(initialResultId);
+        expect(changedResult.data).not.toEqual(initialTokens.data);
+        const changedEntries = decodeSemanticTokens(
+          changedResult,
+          requireDefined(legend, "semantic token legend")
+        ).map((token) => ({
           ...token,
           text: tokenText(mainSource, token.line, token.startChar, token.length),
         }));
@@ -435,7 +472,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
-      const tokens = decodeSemanticTokens(result!, legend!);
+      const tokens = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      );
       const entries = tokens.map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
@@ -533,7 +573,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
-      const tokens = decodeSemanticTokens(result!, legend!);
+      const tokens = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      );
       const entries = tokens.map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
@@ -665,7 +708,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
-      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+      const entries = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      ).map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
       }));
@@ -732,7 +778,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
-      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+      const entries = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      ).map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
       }));
@@ -793,7 +842,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, uri);
       expect(result).toBeDefined();
-      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+      const entries = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      ).map((token) => ({
         ...token,
         text: tokenText(content, token.line, token.startChar, token.length),
       }));
@@ -876,7 +928,10 @@ contract Main {
 
       const result = await requestSemanticTokens(client, mainUri);
       expect(result).toBeDefined();
-      const entries = decodeSemanticTokens(result!, legend!).map((token) => ({
+      const entries = decodeSemanticTokens(
+        requireDefined(result, "semantic tokens"),
+        requireDefined(legend, "semantic token legend")
+      ).map((token) => ({
         ...token,
         text: tokenText(mainSource, token.line, token.startChar, token.length),
       }));

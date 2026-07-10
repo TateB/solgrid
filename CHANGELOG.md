@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added generation-scoped lazy reference caching so repeated references, rename, and CodeLens lookups can reuse resolved reference sets until the project index changes
 
 ### Changed
+- Replaced the nonfunctional VS Code ESLint placeholder with pinned Biome linting across extension sources, tests, tooling, local CI, and GitHub Actions
 - Changed detector propagation through imported overloads and wrapper chains to keep the common propagated sink result instead of requiring identical sink summaries
 - Changed the minimum supported VS Code version from 1.75 to 1.82 to match `vscode-languageclient` 9 and the pinned Node 18 extension-host API surface
 

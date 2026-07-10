@@ -3,9 +3,9 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import {
   assessGraphRenderBudget,
   buildGraphPreviewSnapshot,
-  GraphDocumentLike,
-  GraphKind,
-  GraphPreviewSnapshot,
+  type GraphDocumentLike,
+  type GraphKind,
+  type GraphPreviewSnapshot,
   isGraphDocumentLike,
   renderGraphWebviewHtml,
 } from "./graphPreviewRender";
@@ -357,7 +357,7 @@ export function renderGraphStatusWebviewHtml(
 
 export function activeImportsGraphArgs(): GraphCommandArgs | undefined {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "solidity") {
+  if (editor?.document.languageId !== "solidity") {
     void vscode.window.showWarningMessage(
       "Open a Solidity file before requesting a solgrid graph."
     );

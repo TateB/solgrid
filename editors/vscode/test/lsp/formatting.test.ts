@@ -16,6 +16,7 @@ import {
   fixtureUri,
   applyEdits,
   resetDocumentVersions,
+  requireDefined,
 } from "./helpers";
 
 describe("LSP Formatting", () => {
@@ -48,7 +49,7 @@ describe("LSP Formatting", () => {
 
     // The formatter should produce edits for a poorly formatted file
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
+    expect(edits?.length).toBeGreaterThan(0);
   });
 
   it("formatting produces valid output", async () => {
@@ -61,8 +62,11 @@ describe("LSP Formatting", () => {
     const edits = await requestFormatting(client, uri);
 
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
-    const formatted = applyEdits(content, edits!);
+    expect(edits?.length).toBeGreaterThan(0);
+    const formatted = applyEdits(
+      content,
+      requireDefined(edits, "formatting edits")
+    );
     // Formatted output should still contain key Solidity tokens
     expect(formatted).toContain("pragma solidity");
     expect(formatted).toContain("contract");
@@ -79,9 +83,12 @@ describe("LSP Formatting", () => {
     // First format
     const edits1 = await requestFormatting(client, uri);
     expect(edits1).not.toBeNull();
-    expect(edits1!.length).toBeGreaterThan(0);
+    expect(edits1?.length).toBeGreaterThan(0);
 
-    const formatted = applyEdits(content, edits1!);
+    const formatted = applyEdits(
+      content,
+      requireDefined(edits1, "initial formatting edits")
+    );
 
     // Open the formatted version
     const uri2 = "file:///tmp/formatted-test.sol";
@@ -130,8 +137,8 @@ describe("LSP Formatting", () => {
     });
 
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
-    for (const edit of edits!) {
+    expect(edits?.length).toBeGreaterThan(0);
+    for (const edit of requireDefined(edits, "range formatting edits")) {
       expect(edit.range).toBeDefined();
       expect(edit.newText).toBeDefined();
     }
@@ -147,8 +154,8 @@ describe("LSP Formatting", () => {
     const edits = await requestFormatting(client, uri);
 
     expect(edits).not.toBeNull();
-    expect(edits!.length).toBeGreaterThan(0);
-    for (const edit of edits!) {
+    expect(edits?.length).toBeGreaterThan(0);
+    for (const edit of requireDefined(edits, "formatting edits")) {
       expect(edit.range.start.line).toBeGreaterThanOrEqual(0);
       expect(edit.range.start.character).toBeGreaterThanOrEqual(0);
       expect(edit.range.start.line).toBeLessThanOrEqual(

@@ -5,9 +5,9 @@
  * initialize, open/change/close documents, and wait for diagnostics.
  */
 
-import * as fs from "fs";
-import * as path from "path";
-import { TestLspClient } from "./client";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { TestLspClient } from "./client";
 
 // ---------------------------------------------------------------------------
 // LSP Type Aliases (minimal, to avoid depending on vscode-languageserver-protocol)
@@ -192,6 +192,17 @@ export interface SemanticTokenEntry {
   length: number;
   tokenType: string;
   tokenModifiers: string[];
+}
+
+/** Fail fast when an LSP response omits a value required by a test. */
+export function requireDefined<T>(
+  value: T | null | undefined,
+  description: string
+): T {
+  if (value === null || value === undefined) {
+    throw new Error(`Expected ${description} to be defined`);
+  }
+  return value;
 }
 
 export interface InitializeResult {
