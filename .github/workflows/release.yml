@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   BINARY_NAME: solgrid
   NODE_VERSION: 24.14.0
@@ -18,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93
       - name: Check tag matches Cargo.toml version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -89,7 +94,7 @@ jobs:
 
       # Build the Rust binary
       - name: Build binary
-        run: cargo build --release --target ${{ matrix.rust-target }} -p ${{ env.BINARY_NAME }}
+        run: cargo build --locked --release --target ${{ matrix.rust-target }} -p ${{ env.BINARY_NAME }}
 
       # Stage standalone binary
       - name: Stage binary
@@ -109,12 +114,14 @@ jobs:
       - name: Stage extension binary
         shell: bash
         run: |
-          mkdir -p editors/vscode/bin
+          mkdir -p "editors/vscode/bin/${{ matrix.vscode-target }}"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" editors/vscode/bin/
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" \
+               "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}.exe"
           else
-            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" editors/vscode/bin/
-            chmod +x "editors/vscode/bin/${{ env.BINARY_NAME }}"
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" \
+               "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}"
+            chmod +x "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}"
           fi
 
       # Build and package VSCode extension
@@ -128,7 +135,7 @@ jobs:
       - run: pnpm --filter solgrid-vscode run compile
       - name: Package VSIX
         working-directory: editors/vscode
-        run: npx @vscode/vsce package --no-dependencies --target ${{ matrix.vscode-target }}
+        run: node scripts/package-vsix.cjs --target ${{ matrix.vscode-target }}
 
       # Upload standalone binary
       - uses: actions/upload-artifact@v4
