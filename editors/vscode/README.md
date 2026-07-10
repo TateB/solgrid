@@ -43,6 +43,8 @@ Coverage artifact browsing and coverage commands are independent of the language
 
 Changing `solgrid.enable` requires a VS Code window reload because it starts or stops the language-server process and its editor integrations. The extension offers **Reload Window** when this setting changes. Coverage remains independent and does not require the language server.
 
+Coverage is multi-root aware, but the language-server project index currently uses the first workspace folder. Open additional Solidity roots in separate VS Code windows when complete workspace symbols, closed-file diagnostics, references, and CodeLens results are required.
+
 Foundry currently emits LCOV through `forge coverage --report lcov`; Cobertura XML remains supported for ingestion when another coverage tool produces it.
 When both formats describe the same source line, line-hit totals use the larger per-format aggregate to avoid double-counting duplicate reports. LCOV branch data takes precedence only on lines where it is present because it retains stable branch identities; Cobertura-only branch lines are still included.
 

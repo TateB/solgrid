@@ -20,6 +20,7 @@ Planned improvements and future work for solgrid.
 - [ ] Decide whether coverage should grow beyond the shipped Foundry/Hardhat/custom command surface into provider-specific artifact management or stay intentionally thin
 - [ ] Deepen the shipped semantic-token surface beyond the current full/delta/range declarations, readonly markings, high-signal references, multi-segment path coverage, conservative ambiguity handling, and same-semantics duplicate-resolution support, especially for harder cross-file and member-heavy cases that still need stronger kind/metadata preservation
 - [ ] Add editor polish items that improve parity or surpass it: broader rename/call-hierarchy support under ambiguous graphs and richer commands
+- [ ] Support true multi-root language-server indexing with per-root import remappings, configuration discovery, invalidation, workspace symbols, and closed-file diagnostics
 
 ## Performance
 

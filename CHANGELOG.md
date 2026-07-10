@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added VS Code LCOV coverage ingestion with a dedicated coverage tree, actionable uncovered/partial line decorations, artifact watching, and configurable coverage artifact globs
 - Added conservative LSP/VS Code rename support for same-file and unaliased cross-file symbol graphs, while still rejecting unsafe alias-driven import scenarios
 - Added conservative LSP/VS Code call hierarchy for resolvable function and modifier declarations/call sites, plus Cobertura coverage artifact ingestion alongside the existing LCOV coverage UI
-- Added VS Code coverage run commands for Foundry LCOV/Cobertura flows plus a configurable custom coverage command with optional auto-refresh
+- Added VS Code coverage run commands for Foundry LCOV plus a configurable custom coverage command with optional auto-refresh; Cobertura remains supported as an imported artifact format
 - Added a smart VS Code `Run Coverage` command that detects supported workspace providers and prefers the most relevant coverage flow automatically
 - Added same-file interprocedural propagation for native `delegatecall` and ETH-transfer detectors, surfacing medium-confidence helper-call findings when user-controlled arguments flow into those sinks
 - Added Hardhat coverage as a first-class VS Code provider alongside the existing Foundry and custom command flows
@@ -57,17 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added detector propagation through imported overloaded helper wrappers when semantic filtering leaves one propagated sink result
 - Added detector propagation through overloaded helper-returning call expressions when their return targets collapse to the same helper contract
 - Added detector propagation through transitive imported wrapper chains when each step collapses to one propagated sink result
-- Changed detector propagation through imported overloads and wrapper chains to keep the common propagated sink result instead of requiring identical sink summaries
 - Added detector propagation through non-unique helper contracts when their member summaries share a common propagated sink result
 - Added VS Code workspace-index status reporting in the status bar so large Solidity projects show indexing and ready states with file counts
 - Added generation-scoped lazy reference caching so repeated references, rename, and CodeLens lookups can reuse resolved reference sets until the project index changes
+
+### Changed
+- Changed detector propagation through imported overloads and wrapper chains to keep the common propagated sink result instead of requiring identical sink summaries
+- Changed the minimum supported VS Code version from 1.75 to 1.82 to match `vscode-languageclient` 9 and the pinned Node 18 extension-host API surface
 
 ### Fixed
 - Fixed overlapping low-level call diagnostics to suppress broad `security/low-level-calls` findings when narrower semantic detectors cover the same call site
 - Fixed overlapping ETH-send diagnostics to suppress broad `security/arbitrary-send-eth` findings when the semantic user-controlled transfer detector covers the same call site
 - Fixed VS Code diagnostics delivery so the security overview no longer intercepts `publishDiagnostics` in a way that prevents editor diagnostics and E2E code-action flows from working
 - Fixed VS Code security-overview fix actions in the real extension host by sending a string quick-fix kind to `vscode.executeCodeActionProvider`
-- Fixed VS Code security-overview fix selection to fall back to unique/preferred quick fixes when VS Code omits diagnostic metadata on returned code actions
+- Fixed VS Code security-overview fix selection to request code actions directly from the language server and require exact diagnostic identity, preventing unrelated or stale quick fixes from being applied
 - Fixed VS Code ignored security baselines to key off stable finding identity instead of diagnostic message text
 - Fixed VS Code graph previews to render in a dedicated webview instead of raw markdown/Mermaid output
 - Fixed VS Code graph previews to keep large project graphs contained in the webview with independent scrolling, pan/zoom controls, cleaner light-mode styling, and vertical linearized inheritance rendering
@@ -77,6 +80,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH
 - Fixed LSP compiler-style member diagnostics to resolve modifiers, custom errors, and events inherited from imported base contracts/interfaces
 - Fixed hover and go-to-definition for inherited contract/interface members such as custom errors used from derived contracts
+- Fixed native semantic detectors to honor rule configuration and inline suppressions, distinguish typed low-level address calls from same-named ABI methods, preserve named/unnamed parameter mappings, avoid overload or override contamination, and respect local-variable shadowing during interprocedural sink propagation
+- Fixed inline suppression parsing so comment markers inside strings or block comments cannot hide or forge directives
+- Fixed selector canonicalization for recursive structs, import aliases, namespace-qualified nested types, function types, and fixed arrays whose lengths cannot be evaluated safely
+- Fixed rename, reference, and inheritance analysis for overload declarations, named function/struct/event/error arguments, NatSpec references, try/catch bindings, fallback/receive declarations, typed-instance calls, getter overrides, inherited event/error parameters, and Solidity reserved names
+- Fixed control-flow graphs to unwind returns through modifier postludes, keep Yul terminal builtins on the global exit, distinguish function-pointer overloads, and select CLI targets by canonical signature
+- Fixed LSP open-buffer canonicalization, transitive diagnostic invalidation, background index replacement races, stale dependency and manual-workspace publications, semantic-token dependency refreshes, inherited overload lookup, and readonly token false positives
+- Fixed VS Code coverage merging and path resolution, refresh/task races, duplicate custom arguments, provider independence, supported Foundry/Hardhat invocation, security suppression grouping, graph request ordering, unsafe-fix setting shadowing, and language-server enablement reload behavior
+- Fixed VSIX target packaging and publishing to reject missing, non-executable, or architecture-mismatched binaries, and hardened the LSP/E2E harness against missed notifications, split UTF-8 frames, early task exits, shutdown pipe errors, and vacuous feature assertions
+- Fixed version bump tooling to keep workspace entries in `Cargo.lock` synchronized, reject invalid SemVer input, and require locked release builds
+
+### Security
+- Updated `crossbeam-epoch` to a release that resolves RUSTSEC-2026-0204
 
 ## [0.0.16] - 2026-05-06
 

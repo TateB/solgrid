@@ -12,10 +12,12 @@ The `editors/vscode/` directory contains a VSCode extension that provides:
 - Cross-file references, document symbols, workspace symbols, and import-path document links
 - Call hierarchy for resolvable function and modifier declarations/call sites
 - Reference-count and graph-entry code lenses
-- Import, inheritance, linearized inheritance, and control-flow graph previews rendered as Markdown/Mermaid
+- Import, inheritance, linearized inheritance, and control-flow graphs rendered in an interactive webview
 - Parameter-name inlay hints for positional call arguments plus selector/interface-ID, inheritance-origin, inherited-member, contract-lineage, and detector-aware declaration hints
 - A security overview tree with grouping, rerun, suppression, fix, and ignore-baseline flows
 - LCOV/Cobertura coverage ingestion with a coverage summary tree, uncovered/partial line decorations, and provider-aware Foundry, Hardhat, and custom coverage run commands
+
+The extension requires VS Code 1.82 or newer. Changing `solgrid.enable` requires a window reload because that setting starts or stops the language-server process and its editor integrations; the extension offers a **Reload Window** action when it changes. Coverage browsing and coverage commands remain available independently when the language server is disabled.
 - Conservative rename support for same-file and mechanically provable cross-file symbol graphs, including safe aliased and namespace-import rewrites
 - Suppression comment completion (`// solgrid-disable-next-line ...`)
 
@@ -26,7 +28,7 @@ The `editors/vscode/` directory contains a VSCode extension that provides:
 | `solgrid.enable` | `true` | Enable solgrid |
 | `solgrid.path` | `null` | Path to solgrid binary (auto-detected from PATH) |
 | `solgrid.fixOnSave` | `true` | Auto-fix safe issues on save |
-| `solgrid.fixOnSave.unsafeFixes` | `false` | Also apply suggestion-level fixes |
+| `solgrid.unsafeFixesOnSave` | `false` | Also apply suggestion-level fixes. The extension still reads the legacy `solgrid.fixOnSave.unsafeFixes` value when the replacement is not explicitly configured |
 | `solgrid.formatOnSave` | `true` | Format on save |
 | `solgrid.configPath` | `null` | Optional path to a specific `solgrid.toml`; otherwise the server auto-discovers the nearest config per document |
 | `solgrid.coverage.enable` | `true` | Enable LCOV/Cobertura coverage discovery, summary views, and editor decorations |
@@ -69,6 +71,10 @@ The server communicates via stdio and supports the standard LSP protocol.
 | `textDocument/completion` | Inline suppression comment completion (`// solgrid-disable...`) |
 | `workspace/executeCommand` | Security reruns plus graph document generation for imports, inheritance, linearized inheritance, and control flow |
 | `initialize` / `workspace/didChangeConfiguration` | Read fix-on-save, format-on-save, and optional `configPath` settings from the client |
+
+### Multi-root Workspaces
+
+Coverage discovery and provider selection are multi-root aware. The language server currently builds its project index from the first workspace folder only, so workspace symbols, closed-file diagnostics, references, and CodeLens results can be incomplete for additional roots. Until the project index supports multiple independent import/configuration roots, open each Solidity root in its own VS Code window when complete workspace-wide analysis is required.
 
 ### Graph Previews and Hints
 
@@ -118,7 +124,7 @@ The VS Code extension also ingests LCOV and Cobertura coverage artifacts directl
 - partially covered branch lines are decorated with warning-colored markers
 - the tree defaults to actionable files but can also show all covered Solidity files
 - command-palette and coverage-view actions can auto-pick the preferred coverage provider for the current workspace folder
-- explicit commands can still run Foundry LCOV or Cobertura coverage, Hardhat coverage, or a configured custom coverage command directly in the current workspace folder
+- explicit commands can run Foundry LCOV, locally installed Hardhat coverage, or a configured custom coverage command directly in the current workspace folder; Cobertura XML remains available for artifact ingestion
 - a custom coverage command can be configured with `solgrid.coverage.customCommand`
 
 Current coverage support is intentionally focused on imported artifact ingestion plus lightweight provider invocation rather than a native runtime. Native execution ownership is still out of scope, but the current viewer and command surface cover the common Foundry, Hardhat, and custom-command workflows.

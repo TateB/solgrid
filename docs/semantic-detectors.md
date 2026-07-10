@@ -17,6 +17,7 @@ Flags low-level `.call()`, `.delegatecall()`, and `.staticcall()` expressions wh
 Current behavior:
 
 - Fires on bare expression statements such as `target.call(data);`
+- Requires the receiver to resolve to an address expression, so ordinary contract/interface methods named `call`, `delegatecall`, or `staticcall` are not treated as EVM primitives
 - Does not fire when the return value is captured and checked
 - Suppresses the broader `security/low-level-calls` heuristic when both overlap on the same site
 
@@ -29,6 +30,7 @@ Flags `delegatecall` targets that resolve to a function parameter.
 Current behavior:
 
 - Fires when the target expression resolves to a parameter such as `implementation.delegatecall(data);`
+- Narrows overload and override targets by callable signature instead of merging same-arity functions with different parameter types
 - Also fires at same-file helper call sites when a caller argument is propagated into a helper parameter that reaches `delegatecall`
 - Also fires through inherited helper chains, including imported base contracts, when the helper target is uniquely resolved
 - Also fires through uniquely resolved contract-typed helper wrappers, including getter-returned and indexed helper bases, when a helper method propagates the caller argument into `delegatecall`
@@ -48,12 +50,17 @@ Current behavior:
 - Covers `.send(...)`
 - Covers one-argument ETH `.transfer(...)`
 - Covers `.call{value: ...}(...)`
+- Ignores literal zero-value call options and contract/interface ABI methods that merely share the `send`, `transfer`, or `call` names
 - Also fires at same-file helper call sites when a caller argument is propagated into a helper parameter that reaches an ETH transfer sink
 - Also fires through inherited helper chains, including imported base contracts, when the helper target is uniquely resolved
 - Also fires through uniquely resolved contract-typed helper wrappers, including getter-returned and indexed helper bases, when a helper method propagates the caller argument into an ETH transfer sink
 - Also fires through imported overloaded helper wrappers when semantic filtering leaves a non-empty common propagated sink result
 - Does not fire for non-parameter targets such as state variables
 - Suppresses the broader `security/arbitrary-send-eth` heuristic when both overlap on the same site
+
+## Configuration and Suppression
+
+Native detector IDs use the same configuration and inline-suppression surface as regular lint rules. They can be disabled or assigned a severity under `[lint.rules]`, and `solgrid-disable-line`, `solgrid-disable-next-line`, and ranged disable/enable comments accept one ID or a comma-separated group of IDs. Directives are recognized only in actual line comments, so comment-like text inside Solidity strings or block comments has no effect.
 
 ## Current Limitations
 
