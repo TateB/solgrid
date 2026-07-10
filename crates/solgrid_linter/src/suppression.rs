@@ -6,6 +6,7 @@
 //! - `// solgrid-disable [rule-id[, rule-id...]]` /
 //!   `// solgrid-enable [rule-id[, rule-id...]]`
 
+use crate::source_utils::{scan_source_regions, RegionKind};
 use std::collections::{HashMap, HashSet};
 
 /// Parsed suppression directives for a file.
@@ -42,14 +43,19 @@ pub fn parse_suppressions(source: &str) -> Suppressions {
     let mut suppressed_lines: HashMap<usize, HashSet<String>> = HashMap::new();
     let mut blanket_suppressed_lines: HashSet<usize> = HashSet::new();
     let mut disable_ranges: Vec<(Option<String>, usize)> = Vec::new(); // (rule, start_line)
+    let mut line_num = 1usize;
+    let mut cursor = 0usize;
 
-    for (line_idx, line) in source.lines().enumerate() {
-        let line_num = line_idx + 1;
-        let trimmed = line.trim();
+    for region in scan_source_regions(source) {
+        let start = region.range.start.min(source.len());
+        let end = region.range.end.min(source.len());
+        line_num += source[cursor..start]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
 
-        // Check for inline comments
-        if let Some(comment_start) = trimmed.find("//") {
-            let comment = trimmed[comment_start + 2..].trim();
+        if region.kind == RegionKind::LineComment {
+            let comment = source[start + 2..end].trim();
             parse_comment_directive(
                 comment,
                 line_num,
@@ -58,6 +64,12 @@ pub fn parse_suppressions(source: &str) -> Suppressions {
                 &mut disable_ranges,
             );
         }
+
+        line_num += source[start..end]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        cursor = end;
     }
 
     let last_line = source.lines().count().max(1);
@@ -243,5 +255,42 @@ mod tests {
         assert!(suppressions.is_suppressed("security/tx-origin", 3));
         assert!(suppressions.is_suppressed("best-practices/no-empty-blocks", 3));
         assert!(!suppressions.is_suppressed("security/reentrancy", 3));
+    }
+
+    #[test]
+    fn url_in_string_does_not_hide_trailing_directive() {
+        let suppressions = parse_suppressions(
+            r#"string memory url = "https://example.test/path"; // solgrid-disable-line security/tx-origin
+"#,
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 1));
+        assert!(!suppressions.is_suppressed("security/reentrancy", 1));
+    }
+
+    #[test]
+    fn escaped_quote_and_comment_marker_in_string_do_not_hide_trailing_directive() {
+        let suppressions = parse_suppressions(
+            r#"string memory text = "escaped \" // still a string"; // solgrid-disable-line security/tx-origin
+"#,
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 1));
+    }
+
+    #[test]
+    fn comment_marker_in_block_comment_does_not_hide_trailing_directive() {
+        let suppressions = parse_suppressions(
+            "/* example: https://example.test */ code; // solgrid-disable-line security/tx-origin\n",
+        );
+
+        assert!(suppressions.is_suppressed("security/tx-origin", 1));
+    }
+
+    #[test]
+    fn directive_shaped_text_inside_unclosed_string_is_not_a_comment() {
+        let suppressions = parse_suppressions("string memory text = \"// solgrid-disable-line\n");
+
+        assert!(!suppressions.is_suppressed("security/tx-origin", 1));
     }
 }
