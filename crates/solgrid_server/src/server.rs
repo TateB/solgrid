@@ -47,6 +47,7 @@ const LINEARIZED_INHERITANCE_GRAPH_COMMAND: &str = "solgrid.graph.linearizedInhe
 const CONTROL_FLOW_GRAPH_COMMAND: &str = "solgrid.graph.controlFlow";
 const PROJECT_INDEX_STATUS_NOTIFICATION: &str = "solgrid/projectIndexStatus";
 const CHANGE_LINT_DEBOUNCE: Duration = Duration::from_millis(100);
+const WORKSPACE_ANALYSIS_MAX_ATTEMPTS: usize = 3;
 
 enum ProjectIndexStatusNotification {}
 
@@ -69,6 +70,15 @@ struct OpenDocumentOverlay {
     uri: Uri,
     source: String,
     version: i32,
+}
+
+struct WorkspaceAnalysisInput {
+    uri: Uri,
+    source: String,
+    version: Option<i32>,
+    open_documents: HashMap<PathBuf, OpenDocumentOverlay>,
+    project_generation: u64,
+    disk_generation: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -244,6 +254,72 @@ impl SolgridServer {
             .collect()
     }
 
+    async fn workspace_analysis_input(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<WorkspaceAnalysisInput> {
+        let path = normalize_path(path);
+        let documents = self.documents.read().await;
+        let open_documents = documents
+            .uris()
+            .filter_map(|uri| {
+                let document = documents.get(uri)?;
+                Some((
+                    normalize_path(&uri_to_path(uri)),
+                    OpenDocumentOverlay {
+                        uri: document.uri.clone(),
+                        source: document.content.clone(),
+                        version: document.version,
+                    },
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        let project_generation = self.project_generation.load(Ordering::SeqCst);
+        let disk_generation = self.project_disk_generation.load(Ordering::SeqCst);
+        drop(documents);
+
+        if let Some(document) = open_documents.get(&path) {
+            return Some(WorkspaceAnalysisInput {
+                uri: document.uri.clone(),
+                source: document.source.clone(),
+                version: Some(document.version),
+                open_documents,
+                project_generation,
+                disk_generation,
+            });
+        }
+
+        Some(WorkspaceAnalysisInput {
+            uri: self
+                .published_uri_for_path(&path)
+                .await
+                .or_else(|| path_to_uri_option(&path))?,
+            source: std::fs::read_to_string(&path).ok()?,
+            version: None,
+            open_documents,
+            project_generation,
+            disk_generation,
+        })
+    }
+
+    async fn workspace_analysis_input_is_current(
+        &self,
+        path: &std::path::Path,
+        input: &WorkspaceAnalysisInput,
+    ) -> bool {
+        let documents = self.documents.read().await;
+        workspace_analysis_input_is_current(
+            &documents,
+            path,
+            &input.source,
+            input.version,
+            input.project_generation,
+            self.project_generation.load(Ordering::SeqCst),
+            input.disk_generation,
+            self.project_disk_generation.load(Ordering::SeqCst),
+        )
+    }
+
     async fn rebuild_project_index(&self) {
         self.project_disk_generation.fetch_add(1, Ordering::SeqCst);
         self.project_index_ready.store(false, Ordering::SeqCst);
@@ -363,17 +439,38 @@ impl SolgridServer {
     }
 
     fn schedule_relint_paths(&self, paths: Vec<PathBuf>) {
+        self.schedule_relint_paths_with_options(paths, false);
+    }
+
+    fn schedule_workspace_analysis_paths(&self, paths: Vec<PathBuf>) {
+        self.schedule_relint_paths_with_options(paths, true);
+    }
+
+    fn schedule_relint_paths_with_options(&self, paths: Vec<PathBuf>, publish_unseen: bool) {
         let server = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(CHANGE_LINT_DEBOUNCE).await;
             let generation = server.project_generation.load(Ordering::SeqCst);
-            server.relint_paths(&paths, generation).await;
+            server
+                .relint_paths_with_options(&paths, generation, publish_unseen)
+                .await;
         });
     }
 
     async fn relint_paths(&self, paths: &[PathBuf], expected_generation: u64) {
+        self.relint_paths_with_options(paths, expected_generation, false)
+            .await;
+    }
+
+    async fn relint_paths_with_options(
+        &self,
+        paths: &[PathBuf],
+        expected_generation: u64,
+        publish_unseen: bool,
+    ) {
+        let expected_disk_generation = self.project_disk_generation.load(Ordering::SeqCst);
         if self.project_generation.load(Ordering::SeqCst) != expected_generation {
-            self.schedule_relint_paths(paths.to_vec());
+            self.schedule_relint_paths_with_options(paths.to_vec(), publish_unseen);
             return;
         }
         let open_docs = self.collect_open_document_overlays().await;
@@ -385,8 +482,10 @@ impl SolgridServer {
         paths.dedup();
 
         for path in &paths {
-            if self.project_generation.load(Ordering::SeqCst) != expected_generation {
-                self.schedule_relint_paths(paths.to_vec());
+            if self.project_generation.load(Ordering::SeqCst) != expected_generation
+                || self.project_disk_generation.load(Ordering::SeqCst) != expected_disk_generation
+            {
+                self.schedule_relint_paths_with_options(paths.to_vec(), publish_unseen);
                 return;
             }
             let (uri, version, source) = if let Some(document) = open_docs.get(path) {
@@ -396,7 +495,11 @@ impl SolgridServer {
                     document.source.clone(),
                 )
             } else {
-                let Some(uri) = self.published_uri_for_path(path).await else {
+                let Some(uri) = self
+                    .published_uri_for_path(path)
+                    .await
+                    .or_else(|| publish_unseen.then(|| path_to_uri_option(path)).flatten())
+                else {
                     continue;
                 };
                 let Ok(source) = std::fs::read_to_string(path) else {
@@ -407,20 +510,22 @@ impl SolgridServer {
             };
 
             let result = self.lint_source(path, &source, &open_docs).await;
-            if self.project_generation.load(Ordering::SeqCst) != expected_generation {
-                self.schedule_relint_paths(paths.to_vec());
+            let is_current = {
+                let documents = self.documents.read().await;
+                workspace_analysis_input_is_current(
+                    &documents,
+                    path,
+                    &source,
+                    version,
+                    expected_generation,
+                    self.project_generation.load(Ordering::SeqCst),
+                    expected_disk_generation,
+                    self.project_disk_generation.load(Ordering::SeqCst),
+                )
+            };
+            if !is_current {
+                self.schedule_relint_paths_with_options(paths.to_vec(), publish_unseen);
                 return;
-            }
-            if let Some(version) = version {
-                let is_current = {
-                    let documents = self.documents.read().await;
-                    documents.get(&uri).is_some_and(|document| {
-                        document.version == version && document.content == source
-                    })
-                };
-                if !is_current {
-                    continue;
-                }
             }
 
             match result {
@@ -624,38 +729,42 @@ impl SolgridServer {
                 continue;
             }
 
-            let (uri, version, source) = if let Some(document) = open_docs.get(&path) {
-                (
-                    document.uri.clone(),
-                    Some(document.version),
-                    document.source.clone(),
-                )
-            } else {
-                let Some(uri) = self
-                    .published_uri_for_path(&path)
+            for attempt in 0..WORKSPACE_ANALYSIS_MAX_ATTEMPTS {
+                let Some(input) = self.workspace_analysis_input(&path).await else {
+                    break;
+                };
+                let result = self
+                    .lint_source(&path, &input.source, &input.open_documents)
+                    .await;
+                if !self
+                    .workspace_analysis_input_is_current(&path, &input)
                     .await
-                    .or_else(|| path_to_uri_option(&path))
-                else {
+                {
+                    if attempt + 1 == WORKSPACE_ANALYSIS_MAX_ATTEMPTS {
+                        // Keep any newer publication intact and let the
+                        // debounced guarded path finish once edits settle.
+                        published.insert(input.uri);
+                        self.schedule_workspace_analysis_paths(vec![path.clone()]);
+                        break;
+                    }
                     continue;
-                };
-                let Some(source) = std::fs::read_to_string(&path).ok() else {
-                    continue;
-                };
-                (uri, None, source)
-            };
+                }
 
-            files_analyzed += 1;
-            published.insert(uri.clone());
-            match self.lint_source(&path, &source, &open_docs).await {
-                Ok(lsp_diags) => {
-                    diagnostics_published += lsp_diags.len();
-                    self.publish_cached_diagnostics(uri, lsp_diags, version)
-                        .await;
+                files_analyzed += 1;
+                published.insert(input.uri.clone());
+                match result {
+                    Ok(lsp_diags) => {
+                        diagnostics_published += lsp_diags.len();
+                        self.publish_cached_diagnostics(input.uri, lsp_diags, input.version)
+                            .await;
+                    }
+                    Err(error) => {
+                        diagnostics_published += 1;
+                        self.publish_config_error(&input.uri, input.version, &error)
+                            .await;
+                    }
                 }
-                Err(error) => {
-                    diagnostics_published += 1;
-                    self.publish_config_error(&uri, version, &error).await;
-                }
+                break;
             }
         }
 
@@ -672,13 +781,13 @@ impl SolgridServer {
             files_analyzed,
             diagnostics_published,
             stale_diagnostics_cleared,
-            open_documents: open_docs.len(),
+            open_documents: self.collect_open_document_overlays().await.len(),
         }
     }
 
     /// Lint a document and publish diagnostics to the client.
     async fn lint_and_publish(&self, uri: &Uri) {
-        let (open_docs, path, document, dependents, generation) = loop {
+        let (open_docs, path, document, dependents, generation, disk_generation) = loop {
             // Snapshot every overlay while holding the document read lock, then
             // update the index under the same lock. An imported didChange cannot
             // slip between the snapshot and this file's generation increment.
@@ -711,19 +820,34 @@ impl SolgridServer {
             project_index.update_file(&path, &document.source);
             let dependents = project_index.transitive_import_dependents(&path);
             let generation = self.project_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let disk_generation = self.project_disk_generation.load(Ordering::SeqCst);
             drop(project_index);
             drop(documents);
-            break (open_docs, path, document, dependents, generation);
+            break (
+                open_docs,
+                path,
+                document,
+                dependents,
+                generation,
+                disk_generation,
+            );
         };
 
         let result = self.lint_source(&path, &document.source, &open_docs).await;
         let is_current = {
             let documents = self.documents.read().await;
-            documents.get(uri).is_some_and(|current| {
-                current.version == document.version && current.content == document.source
-            })
+            workspace_analysis_input_is_current(
+                &documents,
+                &path,
+                &document.source,
+                Some(document.version),
+                generation,
+                self.project_generation.load(Ordering::SeqCst),
+                disk_generation,
+                self.project_disk_generation.load(Ordering::SeqCst),
+            )
         };
-        if !is_current || self.project_generation.load(Ordering::SeqCst) != generation {
+        if !is_current {
             let mut retry_paths = dependents;
             retry_paths.push(path);
             self.schedule_relint_paths(retry_paths);
@@ -2709,6 +2833,38 @@ fn path_to_uri_option(path: &std::path::Path) -> Option<Uri> {
     Uri::from_file_path(path)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn workspace_analysis_input_is_current(
+    documents: &DocumentStore,
+    path: &std::path::Path,
+    source: &str,
+    version: Option<i32>,
+    expected_project_generation: u64,
+    current_project_generation: u64,
+    expected_disk_generation: u64,
+    current_disk_generation: u64,
+) -> bool {
+    if expected_project_generation != current_project_generation
+        || expected_disk_generation != current_disk_generation
+    {
+        return false;
+    }
+
+    let path = normalize_path(path);
+    let current_document = documents.uris().find_map(|uri| {
+        (normalize_path(&uri_to_path(uri)) == path)
+            .then(|| documents.get(uri))
+            .flatten()
+    });
+    match (version, current_document) {
+        (Some(version), Some(document)) => {
+            document.version == version && document.content == source
+        }
+        (None, None) => std::fs::read_to_string(&path).is_ok_and(|current| current == source),
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 fn semantic_tokens_result_id(version: i32, project_generation: u64) -> String {
     format!("v{version}-p{project_generation}")
 }
@@ -2875,6 +3031,88 @@ mod tests {
             semantic_tokens_result_id(7, 11),
             semantic_tokens_result_id(7, 12)
         );
+    }
+
+    #[test]
+    fn test_workspace_analysis_rejects_stale_content_and_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Analysis.sol");
+        std::fs::write(&path, "contract Before {}").unwrap();
+        let uri = Uri::from_file_path(&path).unwrap();
+        let mut documents = DocumentStore::new();
+        documents.open(uri.clone(), "contract Before {}".into(), 4);
+
+        assert!(workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract Before {}",
+            Some(4),
+            10,
+            10,
+            3,
+            3,
+        ));
+
+        // A save can replace content without incrementing the LSP version, so
+        // version equality alone must not authorize a stale publication.
+        documents.set_content(&uri, "contract After {}".into());
+        assert!(!workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract Before {}",
+            Some(4),
+            10,
+            10,
+            3,
+            3,
+        ));
+        assert!(!workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract After {}",
+            Some(4),
+            10,
+            11,
+            3,
+            3,
+        ));
+        assert!(!workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract After {}",
+            Some(4),
+            10,
+            10,
+            3,
+            4,
+        ));
+
+        documents.close(&uri);
+        std::fs::write(&path, "contract After {}").unwrap();
+        assert!(workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract After {}",
+            None,
+            11,
+            11,
+            4,
+            4,
+        ));
+
+        // Do not rely on a watched-file notification having arrived before
+        // authorizing a closed-file result.
+        std::fs::write(&path, "contract ChangedAgain {}").unwrap();
+        assert!(!workspace_analysis_input_is_current(
+            &documents,
+            &path,
+            "contract After {}",
+            None,
+            11,
+            11,
+            4,
+            4,
+        ));
     }
 
     #[test]
