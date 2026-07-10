@@ -13,9 +13,9 @@ use solgrid_project::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::notification::Notification;
@@ -46,6 +46,7 @@ const INHERITANCE_GRAPH_COMMAND: &str = "solgrid.graph.inheritance";
 const LINEARIZED_INHERITANCE_GRAPH_COMMAND: &str = "solgrid.graph.linearizedInheritance";
 const CONTROL_FLOW_GRAPH_COMMAND: &str = "solgrid.graph.controlFlow";
 const PROJECT_INDEX_STATUS_NOTIFICATION: &str = "solgrid/projectIndexStatus";
+const CHANGE_LINT_DEBOUNCE: Duration = Duration::from_millis(100);
 
 enum ProjectIndexStatusNotification {}
 
@@ -116,6 +117,7 @@ struct DetectorInlayHint {
 }
 
 /// The solgrid LSP server.
+#[derive(Clone)]
 pub struct SolgridServer {
     client: Client,
     engine: Arc<RwLock<LintEngine>>,
@@ -131,6 +133,12 @@ pub struct SolgridServer {
     project_index: Arc<RwLock<ProjectIndex>>,
     /// False while the initial workspace-wide index is still being built.
     project_index_ready: Arc<AtomicBool>,
+    /// Changes whenever project-wide semantic inputs change.
+    project_generation: Arc<AtomicU64>,
+    /// Changes when on-disk project inputs may have changed during a rebuild.
+    project_disk_generation: Arc<AtomicU64>,
+    /// Per-document epochs used to discard superseded debounced lint jobs.
+    lint_epochs: Arc<RwLock<HashMap<Uri, u64>>>,
 }
 
 impl SolgridServer {
@@ -148,6 +156,9 @@ impl SolgridServer {
             published_diagnostics: Arc::new(RwLock::new(HashMap::new())),
             project_index: Arc::new(RwLock::new(ProjectIndex::new(None))),
             project_index_ready: Arc::new(AtomicBool::new(true)),
+            project_generation: Arc::new(AtomicU64::new(0)),
+            project_disk_generation: Arc::new(AtomicU64::new(0)),
+            lint_epochs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -222,7 +233,7 @@ impl SolgridServer {
             .filter_map(|uri| {
                 let document = documents.get(uri)?;
                 Some((
-                    uri_to_path(uri),
+                    normalize_path(&uri_to_path(uri)),
                     OpenDocumentOverlay {
                         uri: document.uri.clone(),
                         source: document.content.clone(),
@@ -233,38 +244,72 @@ impl SolgridServer {
             .collect()
     }
 
-    async fn rebuild_project_index(
-        &self,
-        open_docs: &HashMap<std::path::PathBuf, OpenDocumentOverlay>,
-    ) {
+    async fn rebuild_project_index(&self) {
+        self.project_disk_generation.fetch_add(1, Ordering::SeqCst);
         self.project_index_ready.store(false, Ordering::SeqCst);
         let indexed_files = self.project_index.read().await.indexed_file_count();
         send_project_index_status(&self.client, "building", indexed_files, None).await;
 
         let started_at = Instant::now();
-        let workspace_root = self.workspace_root.read().await.clone();
-        let mut rebuilt = match workspace_root.as_deref() {
-            Some(root) => ProjectIndex::build(root),
-            None => ProjectIndex::new(None),
-        };
+        loop {
+            let disk_generation = self.project_disk_generation.load(Ordering::SeqCst);
+            let workspace_root = self.workspace_root.read().await.clone();
+            let fallback_root = workspace_root.clone();
+            let mut rebuilt = match tokio::task::spawn_blocking(move || {
+                workspace_root
+                    .as_deref()
+                    .map_or_else(|| ProjectIndex::new(None), ProjectIndex::build)
+            })
+            .await
+            {
+                Ok(index) => index,
+                Err(error) => {
+                    self.client
+                        .log_message(
+                            MessageType::ERROR,
+                            format!("Failed to rebuild project index: {error}"),
+                        )
+                        .await;
+                    ProjectIndex::new(fallback_root)
+                }
+            };
 
-        for (path, overlay) in open_docs {
-            if is_solidity_path(path) {
-                rebuilt.update_file(path, &overlay.source);
+            let documents = self.documents.read().await;
+            for uri in documents.uris() {
+                let Some(document) = documents.get(uri) else {
+                    continue;
+                };
+                let path = normalize_path(&uri_to_path(uri));
+                if is_solidity_path(&path) {
+                    rebuilt.update_file(&path, &document.content);
+                }
             }
-        }
 
-        let indexed_files = rebuilt.indexed_file_count();
-        *self.project_index.write().await = rebuilt;
-        self.project_index_ready.store(true, Ordering::SeqCst);
-        send_project_index_status(
-            &self.client,
-            "ready",
-            indexed_files,
-            Some(started_at.elapsed().as_millis()),
-        )
-        .await;
-        let _ = self.client.code_lens_refresh().await;
+            let mut live_index = self.project_index.write().await;
+            if self.project_disk_generation.load(Ordering::SeqCst) != disk_generation {
+                drop(live_index);
+                drop(documents);
+                continue;
+            }
+
+            let indexed_files = rebuilt.indexed_file_count();
+            *live_index = rebuilt;
+            self.project_generation.fetch_add(1, Ordering::SeqCst);
+            self.project_index_ready.store(true, Ordering::SeqCst);
+            drop(live_index);
+            drop(documents);
+
+            send_project_index_status(
+                &self.client,
+                "ready",
+                indexed_files,
+                Some(started_at.elapsed().as_millis()),
+            )
+            .await;
+            let _ = self.client.code_lens_refresh().await;
+            let _ = self.client.semantic_tokens_refresh().await;
+            break;
+        }
     }
 
     async fn publish_config_error(&self, uri: &Uri, version: Option<i32>, error: &str) {
@@ -317,6 +362,101 @@ impl SolgridServer {
         }
     }
 
+    fn schedule_relint_paths(&self, paths: Vec<PathBuf>) {
+        let server = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(CHANGE_LINT_DEBOUNCE).await;
+            let generation = server.project_generation.load(Ordering::SeqCst);
+            server.relint_paths(&paths, generation).await;
+        });
+    }
+
+    async fn relint_paths(&self, paths: &[PathBuf], expected_generation: u64) {
+        if self.project_generation.load(Ordering::SeqCst) != expected_generation {
+            self.schedule_relint_paths(paths.to_vec());
+            return;
+        }
+        let open_docs = self.collect_open_document_overlays().await;
+        let mut paths = paths
+            .iter()
+            .map(|path| normalize_path(path))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+
+        for path in &paths {
+            if self.project_generation.load(Ordering::SeqCst) != expected_generation {
+                self.schedule_relint_paths(paths.to_vec());
+                return;
+            }
+            let (uri, version, source) = if let Some(document) = open_docs.get(path) {
+                (
+                    document.uri.clone(),
+                    Some(document.version),
+                    document.source.clone(),
+                )
+            } else {
+                let Some(uri) = self.published_uri_for_path(path).await else {
+                    continue;
+                };
+                let Ok(source) = std::fs::read_to_string(path) else {
+                    self.clear_published_diagnostics(uri).await;
+                    continue;
+                };
+                (uri, None, source)
+            };
+
+            let result = self.lint_source(path, &source, &open_docs).await;
+            if self.project_generation.load(Ordering::SeqCst) != expected_generation {
+                self.schedule_relint_paths(paths.to_vec());
+                return;
+            }
+            if let Some(version) = version {
+                let is_current = {
+                    let documents = self.documents.read().await;
+                    documents.get(&uri).is_some_and(|document| {
+                        document.version == version && document.content == source
+                    })
+                };
+                if !is_current {
+                    continue;
+                }
+            }
+
+            match result {
+                Ok(diagnostics) => {
+                    self.publish_cached_diagnostics(uri, diagnostics, version)
+                        .await;
+                }
+                Err(error) => self.publish_config_error(&uri, version, &error).await,
+            }
+        }
+    }
+
+    async fn invalidate_pending_lint(&self, uri: &Uri) -> u64 {
+        let mut epochs = self.lint_epochs.write().await;
+        let epoch = epochs.entry(uri.clone()).or_default();
+        *epoch = epoch.saturating_add(1);
+        *epoch
+    }
+
+    async fn schedule_lint_and_publish(&self, uri: Uri) {
+        let epoch = self.invalidate_pending_lint(&uri).await;
+        let server = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(CHANGE_LINT_DEBOUNCE).await;
+            let is_current = server
+                .lint_epochs
+                .read()
+                .await
+                .get(&uri)
+                .is_some_and(|current| *current == epoch);
+            if is_current {
+                server.lint_and_publish(&uri).await;
+            }
+        });
+    }
+
     async fn lint_source(
         &self,
         path: &std::path::Path,
@@ -326,7 +466,7 @@ impl SolgridServer {
         let config = self.resolve_config_for_path(path).await?;
 
         let get_source = |candidate: &std::path::Path| -> Option<String> {
-            if let Some(document) = open_docs.get(candidate) {
+            if let Some(document) = open_docs.get(&normalize_path(candidate)) {
                 return Some(document.source.clone());
             }
             std::fs::read_to_string(candidate).ok()
@@ -335,8 +475,13 @@ impl SolgridServer {
         let (remappings, compiler_diags) = {
             let project_index = self.project_index.read().await;
             let remappings = project_index.remappings_for_file(path);
-            let compiler_diags =
-                diagnostics::compiler_to_lsp_diagnostics(&project_index, source, path, &get_source);
+            let compiler_diags = diagnostics::compiler_to_lsp_diagnostics_with_config(
+                &project_index,
+                source,
+                path,
+                &get_source,
+                &config,
+            );
             (remappings, compiler_diags)
         };
 
@@ -363,7 +508,7 @@ impl SolgridServer {
             return None;
         }
 
-        let path = uri_to_path(&args.uri);
+        let path = normalize_path(&uri_to_path(&args.uri));
         let open_docs = self.collect_open_document_overlays().await;
         let source = open_docs
             .get(&path)
@@ -371,7 +516,7 @@ impl SolgridServer {
             .or_else(|| std::fs::read_to_string(&path).ok())?;
 
         let get_source = |candidate: &std::path::Path| -> Option<String> {
-            if let Some(document) = open_docs.get(candidate) {
+            if let Some(document) = open_docs.get(&normalize_path(candidate)) {
                 return Some(document.source.clone());
             }
             std::fs::read_to_string(candidate).ok()
@@ -423,21 +568,23 @@ impl SolgridServer {
     }
 
     async fn publish_closed_file_diagnostics(&self, uri: Uri, path: std::path::PathBuf) {
-        {
+        let mut affected_paths = {
             let mut project_index = self.project_index.write().await;
             project_index.sync_closed_file(&path);
-        }
-
-        let open_docs = self.collect_open_document_overlays().await;
-        let Some(source) = std::fs::read_to_string(&path).ok() else {
-            self.clear_published_diagnostics(uri).await;
-            return;
+            project_index.transitive_import_dependents(&path)
         };
+        let refresh_semantic_dependents = !affected_paths.is_empty();
+        let generation = self.project_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
-        match self.lint_source(&path, &source, &open_docs).await {
-            Ok(lsp_diags) => self.publish_cached_diagnostics(uri, lsp_diags, None).await,
-            Err(error) => self.publish_config_error(&uri, None, &error).await,
+        if path.exists() {
+            affected_paths.push(path);
+        } else {
+            self.clear_published_diagnostics(uri).await;
         }
+        if refresh_semantic_dependents {
+            let _ = self.client.semantic_tokens_refresh().await;
+        }
+        self.relint_paths(&affected_paths, generation).await;
     }
 
     async fn published_uri_for_path(&self, path: &std::path::Path) -> Option<Uri> {
@@ -452,8 +599,8 @@ impl SolgridServer {
     async fn rerun_workspace_analysis(&self) -> WorkspaceAnalysisSummary {
         self.clear_config_cache().await;
 
+        self.rebuild_project_index().await;
         let open_docs = self.collect_open_document_overlays().await;
-        self.rebuild_project_index(&open_docs).await;
 
         let candidate_paths = {
             let project_index = self.project_index.read().await;
@@ -531,18 +678,59 @@ impl SolgridServer {
 
     /// Lint a document and publish diagnostics to the client.
     async fn lint_and_publish(&self, uri: &Uri) {
-        let open_docs = self.collect_open_document_overlays().await;
-        let path = uri_to_path(uri);
-        let Some(document) = open_docs.get(&path) else {
-            return;
+        let (open_docs, path, document, dependents, generation) = loop {
+            // Snapshot every overlay while holding the document read lock, then
+            // update the index under the same lock. An imported didChange cannot
+            // slip between the snapshot and this file's generation increment.
+            let documents = self.documents.read().await;
+            let open_docs = documents
+                .uris()
+                .filter_map(|open_uri| {
+                    let document = documents.get(open_uri)?;
+                    Some((
+                        normalize_path(&uri_to_path(open_uri)),
+                        OpenDocumentOverlay {
+                            uri: document.uri.clone(),
+                            source: document.content.clone(),
+                            version: document.version,
+                        },
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            let path = normalize_path(&uri_to_path(uri));
+            let Some(document) = open_docs.get(&path).cloned() else {
+                return;
+            };
+            let input_generation = self.project_generation.load(Ordering::SeqCst);
+            let mut project_index = self.project_index.write().await;
+            if self.project_generation.load(Ordering::SeqCst) != input_generation {
+                drop(project_index);
+                drop(documents);
+                continue;
+            }
+            project_index.update_file(&path, &document.source);
+            let dependents = project_index.transitive_import_dependents(&path);
+            let generation = self.project_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            drop(project_index);
+            drop(documents);
+            break (open_docs, path, document, dependents, generation);
         };
 
-        {
-            let mut project_index = self.project_index.write().await;
-            project_index.update_file(&path, &document.source);
+        let result = self.lint_source(&path, &document.source, &open_docs).await;
+        let is_current = {
+            let documents = self.documents.read().await;
+            documents.get(uri).is_some_and(|current| {
+                current.version == document.version && current.content == document.source
+            })
+        };
+        if !is_current || self.project_generation.load(Ordering::SeqCst) != generation {
+            let mut retry_paths = dependents;
+            retry_paths.push(path);
+            self.schedule_relint_paths(retry_paths);
+            return;
         }
 
-        match self.lint_source(&path, &document.source, &open_docs).await {
+        match result {
             Ok(lsp_diags) => {
                 self.publish_cached_diagnostics(uri.clone(), lsp_diags, Some(document.version))
                     .await;
@@ -552,55 +740,10 @@ impl SolgridServer {
                     .await;
             }
         }
-    }
-
-    /// Apply fix-on-save and/or format-on-save edits.
-    async fn on_save_actions(&self, uri: &Uri) {
-        let settings = self.settings.read().await.clone();
-        let documents = self.documents.read().await;
-        let doc = match documents.get(uri) {
-            Some(doc) => doc,
-            None => return,
-        };
-
-        let source = doc.content.clone();
-        drop(documents);
-
-        let path = uri_to_path(uri);
-        let Ok(config) = self.resolve_config_for_path(&path).await else {
-            return;
-        };
-        let mut current_source = source;
-        let remappings = self.project_index.read().await.remappings_for_file(&path);
-
-        // Apply safe fixes
-        if settings.fix_on_save {
-            let engine = self.engine.read().await;
-            let (fixed, _remaining) = engine.fix_source_with_remappings(
-                &current_source,
-                &path,
-                &config,
-                settings.fix_on_save_unsafe,
-                &remappings,
-            );
-            drop(engine);
-            current_source = fixed;
+        if !dependents.is_empty() {
+            let _ = self.client.semantic_tokens_refresh().await;
         }
-
-        // Apply formatting
-        if settings.format_on_save {
-            if let Ok(formatted) = solgrid_formatter::format_source(&current_source, &config.format)
-            {
-                current_source = formatted;
-            }
-        }
-
-        // If the source changed, the client should apply the edits and
-        // the next did_change will re-lint. The LSP doesn't directly support
-        // server-initiated edits on save via textDocument/didSave, so the
-        // client extension handles this by watching for will_save_wait_until.
-        // We store the result for the will_save handler.
-        let _ = current_source;
+        self.relint_paths(&dependents, generation).await;
     }
 }
 
@@ -641,24 +784,11 @@ impl LanguageServer for SolgridServer {
                 *self.project_index.write().await = ProjectIndex::new(Some(root_path.clone()));
                 self.project_index_ready.store(false, Ordering::SeqCst);
 
-                // Build the full project index in the background.
-                let project_index = self.project_index.clone();
-                let project_index_ready = self.project_index_ready.clone();
-                let client = self.client.clone();
+                // Rebuild off-thread and atomically merge the latest open
+                // buffers before replacing the provisional live index.
+                let server = self.clone();
                 tokio::spawn(async move {
-                    let started_at = Instant::now();
-                    let built = ProjectIndex::build(&root_path);
-                    let indexed_files = built.indexed_file_count();
-                    *project_index.write().await = built;
-                    project_index_ready.store(true, Ordering::SeqCst);
-                    send_project_index_status(
-                        &client,
-                        "ready",
-                        indexed_files,
-                        Some(started_at.elapsed().as_millis()),
-                    )
-                    .await;
-                    let _ = client.code_lens_refresh().await;
+                    server.rebuild_project_index().await;
                 });
             }
         } else if let Some(settings) = &init_settings {
@@ -667,6 +797,7 @@ impl LanguageServer for SolgridServer {
                 *config_path_slot = Some(resolve_config_path(config_path, None));
             }
             *self.project_index.write().await = ProjectIndex::new(None);
+            self.project_generation.fetch_add(1, Ordering::SeqCst);
             self.project_index_ready.store(true, Ordering::SeqCst);
         }
 
@@ -789,8 +920,10 @@ impl LanguageServer for SolgridServer {
                 params.text_document.version,
             );
         }
+        self.project_generation.fetch_add(1, Ordering::SeqCst);
         self.set_pending_save_document(&uri, None).await;
 
+        self.invalidate_pending_lint(&uri).await;
         self.lint_and_publish(&uri).await;
     }
 
@@ -804,15 +937,16 @@ impl LanguageServer for SolgridServer {
         if let Some(change) = params.content_changes.into_iter().last() {
             let mut documents = self.documents.write().await;
             documents.update(&uri, change.text, params.text_document.version);
+            self.project_generation.fetch_add(1, Ordering::SeqCst);
         }
         self.set_pending_save_document(&uri, None).await;
 
-        self.lint_and_publish(&uri).await;
+        self.schedule_lint_and_publish(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
-        let path = uri_to_path(&uri);
+        let path = normalize_path(&uri_to_path(&uri));
         let config_path = self.config_path.read().await.clone();
         let refresh_config = is_config_refresh_path(&path, config_path.as_deref());
         let refresh_workspace_state = is_workspace_state_refresh_path(&path);
@@ -824,6 +958,7 @@ impl LanguageServer for SolgridServer {
         if !is_solidity_file(&uri) {
             return;
         }
+        self.project_disk_generation.fetch_add(1, Ordering::SeqCst);
 
         let saved_source = match params.text {
             Some(text) => Some(text),
@@ -832,22 +967,25 @@ impl LanguageServer for SolgridServer {
         if let Some(saved_source) = saved_source {
             let mut documents = self.documents.write().await;
             documents.set_content(&uri, saved_source);
+            self.project_generation.fetch_add(1, Ordering::SeqCst);
         }
         self.set_pending_save_document(&uri, None).await;
-        // Trigger on-save actions (fix + format)
-        self.on_save_actions(&uri).await;
-        // Re-lint after save
+        // Fixes and formatting are applied by willSaveWaitUntil; re-lint the
+        // final buffer after the corresponding didChange/didSave sequence.
+        self.invalidate_pending_lint(&uri).await;
         self.lint_and_publish(&uri).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        let path = uri_to_path(&uri);
+        let path = normalize_path(&uri_to_path(&uri));
+        self.invalidate_pending_lint(&uri).await;
         {
             let mut documents = self.documents.write().await;
             documents.close(&uri);
         }
         if is_solidity_file(&uri) {
+            self.project_disk_generation.fetch_add(1, Ordering::SeqCst);
             self.publish_closed_file_diagnostics(uri.clone(), path)
                 .await;
         } else {
@@ -880,7 +1018,7 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let config = match self.resolve_config_for_path(&path).await {
             Ok(config) => config,
             Err(_) => {
@@ -940,7 +1078,7 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let Ok(config) = self.resolve_config_for_path(&path).await else {
             return Ok(None);
         };
@@ -976,7 +1114,7 @@ impl LanguageServer for SolgridServer {
             None => return Ok(None),
         };
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let Ok(config) = self.resolve_config_for_path(&path).await else {
             return Ok(None);
         };
@@ -1003,7 +1141,7 @@ impl LanguageServer for SolgridServer {
             None => return Ok(None),
         };
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let Ok(config) = self.resolve_config_for_path(&path).await else {
             return Ok(None);
         };
@@ -1034,7 +1172,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1044,7 +1182,7 @@ impl LanguageServer for SolgridServer {
         let source = source.unwrap_or_default();
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
@@ -1080,7 +1218,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1088,7 +1226,7 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
@@ -1131,7 +1269,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1139,12 +1277,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let current_file = uri_to_path(uri);
+        let current_file = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
 
         Ok(signature_help::signature_help_at_position(
@@ -1172,7 +1310,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1180,12 +1318,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let current_file = uri_to_path(uri);
+        let current_file = normalize_path(&uri_to_path(uri));
         let detector_diagnostics = {
             let cache = self.published_diagnostics.read().await;
             cache.get(uri).cloned().unwrap_or_default()
@@ -1295,20 +1433,24 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
             .collect();
+        // Document changes bump the project generation while holding the
+        // document write lock. Capture it under this read lock so token data
+        // can never be tagged with a generation newer than its source snapshot.
+        let generation = self.project_generation.load(Ordering::SeqCst);
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let current_file = uri_to_path(uri);
+        let current_file = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let tokens = semantic::semantic_tokens(
             &source,
@@ -1318,7 +1460,7 @@ impl LanguageServer for SolgridServer {
         );
 
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-            result_id: Some(semantic_tokens_result_id(version)),
+            result_id: Some(semantic_tokens_result_id(version, generation)),
             data: tokens,
         })))
     }
@@ -1343,14 +1485,15 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
             .collect();
+        let generation = self.project_generation.load(Ordering::SeqCst);
         drop(documents);
 
-        let current_result_id = semantic_tokens_result_id(version);
+        let current_result_id = semantic_tokens_result_id(version, generation);
         if params.previous_result_id == current_result_id {
             return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
                 SemanticTokensDelta {
@@ -1361,12 +1504,12 @@ impl LanguageServer for SolgridServer {
         }
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let current_file = uri_to_path(uri);
+        let current_file = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let tokens = semantic::semantic_tokens(
             &source,
@@ -1402,7 +1545,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1410,12 +1553,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let current_file = uri_to_path(uri);
+        let current_file = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let start = convert::position_to_offset(&source, params.range.start);
         let end = convert::position_to_offset(&source, params.range.end);
@@ -1453,7 +1596,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1462,7 +1605,7 @@ impl LanguageServer for SolgridServer {
 
         let get_source = |path: &std::path::Path| -> Option<String> {
             // Check open documents first, then fall back to disk.
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
@@ -1494,7 +1637,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1502,12 +1645,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let references = project_index.find_references(
             &path,
@@ -1542,7 +1685,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1550,12 +1693,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let Some(plan) = project_index.rename_plan(&path, &source, params.position, &get_source)
         else {
@@ -1587,7 +1730,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1595,12 +1738,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let Some(plan) = project_index.rename_plan(
             &path,
@@ -1647,7 +1790,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1655,12 +1798,12 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let Some(entry) = project_index.prepare_call_hierarchy(
             &path,
@@ -1689,14 +1832,14 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
             .collect();
         drop(documents);
 
-        let path = uri_to_path(&data.uri);
+        let path = normalize_path(&uri_to_path(&data.uri));
         let Some(source) = open_docs
             .get(&path)
             .cloned()
@@ -1706,7 +1849,7 @@ impl LanguageServer for SolgridServer {
         };
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
@@ -1745,14 +1888,14 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
             .collect();
         drop(documents);
 
-        let path = uri_to_path(&data.uri);
+        let path = normalize_path(&uri_to_path(&data.uri));
         let Some(source) = open_docs
             .get(&path)
             .cloned()
@@ -1762,7 +1905,7 @@ impl LanguageServer for SolgridServer {
         };
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
@@ -1803,7 +1946,7 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         Ok(self
             .project_index
             .read()
@@ -1837,7 +1980,7 @@ impl LanguageServer for SolgridServer {
         let source = doc.content.clone();
         drop(documents);
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let links = self
             .project_index
             .read()
@@ -1865,7 +2008,7 @@ impl LanguageServer for SolgridServer {
         let open_docs: std::collections::HashMap<std::path::PathBuf, String> = documents
             .uris()
             .filter_map(|u| {
-                let path = uri_to_path(u);
+                let path = normalize_path(&uri_to_path(u));
                 let content = documents.get(u).map(|d| d.content.clone())?;
                 Some((path, content))
             })
@@ -1873,13 +2016,13 @@ impl LanguageServer for SolgridServer {
         drop(documents);
 
         let get_source = |path: &std::path::Path| -> Option<String> {
-            if let Some(content) = open_docs.get(path) {
+            if let Some(content) = open_docs.get(&normalize_path(path)) {
                 return Some(content.clone());
             }
             std::fs::read_to_string(path).ok()
         };
 
-        let path = uri_to_path(uri);
+        let path = normalize_path(&uri_to_path(uri));
         let project_index = self.project_index.read().await;
         let mut lenses = if self.project_index_ready.load(Ordering::SeqCst) {
             project_index.code_lenses(&path, &source, &get_source)
@@ -1901,35 +2044,53 @@ impl LanguageServer for SolgridServer {
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         let explicit_config_path = self.config_path.read().await.clone();
+        let changes = params.changes;
+        if changes.iter().any(|change| {
+            let path = uri_to_path(&change.uri);
+            is_solidity_path(&path)
+                || is_config_refresh_path(&path, explicit_config_path.as_deref())
+                || is_workspace_state_refresh_path(&path)
+        }) {
+            self.project_disk_generation.fetch_add(1, Ordering::SeqCst);
+        }
         let mut rerun_workspace_analysis = false;
-        let mut relint_documents = false;
+        let mut affected_paths = Vec::new();
         let mut deleted_paths = Vec::new();
+        let open_paths = self
+            .collect_open_document_overlays()
+            .await
+            .into_keys()
+            .collect::<HashSet<_>>();
 
         {
             let mut project_index = self.project_index.write().await;
-            for change in params.changes {
-                let path = uri_to_path(&change.uri);
+            for change in changes {
+                let path = normalize_path(&uri_to_path(&change.uri));
                 if is_config_refresh_path(&path, explicit_config_path.as_deref()) {
                     rerun_workspace_analysis = true;
-                    relint_documents = true;
                 }
                 if is_workspace_state_refresh_path(&path) {
                     rerun_workspace_analysis = true;
-                    relint_documents = true;
                     continue;
                 }
                 if path.extension().and_then(|ext| ext.to_str()) == Some("sol") {
-                    match change.typ {
-                        FileChangeType::DELETED => {
-                            project_index.remove_file(&path);
-                            deleted_paths.push(path);
+                    if !open_paths.contains(&path) {
+                        match change.typ {
+                            FileChangeType::DELETED => {
+                                project_index.remove_file(&path);
+                                deleted_paths.push(path.clone());
+                            }
+                            _ => project_index.sync_closed_file(&path),
                         }
-                        _ => project_index.sync_closed_file(&path),
                     }
-                    relint_documents = true;
+                    affected_paths.extend(project_index.transitive_import_dependents(&path));
+                    affected_paths.push(path);
                 }
             }
         }
+
+        let analysis_generation = (!affected_paths.is_empty())
+            .then(|| self.project_generation.fetch_add(1, Ordering::SeqCst) + 1);
 
         if rerun_workspace_analysis {
             self.rerun_workspace_analysis().await;
@@ -1944,8 +2105,9 @@ impl LanguageServer for SolgridServer {
                 self.clear_published_diagnostics(uri).await;
             }
         }
-        if relint_documents {
-            self.relint_open_documents().await;
+        if let Some(generation) = analysis_generation {
+            let _ = self.client.semantic_tokens_refresh().await;
+            self.relint_paths(&affected_paths, generation).await;
         }
     }
 
@@ -2379,6 +2541,156 @@ fn is_valid_solidity_identifier(name: &str) -> bool {
         return false;
     }
     chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        && !is_solidity_reserved_identifier(name)
+}
+
+fn is_solidity_reserved_identifier(name: &str) -> bool {
+    matches!(
+        name,
+        "abstract"
+            | "after"
+            | "alias"
+            | "anonymous"
+            | "apply"
+            | "as"
+            | "assembly"
+            | "auto"
+            | "break"
+            | "byte"
+            | "calldata"
+            | "case"
+            | "catch"
+            | "constant"
+            | "constructor"
+            | "continue"
+            | "contract"
+            | "copyof"
+            | "days"
+            | "default"
+            | "define"
+            | "delete"
+            | "do"
+            | "else"
+            | "emit"
+            | "enum"
+            | "error"
+            | "ether"
+            | "event"
+            | "external"
+            | "fallback"
+            | "false"
+            | "final"
+            | "finney"
+            | "for"
+            | "from"
+            | "function"
+            | "gwei"
+            | "hours"
+            | "if"
+            | "immutable"
+            | "implements"
+            | "import"
+            | "in"
+            | "indexed"
+            | "inline"
+            | "interface"
+            | "internal"
+            | "is"
+            | "let"
+            | "library"
+            | "macro"
+            | "mapping"
+            | "match"
+            | "memory"
+            | "minutes"
+            | "modifier"
+            | "mutable"
+            | "new"
+            | "null"
+            | "of"
+            | "override"
+            | "partial"
+            | "payable"
+            | "pragma"
+            | "private"
+            | "promise"
+            | "public"
+            | "pure"
+            | "receive"
+            | "reference"
+            | "relocatable"
+            | "return"
+            | "returns"
+            | "revert"
+            | "sealed"
+            | "seconds"
+            | "sizeof"
+            | "static"
+            | "storage"
+            | "struct"
+            | "supports"
+            | "switch"
+            | "szabo"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "type"
+            | "typedef"
+            | "typeof"
+            | "unchecked"
+            | "unicode"
+            | "using"
+            | "var"
+            | "view"
+            | "virtual"
+            | "weeks"
+            | "wei"
+            | "while"
+            | "years"
+    ) || is_solidity_elementary_type(name)
+}
+
+fn is_solidity_elementary_type(name: &str) -> bool {
+    if matches!(
+        name,
+        "address" | "bool" | "string" | "bytes" | "fixed" | "ufixed"
+    ) {
+        return true;
+    }
+    if let Some(width) = name.strip_prefix("bytes") {
+        return width
+            .parse::<u8>()
+            .is_ok_and(|width| (1..=32).contains(&width));
+    }
+    for prefix in ["uint", "int"] {
+        if name == prefix {
+            return true;
+        }
+        if let Some(width) = name.strip_prefix(prefix) {
+            return width
+                .parse::<u16>()
+                .is_ok_and(|width| (8..=256).contains(&width) && width % 8 == 0);
+        }
+    }
+    for prefix in ["fixed", "ufixed"] {
+        let Some((integer_bits, fractional_digits)) = name
+            .strip_prefix(prefix)
+            .and_then(|suffix| suffix.split_once('x'))
+        else {
+            continue;
+        };
+        if integer_bits
+            .parse::<u16>()
+            .is_ok_and(|width| (8..=256).contains(&width) && width % 8 == 0)
+            && fractional_digits
+                .parse::<u8>()
+                .is_ok_and(|digits| (1..=80).contains(&digits))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Convert a URI to a filesystem path.
@@ -2397,8 +2709,8 @@ fn path_to_uri_option(path: &std::path::Path) -> Option<Uri> {
     Uri::from_file_path(path)
 }
 
-fn semantic_tokens_result_id(version: i32) -> String {
-    format!("v{version}")
+fn semantic_tokens_result_id(version: i32, project_generation: u64) -> String {
+    format!("v{version}-p{project_generation}")
 }
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
@@ -2524,6 +2836,45 @@ mod tests {
         let uri: Uri = "file:///home/user/test.sol".parse().unwrap();
         let path = uri_to_path(&uri);
         assert_eq!(path, PathBuf::from("/home/user/test.sol"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_normalize_path_unifies_symlinked_overlay_paths() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let source = real.join("Imported.sol");
+        std::fs::write(&source, "contract Imported {}").unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&real, &alias).unwrap();
+
+        assert_eq!(
+            normalize_path(&source),
+            normalize_path(&alias.join("Imported.sol"))
+        );
+    }
+
+    #[test]
+    fn test_rename_identifier_rejects_solidity_reserved_words_and_types() {
+        assert!(is_valid_solidity_identifier("newOwner"));
+        assert!(is_valid_solidity_identifier("_value2"));
+        assert!(!is_valid_solidity_identifier("contract"));
+        assert!(!is_valid_solidity_identifier("address"));
+        assert!(!is_valid_solidity_identifier("uint256"));
+        assert!(!is_valid_solidity_identifier("bytes32"));
+        assert!(!is_valid_solidity_identifier("8value"));
+    }
+
+    #[test]
+    fn test_semantic_token_result_id_includes_project_generation() {
+        assert_eq!(semantic_tokens_result_id(7, 11), "v7-p11");
+        assert_ne!(
+            semantic_tokens_result_id(7, 11),
+            semantic_tokens_result_id(7, 12)
+        );
     }
 
     #[test]

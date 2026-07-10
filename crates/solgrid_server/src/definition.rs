@@ -3,9 +3,9 @@
 use crate::convert;
 use crate::resolve::ImportResolver;
 use crate::symbols::{self, ImportedSymbols, SymbolDef, SymbolKind, SymbolTable, TypePath};
-use solgrid_parser::solar_ast::{self, ItemKind};
+use solgrid_parser::solar_ast::{self, ItemKind, Visibility};
 use solgrid_parser::with_parsed_ast_sequential;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
 
@@ -142,17 +142,23 @@ pub fn goto_definition(
         ));
     }
 
-    if let Some(cross) =
-        resolve_inherited_member_symbol(source, offset, &name, uri, &table, get_source, resolver)
-    {
-        let range = convert::span_to_range(&cross.source, &cross.def.name_span);
-        let target_uri = path_to_uri(&cross.resolved_path)?;
-        return Some(ls_types::GotoDefinitionResponse::Scalar(
-            ls_types::Location {
-                uri: target_uri,
-                range,
-            },
-        ));
+    let inherited =
+        resolve_inherited_member_symbols(source, offset, &name, uri, &table, get_source, resolver);
+    if !inherited.is_empty() {
+        let locations = inherited
+            .into_iter()
+            .filter_map(|cross| {
+                Some(ls_types::Location {
+                    uri: path_to_uri(&cross.resolved_path)?,
+                    range: convert::span_to_range(&cross.source, &cross.def.name_span),
+                })
+            })
+            .collect::<Vec<_>>();
+        return match locations.as_slice() {
+            [] => None,
+            [location] => Some(ls_types::GotoDefinitionResponse::Scalar(location.clone())),
+            _ => Some(ls_types::GotoDefinitionResponse::Array(locations)),
+        };
     }
 
     None
@@ -196,13 +202,8 @@ struct ResolvedContainer {
     path: PathBuf,
 }
 
-/// Resolve an unqualified member through the containing contract's base chain.
-///
-/// Solidity makes inherited members from base contracts/interfaces available
-/// inside the derived contract body without qualification, including custom
-/// errors, events, modifiers, functions, and state variables. This helper
-/// returns the concrete definition so LSP features can share the same lookup.
-pub(crate) fn resolve_inherited_member_symbol(
+/// Resolve the accessible overload set for an unqualified inherited member.
+pub(crate) fn resolve_inherited_member_symbols(
     source: &str,
     offset: usize,
     member_name: &str,
@@ -210,82 +211,223 @@ pub(crate) fn resolve_inherited_member_symbol(
     table: &SymbolTable,
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
-) -> Option<CrossFileSymbol> {
-    let current_path = uri_to_path(uri)?;
+) -> Vec<CrossFileSymbol> {
+    let Some(current_path) = uri_to_path(uri) else {
+        return Vec::new();
+    };
     let filename = current_path.to_string_lossy().to_string();
-    let bases = contract_bases_containing_offset(source, &filename, offset)?;
+    let Some((contract_def, bases)) =
+        contract_context_containing_offset(source, &filename, offset, table)
+    else {
+        return Vec::new();
+    };
     let current = ResolvedContainer {
         source: source.to_string(),
         table: table.clone(),
-        def: SymbolDef {
-            name: String::new(),
-            kind: SymbolKind::Contract,
-            name_span: 0..0,
-            def_span: 0..source.len(),
-            scope: None,
-            type_info: None,
-            signature: None,
-            visibility: None,
-        },
+        def: contract_def,
         path: current_path,
     };
-    let mut visited = HashSet::new();
-    let resolved = resolve_inherited_member_from_bases(
+    let mut cache = HashMap::new();
+    let mut active = HashSet::new();
+    let Some(linearized) = linearized_inheritance_order(
         &current,
-        &bases,
-        member_name,
+        Some(&bases),
         get_source,
         resolver,
-        &mut visited,
-    )?;
-    Some(CrossFileSymbol {
-        source: resolved.source,
-        table: resolved.table,
-        def: resolved.def,
-        resolved_path: resolved.path,
-    })
-}
-
-fn resolve_inherited_member_from_bases(
-    current: &ResolvedContainer,
-    bases: &[TypePath],
-    member_name: &str,
-    get_source: &dyn Fn(&Path) -> Option<String>,
-    resolver: &ImportResolver,
-    visited: &mut HashSet<(PathBuf, usize)>,
-) -> Option<ResolvedContainer> {
-    for base in bases {
-        let Some(container) = resolve_container_path(current, base, get_source, resolver) else {
-            continue;
-        };
-        if !visited.insert((container.path.clone(), container.def.name_span.start)) {
-            continue;
-        }
-
-        if let Some(member_def) = container.table.resolve_member(&container.def, member_name) {
-            return Some(ResolvedContainer {
+        &mut cache,
+        &mut active,
+    ) else {
+        return Vec::new();
+    };
+    let mut seen = HashSet::new();
+    let mut resolved = Vec::new();
+    for container in linearized.into_iter().skip(1) {
+        for member in container
+            .table
+            .resolve_member_all(&container.def, member_name)
+        {
+            let identity = inherited_member_lookup_identity(member);
+            if !seen.insert(identity) {
+                continue;
+            }
+            if !inherited_member_is_unqualified_accessible(member) {
+                continue;
+            }
+            resolved.push(CrossFileSymbol {
                 source: container.source.clone(),
                 table: container.table.clone(),
-                def: member_def.clone(),
-                path: container.path.clone(),
+                def: (*member).clone(),
+                resolved_path: container.path.clone(),
             });
         }
+    }
+    resolved
+}
 
-        let filename = container.path.to_string_lossy().to_string();
-        let base_bases = contract_bases_for_def(&container.source, &filename, &container.def);
-        if let Some(resolved) = resolve_inherited_member_from_bases(
-            &container,
-            &base_bases,
-            member_name,
-            get_source,
-            resolver,
-            visited,
-        ) {
-            return Some(resolved);
+fn inherited_member_is_unqualified_accessible(def: &SymbolDef) -> bool {
+    def.visibility != Some(Visibility::Private)
+        && !(def.kind == SymbolKind::Function && def.visibility == Some(Visibility::External))
+}
+
+fn inherited_member_lookup_identity(def: &SymbolDef) -> (SymbolKind, String) {
+    let signature = def.signature.as_ref().map_or_else(
+        || def.name.clone(),
+        |signature| {
+            let parameters = signature
+                .parameters
+                .iter()
+                .map(|parameter| inherited_parameter_type_identity(&parameter.label))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}({parameters})", def.name)
+        },
+    );
+    (def.kind, signature)
+}
+
+fn inherited_parameter_type_identity(label: &str) -> String {
+    let trimmed = label.trim();
+    let type_text = trimmed
+        .rsplit_once(char::is_whitespace)
+        .filter(|(_, last)| is_solidity_identifier(last) && !is_parameter_modifier(last))
+        .map_or(trimmed, |(prefix, _)| prefix.trim_end());
+    let normalized = type_text
+        .split_whitespace()
+        .filter(|part| !matches!(*part, "memory" | "storage" | "calldata"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (alias, canonical) in [
+        ("uint", "uint256"),
+        ("int", "int256"),
+        ("fixed", "fixed128x18"),
+        ("ufixed", "ufixed128x18"),
+    ] {
+        if normalized == alias {
+            return canonical.to_string();
+        }
+        if normalized
+            .strip_prefix(alias)
+            .is_some_and(|suffix| suffix.starts_with('['))
+        {
+            return normalized.replacen(alias, canonical, 1);
         }
     }
+    normalized
+}
 
-    None
+fn is_solidity_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first == '$' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+}
+
+fn is_parameter_modifier(value: &str) -> bool {
+    matches!(
+        value,
+        "memory" | "storage" | "calldata" | "payable" | "indexed"
+    )
+}
+
+fn linearized_inheritance_order(
+    current: &ResolvedContainer,
+    known_bases: Option<&[TypePath]>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    cache: &mut HashMap<(PathBuf, usize), Vec<ResolvedContainer>>,
+    active: &mut HashSet<(PathBuf, usize)>,
+) -> Option<Vec<ResolvedContainer>> {
+    let key = resolved_container_key(current);
+    if let Some(cached) = cache.get(&key) {
+        return Some(cached.clone());
+    }
+    if !active.insert(key.clone()) {
+        return None;
+    }
+
+    let owned_bases;
+    let bases = if let Some(bases) = known_bases {
+        bases
+    } else {
+        let filename = current.path.to_string_lossy().to_string();
+        owned_bases = contract_bases_for_def(&current.source, &filename, &current.def);
+        &owned_bases
+    };
+    let mut direct_bases = Vec::new();
+    for base in bases {
+        let Some(container) = resolve_container_path(current, base, get_source, resolver) else {
+            active.remove(&key);
+            return None;
+        };
+        direct_bases.push(container);
+    }
+    // Solidity gives precedence to the rightmost direct base.
+    direct_bases.reverse();
+
+    let mut sequences = Vec::new();
+    for base in &direct_bases {
+        let Some(linearized) =
+            linearized_inheritance_order(base, None, get_source, resolver, cache, active)
+        else {
+            active.remove(&key);
+            return None;
+        };
+        sequences.push(linearized);
+    }
+    sequences.push(direct_bases);
+    let Some(merged) = merge_linearized_containers(sequences) else {
+        active.remove(&key);
+        return None;
+    };
+
+    let mut result = Vec::with_capacity(1 + merged.len());
+    result.push(current.clone());
+    result.extend(merged);
+    active.remove(&key);
+    cache.insert(key, result.clone());
+    Some(result)
+}
+
+fn merge_linearized_containers(
+    mut sequences: Vec<Vec<ResolvedContainer>>,
+) -> Option<Vec<ResolvedContainer>> {
+    let mut merged: Vec<ResolvedContainer> = Vec::new();
+    while sequences.iter().any(|sequence| !sequence.is_empty()) {
+        let candidate = sequences
+            .iter()
+            .filter_map(|sequence| sequence.first())
+            .find(|candidate| {
+                let key = resolved_container_key(candidate);
+                sequences.iter().all(|sequence| {
+                    !sequence
+                        .iter()
+                        .skip(1)
+                        .any(|entry| resolved_container_key(entry) == key)
+                })
+            })?;
+        let candidate_key = resolved_container_key(candidate);
+        if !merged
+            .iter()
+            .any(|entry| resolved_container_key(entry) == candidate_key)
+        {
+            merged.push(candidate.clone());
+        }
+        for sequence in &mut sequences {
+            if sequence
+                .first()
+                .is_some_and(|entry| resolved_container_key(entry) == candidate_key)
+            {
+                sequence.remove(0);
+            }
+        }
+    }
+    Some(merged)
+}
+
+fn resolved_container_key(container: &ResolvedContainer) -> (PathBuf, usize) {
+    (container.path.clone(), container.def.name_span.start)
 }
 
 fn resolve_container_path(
@@ -341,11 +483,12 @@ fn resolve_container_path(
     }
 }
 
-fn contract_bases_containing_offset(
+fn contract_context_containing_offset(
     source: &str,
     filename: &str,
     offset: usize,
-) -> Option<Vec<TypePath>> {
+    table: &SymbolTable,
+) -> Option<(SymbolDef, Vec<TypePath>)> {
     with_parsed_ast_sequential(source, filename, |source_unit| {
         for item in source_unit.items.iter() {
             let ItemKind::Contract(contract) = &item.kind else {
@@ -353,7 +496,13 @@ fn contract_bases_containing_offset(
             };
             let item_span = solgrid_ast::span_to_range(item.span);
             if item_span.contains(&offset) {
-                return Some(ast_bases_to_type_paths(contract.bases.iter()));
+                let name_span = solgrid_ast::span_to_range(contract.name.span);
+                let def = table
+                    .file_level_symbols()
+                    .iter()
+                    .find(|def| def.name_span == name_span)?
+                    .clone();
+                return Some((def, ast_bases_to_type_paths(contract.bases.iter())));
             }
         }
         None
@@ -1224,5 +1373,170 @@ contract Test {
         } else {
             panic!("expected scalar response");
         }
+    }
+
+    #[test]
+    fn test_inherited_lookup_uses_solidity_c3_precedence() {
+        let source = r#"
+contract A {
+    function selected() internal virtual {}
+}
+contract B is A {
+    function selected() internal virtual override {}
+}
+contract D is A {}
+contract C is B, D {
+    function run() internal { selected(); }
+}
+"#;
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), source).unwrap();
+        let uri = ls_types::Uri::from_file_path(path.path()).unwrap();
+        let table = symbols::build_symbol_table(source, "C.sol").unwrap();
+        let offset = source.find("selected();").unwrap();
+        let resolved = resolve_inherited_member_symbols(
+            source,
+            offset,
+            "selected",
+            &uri,
+            &table,
+            &noop_source,
+            &noop_resolver(),
+        )
+        .into_iter()
+        .next()
+        .expect("inherited function should resolve");
+
+        let expected = source
+            .find("function selected() internal virtual override")
+            .unwrap()
+            + "function ".len();
+        assert_eq!(resolved.def.name_span.start, expected);
+    }
+
+    #[test]
+    fn test_inherited_lookup_does_not_expose_private_members() {
+        let source = r#"
+contract Base {
+    function hidden() private {}
+}
+contract Derived is Base {
+    function run() internal { hidden(); }
+}
+"#;
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), source).unwrap();
+        let uri = ls_types::Uri::from_file_path(path.path()).unwrap();
+        let table = symbols::build_symbol_table(source, "Derived.sol").unwrap();
+        let offset = source.find("hidden();").unwrap();
+
+        assert!(resolve_inherited_member_symbols(
+            source,
+            offset,
+            "hidden",
+            &uri,
+            &table,
+            &noop_source,
+            &noop_resolver(),
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_inherited_lookup_combines_distinct_overloads_across_c3_order() {
+        let source = r#"
+contract A {
+    function overloaded(uint256 value) internal {}
+}
+contract B is A {
+    function overloaded(address value) internal {}
+}
+contract C is B {
+    function run() internal { overloaded(1); }
+}
+"#;
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), source).unwrap();
+        let uri = ls_types::Uri::from_file_path(path.path()).unwrap();
+        let table = symbols::build_symbol_table(source, "C.sol").unwrap();
+        let offset = source.find("overloaded(1)").unwrap();
+
+        let resolved = resolve_inherited_member_symbols(
+            source,
+            offset,
+            "overloaded",
+            &uri,
+            &table,
+            &noop_source,
+            &noop_resolver(),
+        );
+        let labels = resolved
+            .iter()
+            .filter_map(|symbol| symbol.def.signature.as_ref())
+            .map(|signature| signature.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(labels.len(), 2);
+        assert!(labels.iter().any(|label| label.contains("address value")));
+        assert!(labels.iter().any(|label| label.contains("uint256 value")));
+    }
+
+    #[test]
+    fn test_inherited_lookup_excludes_external_functions_from_unqualified_calls() {
+        let source = r#"
+contract Base {
+    function externalOnly() external {}
+}
+contract Derived is Base {
+    function run() internal { externalOnly(); }
+}
+"#;
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), source).unwrap();
+        let uri = ls_types::Uri::from_file_path(path.path()).unwrap();
+        let table = symbols::build_symbol_table(source, "Derived.sol").unwrap();
+        let offset = source.find("externalOnly();").unwrap();
+
+        assert!(resolve_inherited_member_symbols(
+            source,
+            offset,
+            "externalOnly",
+            &uri,
+            &table,
+            &noop_source,
+            &noop_resolver(),
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn test_inaccessible_nearest_override_shadows_lower_signature() {
+        let source = r#"
+contract Base {
+    function shadowed(uint256 value) public virtual {}
+}
+contract Middle is Base {
+    function shadowed(uint256 value) external override {}
+}
+contract Derived is Middle {
+    function run() internal { shadowed(1); }
+}
+"#;
+        let path = tempfile::NamedTempFile::new().unwrap();
+        fs::write(path.path(), source).unwrap();
+        let uri = ls_types::Uri::from_file_path(path.path()).unwrap();
+        let table = symbols::build_symbol_table(source, "Derived.sol").unwrap();
+        let offset = source.find("shadowed(1)").unwrap();
+
+        assert!(resolve_inherited_member_symbols(
+            source,
+            offset,
+            "shadowed",
+            &uri,
+            &table,
+            &noop_source,
+            &noop_resolver(),
+        )
+        .is_empty());
     }
 }

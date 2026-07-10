@@ -12,7 +12,8 @@ use solgrid_parser::solar_ast::{
     Visibility,
 };
 use solgrid_parser::with_parsed_ast_sequential;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokensLegend,
@@ -107,6 +108,7 @@ struct SemanticContext<'a> {
     current_file: Option<&'a Path>,
     get_source: &'a dyn Fn(&Path) -> Option<String>,
     resolver: &'a ImportResolver,
+    inherited_cache: &'a RefCell<HashMap<(usize, String), Vec<ResolvedDef>>>,
 }
 
 impl<'a> SemanticContext<'a> {
@@ -121,6 +123,56 @@ impl<'a> SemanticContext<'a> {
             })
     }
 
+    fn resolve_inherited_member_defs(&self, name: &str, offset: usize) -> Vec<ResolvedDef> {
+        let Some(current_file) = self.current_file else {
+            return Vec::new();
+        };
+        let Some(uri) = tower_lsp_server::ls_types::Uri::from_file_path(current_file) else {
+            return Vec::new();
+        };
+
+        let Some(contract_offset) = self
+            .table
+            .file_level_symbols()
+            .iter()
+            .find(|def| {
+                matches!(
+                    def.kind,
+                    SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+                ) && def.def_span.contains(&offset)
+            })
+            .map(|def| def.name_span.start)
+        else {
+            return Vec::new();
+        };
+        let cache_key = (contract_offset, name.to_string());
+        if let Some(cached) = self.inherited_cache.borrow().get(&cache_key) {
+            return cached.clone();
+        }
+
+        let resolved = definition::resolve_inherited_member_symbols(
+            self.source,
+            offset,
+            name,
+            &uri,
+            self.table,
+            self.get_source,
+            self.resolver,
+        )
+        .into_iter()
+        .map(|resolved| ResolvedDef {
+            table: resolved.table,
+            def: resolved.def,
+            source: Some(resolved.source),
+            origin_key: Some(resolved.resolved_path.to_string_lossy().to_string()),
+        })
+        .collect::<Vec<_>>();
+        self.inherited_cache
+            .borrow_mut()
+            .insert(cache_key, resolved.clone());
+        resolved
+    }
+
     fn resolve_ident_info(&self, ident: &solar_ast::Ident) -> Option<SemanticTokenInfo> {
         let offset = solgrid_ast::span_to_range(ident.span).start;
         if let Some(def) = self.table.resolve(ident.as_str(), offset) {
@@ -129,6 +181,11 @@ impl<'a> SemanticContext<'a> {
 
         let cross = self.resolve_cross_file_symbol_defs(ident.as_str());
         if let Some(info) = unique_semantic_token_info(&cross, self.source) {
+            return Some(info);
+        }
+
+        let inherited = self.resolve_inherited_member_defs(ident.as_str(), offset);
+        if let Some(info) = unique_semantic_token_info(&inherited, self.source) {
             return Some(info);
         }
 
@@ -683,6 +740,15 @@ impl<'a> SemanticContext<'a> {
                         }
                     }
                 }
+
+                if signatures.is_empty() {
+                    for resolved in self.resolve_inherited_member_defs(ident.as_str(), expr_offset)
+                    {
+                        if let Some(signature) = resolved.def.signature {
+                            signatures.push(signature);
+                        }
+                    }
+                }
             }
             ExprKind::Member(base, member) => {
                 for resolved in self.resolve_member_defs(base, member.as_str()) {
@@ -794,12 +860,14 @@ fn collect_raw_semantic_tokens(
     let Some(table) = symbols::build_symbol_table(source, &filename) else {
         return Vec::new();
     };
+    let inherited_cache = RefCell::new(HashMap::new());
     let semantic = SemanticContext {
         table: &table,
         source,
         current_file,
         get_source,
         resolver,
+        inherited_cache: &inherited_cache,
     };
 
     let raw = with_parsed_ast_sequential(source, &filename, |source_unit| {
@@ -1353,15 +1421,34 @@ fn semantic_token_symbol_is_readonly(def: &SymbolDef, source: Option<&str>) -> b
     match def.kind {
         SymbolKind::EnumVariant => true,
         SymbolKind::StateVariable => source
-            .and_then(|source| source.get(def.def_span.clone()))
-            .is_some_and(|snippet| {
-                snippet.contains("constant")
-                    || snippet.contains("immutable")
-                    || snippet.contains("Constant")
-                    || snippet.contains("Immutable")
-            }),
+            .is_some_and(|source| state_variable_declaration_has_readonly_modifier(def, source)),
         _ => false,
     }
+}
+
+fn state_variable_declaration_has_readonly_modifier(def: &SymbolDef, source: &str) -> bool {
+    let start = def.def_span.start.min(source.len());
+    let end = def.name_span.start.min(source.len());
+    let Some(prefix) = source.get(start..end) else {
+        return false;
+    };
+    let regions = scan_source_regions(prefix);
+    let bytes = prefix.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if is_in_non_code_region(&regions, index) || !is_ident_char(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let token_start = index;
+        while index < bytes.len() && is_ident_char(bytes[index]) {
+            index += 1;
+        }
+        if matches!(&prefix[token_start..index], "constant" | "immutable") {
+            return true;
+        }
+    }
+    false
 }
 
 fn push_ident_semantic_token(
@@ -1477,12 +1564,14 @@ pub(crate) fn member_completion_symbols(
     let Some(table) = symbols::build_symbol_table(&patched, "buffer.sol") else {
         return Vec::new();
     };
+    let inherited_cache = RefCell::new(HashMap::new());
     let semantic = SemanticContext {
         table: &table,
         source: &patched,
         current_file,
         get_source,
         resolver,
+        inherited_cache: &inherited_cache,
     };
 
     with_parsed_ast_sequential(&patched, "buffer.sol", |source_unit| {
@@ -1541,12 +1630,14 @@ pub(crate) fn signature_help_at_offset(
     let context = find_active_call_context(source, offset)?;
     let patched = patch_call_source(source, offset, context);
     let table = symbols::build_symbol_table(&patched, "buffer.sol")?;
+    let inherited_cache = RefCell::new(HashMap::new());
     let semantic = SemanticContext {
         table: &table,
         source: &patched,
         current_file,
         get_source,
         resolver,
+        inherited_cache: &inherited_cache,
     };
 
     with_parsed_ast_sequential(&patched, "buffer.sol", |source_unit| {
@@ -1604,12 +1695,14 @@ pub(crate) fn parameter_name_hints_in_range(
     let Some(table) = symbols::build_symbol_table(source, "buffer.sol") else {
         return Vec::new();
     };
+    let inherited_cache = RefCell::new(HashMap::new());
     let semantic = SemanticContext {
         table: &table,
         source,
         current_file,
         get_source,
         resolver,
+        inherited_cache: &inherited_cache,
     };
 
     with_parsed_ast_sequential(source, "buffer.sol", |source_unit| {
@@ -1620,6 +1713,11 @@ pub(crate) fn parameter_name_hints_in_range(
             let ExprKind::Call(callee, args) = &expr.kind else {
                 return;
             };
+            if matches!(args.kind, solar_ast::CallArgsKind::Named(_)) {
+                // Named arguments already carry labels and may be written in a
+                // different order than their declaration.
+                return;
+            }
             let expr_range = solgrid_ast::span_to_range(expr.span);
             if expr_range.end < start_offset || expr_range.start > end_offset {
                 return;
@@ -2536,6 +2634,89 @@ mod tests {
         );
 
         assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn test_parameter_name_hints_skip_named_arguments() {
+        let source = r#"contract Token {
+    function transfer(address recipient, uint256 amount) public {}
+
+    function run() public {
+        transfer({amount: 1, recipient: address(0)});
+    }
+}"#;
+
+        let hints = parameter_name_hints_in_range(
+            source,
+            source.find("transfer({").unwrap(),
+            source.len(),
+            None,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn test_signature_help_resolves_inherited_unqualified_calls() {
+        let source = r#"contract Base {
+    function inherited(uint256 value) internal {}
+}
+contract Derived is Base {
+    function run() internal { inherited(1); }
+}"#;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), source).unwrap();
+        let offset = source.rfind("inherited(").unwrap() + "inherited(".len();
+
+        let help = signature_help_at_offset(
+            source,
+            offset,
+            Some(file.path()),
+            &noop_source,
+            &noop_resolver(),
+        )
+        .expect("inherited call should have signature help");
+
+        assert!(help
+            .signatures
+            .iter()
+            .any(|signature| signature.label.contains("inherited(uint256 value)")));
+    }
+
+    #[test]
+    fn test_readonly_detection_matches_exact_modifiers() {
+        let source = r#"contract State {
+    uint256 nonconstantValue;
+    uint256 /* immutable */ commentedValue;
+    uint256 initializerValue = constantLike();
+    uint256 immutable actualValue;
+
+    function constantLike() internal pure returns (uint256) { return 1; }
+}"#;
+        let table = symbols::build_symbol_table(source, "State.sol").unwrap();
+        let contract = table.resolve("State", 0).expect("contract should resolve");
+        let ordinary = table
+            .resolve_member(contract, "nonconstantValue")
+            .expect("state variable should resolve");
+        let immutable = table
+            .resolve_member(contract, "actualValue")
+            .expect("immutable state variable should resolve");
+        let commented = table
+            .resolve_member(contract, "commentedValue")
+            .expect("commented state variable should resolve");
+        let initialized = table
+            .resolve_member(contract, "initializerValue")
+            .expect("initialized state variable should resolve");
+
+        assert!(!semantic_token_symbol_is_readonly(ordinary, Some(source)));
+        assert!(!semantic_token_symbol_is_readonly(commented, Some(source)));
+        assert!(!semantic_token_symbol_is_readonly(
+            initialized,
+            Some(source)
+        ));
+        assert!(semantic_token_symbol_is_readonly(immutable, Some(source)));
     }
 
     #[test]

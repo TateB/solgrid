@@ -174,32 +174,27 @@ pub fn hover_for_symbol(
         }
     }
 
-    // 2c. Try unqualified inherited members from base contracts/interfaces.
-    if let Some(tbl) = &table {
-        if let Some(cross) = definition::resolve_inherited_member_symbol(
-            source, offset, &name, uri, tbl, get_source, resolver,
-        ) {
-            let hover_range = convert::span_to_range(source, &ident_range);
-            return Some(hover_for_cross_file_symbol(
-                &cross.source,
-                &cross.def,
-                &cross.table,
-                hover_range,
-            ));
-        }
-    }
-
-    // 2d. Try Solidity global function (keccak256, require, etc.)
+    // 2c. Try Solidity globals and namespaces before the more expensive
+    // inherited-member traversal.
     if let Some(builtin) = builtins::lookup_solidity_global(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
-
-    // 2e. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
     if let Some(builtin) = builtins::lookup_solidity_namespace(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
 
-    // 2f. Try Yul built-in (only inside assembly blocks)
+    // 2d. Try unqualified inherited members from base contracts/interfaces.
+    if let Some(tbl) = &table {
+        let inherited = definition::resolve_inherited_member_symbols(
+            source, offset, &name, uri, tbl, get_source, resolver,
+        );
+        if !inherited.is_empty() {
+            let hover_range = convert::span_to_range(source, &ident_range);
+            return Some(hover_for_cross_file_symbols(&inherited, hover_range));
+        }
+    }
+
+    // 2e. Try Yul built-in (only inside assembly blocks)
     if is_inside_assembly(source, offset) {
         if let Some(builtin) = builtins::lookup_yul_builtin(&name) {
             return Some(make_builtin_hover(builtin, source, &ident_range));
@@ -279,6 +274,35 @@ fn hover_for_cross_file_symbol(
         content.push_str(doc);
     }
 
+    ls_types::Hover {
+        contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+            kind: ls_types::MarkupKind::Markdown,
+            value: content,
+        }),
+        range: Some(hover_range),
+    }
+}
+
+fn hover_for_cross_file_symbols(
+    symbols: &[definition::CrossFileSymbol],
+    hover_range: ls_types::Range,
+) -> ls_types::Hover {
+    if let [symbol] = symbols {
+        return hover_for_cross_file_symbol(
+            &symbol.source,
+            &symbol.def,
+            &symbol.table,
+            hover_range,
+        );
+    }
+
+    let mut signatures = symbols
+        .iter()
+        .map(|symbol| extract_signature(&symbol.source, &symbol.def, &symbol.table))
+        .collect::<Vec<_>>();
+    signatures.sort();
+    signatures.dedup();
+    let content = format!("```solidity\n{}\n```", signatures.join("\n"));
     ls_types::Hover {
         contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
             kind: ls_types::MarkupKind::Markdown,
@@ -737,7 +761,7 @@ fn position_in_range(position: &ls_types::Position, range: &ls_types::Range) -> 
     if position.line == range.start.line && position.character < range.start.character {
         return false;
     }
-    if position.line == range.end.line && position.character > range.end.character {
+    if position.line == range.end.line && position.character >= range.end.character {
         return false;
     }
     true
@@ -763,7 +787,7 @@ mod tests {
         };
         assert!(position_in_range(&ls_types::Position::new(1, 5), &range));
         assert!(position_in_range(&ls_types::Position::new(1, 10), &range));
-        assert!(position_in_range(&ls_types::Position::new(1, 15), &range));
+        assert!(!position_in_range(&ls_types::Position::new(1, 15), &range));
         assert!(!position_in_range(&ls_types::Position::new(0, 5), &range));
         assert!(!position_in_range(&ls_types::Position::new(1, 4), &range));
         assert!(!position_in_range(&ls_types::Position::new(1, 16), &range));
