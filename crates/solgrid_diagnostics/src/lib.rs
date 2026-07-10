@@ -330,6 +330,17 @@ impl RuleMeta {
             has_fix: self.fix_availability != FixAvailability::None,
         }
     }
+
+    /// Build normalized finding metadata for a concrete diagnostic instance.
+    ///
+    /// A rule may support fixes in general while declining to offer one for a
+    /// particular occurrence. Editor metadata must describe the occurrence,
+    /// rather than the rule's broad capability.
+    pub fn finding_meta_for_diagnostic(&self, diagnostic: &Diagnostic) -> FindingMeta {
+        let mut meta = self.finding_meta(diagnostic.severity);
+        meta.has_fix = diagnostic.fix.is_some();
+        meta
+    }
 }
 
 /// A diagnostic produced by a lint rule.
@@ -521,6 +532,34 @@ mod tests {
         assert_eq!(finding.confidence, Some(Confidence::High));
         assert_eq!(finding.severity, Severity::Warning);
         assert!(finding.help_url.unwrap().contains("security/tx_origin.rs"));
+    }
+
+    #[test]
+    fn test_rule_meta_finding_fix_metadata_is_instance_specific() {
+        let meta = RuleMeta {
+            id: "security/conditional-fix",
+            name: "conditional-fix",
+            category: RuleCategory::Security,
+            default_severity: Severity::Error,
+            description: "A conditionally fixable rule",
+            fix_availability: FixAvailability::Available(FixSafety::Safe),
+        };
+        let without_fix = Diagnostic::new(
+            "security/conditional-fix",
+            "not safely fixable here",
+            Severity::Error,
+            0..1,
+        );
+        assert!(!meta.finding_meta_for_diagnostic(&without_fix).has_fix);
+
+        let with_fix = Diagnostic::new(
+            "security/conditional-fix",
+            "fixable here",
+            Severity::Error,
+            0..1,
+        )
+        .with_fix(Fix::safe("replace", vec![TextEdit::replace(0..1, "x")]));
+        assert!(meta.finding_meta_for_diagnostic(&with_fix).has_fix);
     }
 
     #[test]

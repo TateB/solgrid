@@ -7,7 +7,10 @@ use solgrid_ast::symbols::{
     self, ImportedSymbols, SignatureData, SymbolDef, SymbolKind, SymbolTable, TypePath, TypeSpec,
 };
 use solgrid_config::Config;
-use solgrid_diagnostics::{Confidence, FileResult, FindingKind, FindingMeta, RuleMeta, Severity};
+use solgrid_diagnostics::{
+    Confidence, FileResult, FindingKind, FindingMeta, RuleCategory, RuleMeta, Severity,
+};
+use solgrid_linter::suppression::{parse_suppressions, Suppressions};
 use solgrid_linter::LintEngine;
 use solgrid_parser::solar_ast::{self, Expr, ExprKind, IndexKind, ItemKind, Stmt, StmtKind, Type};
 use solgrid_parser::solar_interface::SpannedOption;
@@ -66,7 +69,7 @@ fn file_result_to_lsp_diagnostics_with_meta(
         .map(|diag| {
             let data = rule_meta
                 .get(diag.rule_id.as_str())
-                .and_then(|meta| serde_json::to_value(meta.finding_meta(diag.severity)).ok());
+                .and_then(|meta| serde_json::to_value(meta.finding_meta_for_diagnostic(diag)).ok());
             convert::diagnostic_to_lsp_with_data(source, diag, data)
         })
         .collect()
@@ -115,6 +118,27 @@ pub fn compiler_to_lsp_diagnostics<B: NavBackend>(
     path: &Path,
     get_source: &dyn Fn(&Path) -> Option<String>,
 ) -> Vec<ls_types::Diagnostic> {
+    compiler_to_lsp_diagnostics_with_config(
+        project_index,
+        source,
+        path,
+        get_source,
+        &Config::default(),
+    )
+}
+
+/// Produce compiler-style semantic diagnostics using the active lint configuration.
+///
+/// Native semantic detectors share the same enablement, severity, and inline
+/// suppression behavior as registry-backed lint rules. Compiler diagnostics are
+/// intentionally unaffected by lint configuration.
+pub fn compiler_to_lsp_diagnostics_with_config<B: NavBackend>(
+    project_index: &ProjectIndex<B>,
+    source: &str,
+    path: &Path,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    config: &Config,
+) -> Vec<ls_types::Diagnostic> {
     let mut diagnostics = unresolved_import_diagnostics(source, path, project_index.resolver());
     let Some(snapshot) = project_index.snapshot_for_source(path, source) else {
         return diagnostics;
@@ -122,7 +146,7 @@ pub fn compiler_to_lsp_diagnostics<B: NavBackend>(
 
     let filename = snapshot.path.to_string_lossy().to_string();
     let mut context =
-        CompilerDiagnosticContext::new(&snapshot, project_index.resolver(), get_source);
+        CompilerDiagnosticContext::new(&snapshot, project_index.resolver(), get_source, config);
 
     let _ = with_parsed_ast_sequential(source, &filename, |source_unit| {
         for item in source_unit.items.iter() {
@@ -191,7 +215,9 @@ struct CompilerDiagnosticContext<'a> {
     resolver: &'a SharedImportResolver,
     get_source: &'a dyn Fn(&Path) -> Option<String>,
     diagnostics: Vec<ls_types::Diagnostic>,
-    seen: HashSet<(String, usize, usize)>,
+    seen: HashSet<(String, usize, usize, String)>,
+    config: &'a Config,
+    suppressions: Suppressions,
     semantic_files: HashMap<PathBuf, FileSemanticInfo>,
     function_summaries: HashMap<CallableTargetKey, FunctionSinkSummary>,
     current_contracts: Vec<String>,
@@ -212,6 +238,7 @@ impl<'a> CompilerDiagnosticContext<'a> {
         snapshot: &'a ProjectSnapshot,
         resolver: &'a SharedImportResolver,
         get_source: &'a dyn Fn(&Path) -> Option<String>,
+        config: &'a Config,
     ) -> Self {
         let (semantic_files, function_summaries) =
             build_function_sink_summaries(snapshot, resolver, get_source);
@@ -221,6 +248,8 @@ impl<'a> CompilerDiagnosticContext<'a> {
             get_source,
             diagnostics: Vec::new(),
             seen: HashSet::new(),
+            config,
+            suppressions: parse_suppressions(&snapshot.source),
             semantic_files,
             function_summaries,
             current_contracts: Vec::new(),
@@ -232,7 +261,10 @@ impl<'a> CompilerDiagnosticContext<'a> {
     }
 
     fn push(&mut self, id: &str, title: &str, message: String, span: std::ops::Range<usize>) {
-        if !self.seen.insert((id.to_string(), span.start, span.end)) {
+        if !self
+            .seen
+            .insert((id.to_string(), span.start, span.end, message.clone()))
+        {
             return;
         }
         self.diagnostics.push(compiler_lsp_diagnostic(
@@ -250,10 +282,27 @@ impl<'a> CompilerDiagnosticContext<'a> {
         title: &str,
         message: String,
         span: std::ops::Range<usize>,
-        severity: Severity,
+        default_severity: Severity,
         confidence: Confidence,
     ) {
-        if !self.seen.insert((id.to_string(), span.start, span.end)) {
+        if !self.config.lint.is_rule_enabled(id, RuleCategory::Security) {
+            return;
+        }
+        let Some(severity) = self.config.lint.rule_severity(id, default_severity) else {
+            return;
+        };
+        let line = self.snapshot.source[..span.start.min(self.snapshot.source.len())]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + 1;
+        if self.suppressions.is_suppressed(id, line) {
+            return;
+        }
+        if !self
+            .seen
+            .insert((id.to_string(), span.start, span.end, message.clone()))
+        {
             return;
         }
         self.diagnostics.push(detector_lsp_diagnostic(
@@ -547,7 +596,9 @@ impl<'a> CompilerDiagnosticContext<'a> {
     }
 
     fn visit_expression_statement(&mut self, expr: &Expr<'_>) {
-        let Some((method, span)) = unchecked_low_level_call_site(expr) else {
+        let Some((method, span)) =
+            unchecked_low_level_call_site(&self.snapshot.source, &self.snapshot.table, expr)
+        else {
             return;
         };
 
@@ -692,8 +743,56 @@ impl<'a> CompilerDiagnosticContext<'a> {
         accepted_kinds: &[SymbolKind],
     ) -> bool {
         let path = ast_path_to_type_path(path);
-        self.resolve_path(&path, resolve_offset)
+        self.resolve_path_with_kinds(&path, resolve_offset, accepted_kinds)
             || self.resolve_inherited_member_path(&path, accepted_kinds)
+    }
+
+    fn resolve_path_with_kinds(
+        &self,
+        path: &TypePath,
+        resolve_offset: usize,
+        accepted_kinds: &[SymbolKind],
+    ) -> bool {
+        if path.segments.is_empty() {
+            return false;
+        }
+
+        if self.resolve_namespace_path_with_kinds(path, accepted_kinds) {
+            return true;
+        }
+
+        if self
+            .snapshot
+            .table
+            .resolve_all(&path.segments[0], resolve_offset)
+            .into_iter()
+            .any(|def| {
+                self.resolve_member_chain_with_kinds(
+                    &self.snapshot.table,
+                    def,
+                    &path.segments[1..],
+                    accepted_kinds,
+                )
+            })
+        {
+            return true;
+        }
+
+        resolve_cross_file_symbol(
+            &self.snapshot.table,
+            &path.segments[0],
+            &self.snapshot.path,
+            self.get_source,
+            self.resolver,
+        )
+        .is_some_and(|cross_file| {
+            self.resolve_member_chain_with_kinds(
+                &cross_file.table,
+                &cross_file.def,
+                &path.segments[1..],
+                accepted_kinds,
+            )
+        })
     }
 
     fn resolve_inherited_member_path(
@@ -851,6 +950,54 @@ impl<'a> CompilerDiagnosticContext<'a> {
         false
     }
 
+    fn resolve_namespace_path_with_kinds(
+        &self,
+        path: &TypePath,
+        accepted_kinds: &[SymbolKind],
+    ) -> bool {
+        if path.segments.len() < 2 {
+            return false;
+        }
+
+        let namespace = &path.segments[0];
+        for import in &self.snapshot.table.imports {
+            let matches_namespace = match &import.symbols {
+                ImportedSymbols::Plain(Some(alias)) | ImportedSymbols::Glob(alias) => {
+                    alias == namespace
+                }
+                ImportedSymbols::Plain(None) | ImportedSymbols::Named(_) => false,
+            };
+            if !matches_namespace {
+                continue;
+            }
+
+            let Some(resolved) = self.resolver.resolve(&import.path, &self.snapshot.path) else {
+                continue;
+            };
+            let Some(imported_source) = (self.get_source)(&resolved) else {
+                continue;
+            };
+            let filename = resolved.to_string_lossy().to_string();
+            let Some(imported_table) = symbols::build_symbol_table(&imported_source, &filename)
+            else {
+                continue;
+            };
+            let Some(root) = imported_table.resolve(&path.segments[1], 0) else {
+                continue;
+            };
+            if self.resolve_member_chain_with_kinds(
+                &imported_table,
+                root,
+                &path.segments[2..],
+                accepted_kinds,
+            ) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn resolve_member_chain(
         &self,
         table: &SymbolTable,
@@ -865,6 +1012,23 @@ impl<'a> CompilerDiagnosticContext<'a> {
             current = next;
         }
         true
+    }
+
+    fn resolve_member_chain_with_kinds(
+        &self,
+        table: &SymbolTable,
+        root: &SymbolDef,
+        remaining: &[String],
+        accepted_kinds: &[SymbolKind],
+    ) -> bool {
+        let mut current = root;
+        for segment in remaining {
+            let Some(next) = table.resolve_member(current, segment) else {
+                return false;
+            };
+            current = next;
+        }
+        accepted_kinds.contains(&current.kind)
     }
 
     fn visit_interprocedural_sink_calls(&mut self, expr: &Expr<'_>) {
@@ -925,6 +1089,9 @@ impl<'a> CompilerDiagnosticContext<'a> {
         if member.as_str() != "delegatecall" {
             return None;
         }
+        if !is_low_level_address_receiver(&self.snapshot.source, &self.snapshot.table, base) {
+            return None;
+        }
 
         let (target_name, span) = delegatecall_target_identifier(base)?;
         let resolve_offset = span.start;
@@ -953,18 +1120,21 @@ impl<'a> CompilerDiagnosticContext<'a> {
                 (
                     base,
                     member,
-                    call_options_contain_named_arg(options, "value"),
+                    call_options_contain_nonzero_named_arg(options, "value"),
                 )
             }
             _ => return None,
         };
 
         let method_label = match member.as_str() {
-            "send" => ".send()",
+            "send" if args.len() == 1 => ".send()",
             "transfer" if args.len() == 1 => ".transfer()",
             "call" if has_value_option => ".call{value: ...}()",
             _ => return None,
         };
+        if !is_low_level_address_receiver(&self.snapshot.source, &self.snapshot.table, base) {
+            return None;
+        }
 
         let (target_name, resolve_span) = delegatecall_target_identifier(base)?;
         let resolved = self
@@ -984,6 +1154,8 @@ impl<'a> CompilerDiagnosticContext<'a> {
 }
 
 fn unchecked_low_level_call_site(
+    source: &str,
+    table: &SymbolTable,
     expr: &Expr<'_>,
 ) -> Option<(&'static str, std::ops::Range<usize>)> {
     let ExprKind::Call(callee, _) = &expr.kind else {
@@ -993,7 +1165,7 @@ fn unchecked_low_level_call_site(
         ExprKind::CallOptions(inner, _) => inner,
         _ => callee,
     };
-    let ExprKind::Member(_, member) = &callee.kind else {
+    let ExprKind::Member(base, member) = &callee.kind else {
         return None;
     };
 
@@ -1003,6 +1175,9 @@ fn unchecked_low_level_call_site(
         "staticcall" => "staticcall",
         _ => return None,
     };
+    if !is_low_level_address_receiver(source, table, base) {
+        return None;
+    }
 
     Some((method, solgrid_ast::span_to_range(member.span)))
 }
@@ -1023,8 +1198,118 @@ fn delegatecall_target_identifier(expr: &Expr<'_>) -> Option<(String, std::ops::
     }
 }
 
-fn call_options_contain_named_arg(options: &solar_ast::NamedArgList<'_>, name: &str) -> bool {
-    options.iter().any(|arg| arg.name.as_str() == name)
+fn call_options_contain_nonzero_named_arg(
+    options: &solar_ast::NamedArgList<'_>,
+    name: &str,
+) -> bool {
+    options
+        .iter()
+        .find(|arg| arg.name.as_str() == name)
+        .is_some_and(|arg| !is_literal_zero(arg.value))
+}
+
+fn is_literal_zero(expr: &Expr<'_>) -> bool {
+    matches!(
+        &expr.peel_parens().kind,
+        ExprKind::Lit(literal, _)
+            if matches!(literal.kind, solar_ast::LitKind::Number(value) if value.is_zero())
+    )
+}
+
+fn is_low_level_address_receiver(source: &str, table: &SymbolTable, expr: &Expr<'_>) -> bool {
+    let types = infer_local_value_types(source, table, expr);
+    !types.is_empty() && types.iter().all(is_address_type)
+}
+
+fn infer_local_value_types(source: &str, table: &SymbolTable, expr: &Expr<'_>) -> Vec<TypeSpec> {
+    let expr = expr.peel_parens();
+    let offset = solgrid_ast::span_to_range(expr.span).start;
+    let mut types = match &expr.kind {
+        ExprKind::Ident(ident) => table
+            .resolve_all(ident.as_str(), offset)
+            .into_iter()
+            .filter_map(|def| def.type_info.clone())
+            .collect(),
+        ExprKind::Member(base, member) => {
+            if matches!(
+                (&base.peel_parens().kind, member.as_str()),
+                (ExprKind::Ident(namespace), "sender") if namespace.as_str() == "msg"
+            ) || matches!(
+                (&base.peel_parens().kind, member.as_str()),
+                (ExprKind::Ident(namespace), "origin") if namespace.as_str() == "tx"
+            ) || matches!(
+                (&base.peel_parens().kind, member.as_str()),
+                (ExprKind::Ident(namespace), "coinbase") if namespace.as_str() == "block"
+            ) {
+                vec![TypeSpec::Elementary {
+                    display: "address".to_string(),
+                }]
+            } else {
+                infer_local_value_types(source, table, base)
+                    .into_iter()
+                    .filter_map(|base_type| {
+                        let path = base_type.member_target()?;
+                        let container =
+                            table.resolve(path.segments.last()?, base_type.resolve_offset())?;
+                        table
+                            .resolve_member(container, member.as_str())?
+                            .type_info
+                            .clone()
+                    })
+                    .collect()
+            }
+        }
+        ExprKind::Index(base, IndexKind::Index(_) | IndexKind::Range(_, _)) => {
+            infer_local_value_types(source, table, base)
+                .into_iter()
+                .filter_map(|ty| ty.index_result().cloned())
+                .collect()
+        }
+        ExprKind::Call(callee, args) => match &callee.peel_parens().kind {
+            ExprKind::Type(ty) if args.len() == 1 => {
+                vec![symbols::type_spec_from_ast(source, ty, None, offset)]
+            }
+            ExprKind::Ident(ident) => table
+                .resolve_all(ident.as_str(), offset)
+                .into_iter()
+                .filter_map(|def| def.signature.as_ref()?.first_return_type.clone())
+                .collect(),
+            ExprKind::Member(base, member) => infer_local_value_types(source, table, base)
+                .into_iter()
+                .filter_map(|base_type| {
+                    let path = base_type.member_target()?;
+                    let container =
+                        table.resolve(path.segments.last()?, base_type.resolve_offset())?;
+                    table
+                        .resolve_member_all(container, member.as_str())
+                        .iter()
+                        .find_map(|def| def.signature.as_ref()?.first_return_type.clone())
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        // `payable(value)` always yields an address-payable receiver.
+        ExprKind::Payable(args) if args.len() == 1 => vec![TypeSpec::Elementary {
+            display: "address payable".to_string(),
+        }],
+        ExprKind::Ternary(_, if_true, if_false) => {
+            let mut types = infer_local_value_types(source, table, if_true);
+            types.extend(infer_local_value_types(source, table, if_false));
+            types
+        }
+        _ => Vec::new(),
+    };
+    types.sort_by(|left, right| left.display().cmp(right.display()));
+    types.dedup();
+    types
+}
+
+fn is_address_type(ty: &TypeSpec) -> bool {
+    matches!(
+        ty,
+        TypeSpec::Elementary { display }
+            if matches!(display.trim(), "address" | "address payable")
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1059,17 +1344,30 @@ struct FileSemanticInfo {
     contracts: HashMap<String, ContractSemanticInfo>,
     callable_contracts: HashMap<usize, Option<String>>,
     callable_signatures: HashMap<usize, SignatureData>,
+    callable_parameters: HashMap<usize, Vec<CallableParameter>>,
+}
+
+#[derive(Debug, Clone)]
+struct CallableParameter {
+    name: Option<String>,
+    ty: TypeSpec,
 }
 
 #[derive(Debug, Clone)]
 struct FunctionCallEdge {
     callees: Vec<CallableTargetKey>,
-    argument_parameters: Vec<Option<String>>,
+    argument_parameters: ArgumentParameterBindings,
+}
+
+#[derive(Debug, Clone)]
+enum ArgumentParameterBindings {
+    Positional(Vec<Option<String>>),
+    Named(HashMap<String, Option<String>>),
 }
 
 #[derive(Debug, Clone, Default)]
 struct FunctionSinkSummary {
-    parameter_names: Vec<String>,
+    parameter_names: Vec<Option<String>>,
     delegatecall_parameters: HashSet<usize>,
     eth_transfer_parameters: HashSet<usize>,
     call_edges: Vec<FunctionCallEdge>,
@@ -1191,11 +1489,12 @@ fn load_semantic_file(
         return false;
     };
 
-    let Ok((contracts, callable_contracts, callable_signatures)) =
+    let Ok((contracts, callable_contracts, callable_signatures, callable_parameters)) =
         with_parsed_ast_sequential(&source, &filename, |source_unit| {
             let mut contracts = HashMap::<String, ContractSemanticInfo>::new();
             let mut callable_contracts = HashMap::<usize, Option<String>>::new();
             let mut callable_signatures = HashMap::<usize, SignatureData>::new();
+            let mut callable_parameters = HashMap::<usize, Vec<CallableParameter>>::new();
 
             for item in source_unit.items.iter() {
                 match &item.kind {
@@ -1236,6 +1535,10 @@ fn load_semantic_file(
                             {
                                 callable_signatures.insert(target_offset, signature);
                             }
+                            callable_parameters.insert(
+                                target_offset,
+                                callable_parameters_for_function(&source, function, target_offset),
+                            );
                             let target = CallableTargetKey {
                                 path: path.clone(),
                                 offset: target_offset,
@@ -1267,13 +1570,22 @@ fn load_semantic_file(
                         {
                             callable_signatures.insert(target_offset, signature);
                         }
+                        callable_parameters.insert(
+                            target_offset,
+                            callable_parameters_for_function(&source, function, target_offset),
+                        );
                         callable_contracts.insert(target_offset, None);
                     }
                     _ => {}
                 }
             }
 
-            (contracts, callable_contracts, callable_signatures)
+            (
+                contracts,
+                callable_contracts,
+                callable_signatures,
+                callable_parameters,
+            )
         })
     else {
         return false;
@@ -1294,6 +1606,7 @@ fn load_semantic_file(
             contracts,
             callable_contracts,
             callable_signatures,
+            callable_parameters,
         },
     );
 
@@ -1302,6 +1615,27 @@ fn load_semantic_file(
     }
 
     true
+}
+
+fn callable_parameters_for_function(
+    source: &str,
+    function: &solar_ast::ItemFunction<'_>,
+    resolve_offset: usize,
+) -> Vec<CallableParameter> {
+    function
+        .header
+        .parameters
+        .iter()
+        .map(|parameter| CallableParameter {
+            name: parameter.name.map(|name| name.as_str().to_string()),
+            ty: symbols::type_spec_from_ast(
+                source,
+                &parameter.ty,
+                parameter.data_location,
+                resolve_offset,
+            ),
+        })
+        .collect()
 }
 
 fn record_callable_signature(
@@ -1396,7 +1730,7 @@ fn summarize_function_sinks(
         .header
         .parameters
         .iter()
-        .filter_map(|parameter| parameter.name.map(|name| name.as_str().to_string()))
+        .map(|parameter| parameter.name.map(|name| name.as_str().to_string()))
         .collect::<Vec<_>>();
     let mut summary = FunctionSinkSummary {
         parameter_names: parameter_names.clone(),
@@ -1405,7 +1739,7 @@ fn summarize_function_sinks(
     let parameter_indexes = parameter_names
         .iter()
         .enumerate()
-        .map(|(index, name)| (name.clone(), index))
+        .filter_map(|(index, name)| name.clone().map(|name| (name, index)))
         .collect::<HashMap<_, _>>();
 
     if let Some(body) = &function.body {
@@ -1637,24 +1971,25 @@ fn collect_function_sink_expr(
             );
         }
         ExprKind::Call(callee, args) => {
-            if let Some((parameter_name, _)) = delegatecall_target_identifier_from_sink_expr(expr) {
+            if let Some((parameter_name, _)) =
+                delegatecall_target_identifier_from_sink_expr(file, expr)
+            {
                 if let Some(index) = parameter_indexes.get(&parameter_name) {
                     summary.delegatecall_parameters.insert(*index);
                 }
             }
             if let Some((parameter_name, _, _)) =
-                eth_transfer_target_identifier_from_sink_expr(expr)
+                eth_transfer_target_identifier_from_sink_expr(file, expr)
             {
                 if let Some(index) = parameter_indexes.get(&parameter_name) {
                     summary.eth_transfer_parameters.insert(*index);
                 }
             }
-            let callees =
-                resolved_callable_targets(file, current_contract, callee, args.len(), context);
+            let callees = resolved_callable_targets(file, current_contract, callee, args, context);
             if !callees.is_empty() {
                 summary.call_edges.push(FunctionCallEdge {
                     callees,
-                    argument_parameters: args.exprs().map(parameter_name_for_expr).collect(),
+                    argument_parameters: argument_parameter_bindings(args),
                 });
             }
             collect_function_sink_expr(
@@ -2023,18 +2358,33 @@ fn infer_value_types_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            for target in
-                resolved_callable_targets(file, current_contract, callee, args.len(), context)
-            {
-                if let Some(signature) = callable_signature_for_target(&target, context) {
-                    if let Some(first_return_type) = signature.first_return_type {
-                        types.push(ResolvedExprType {
-                            path: target.path,
-                            ty: first_return_type,
-                        });
+            if let ExprKind::Type(ty) = &callee.peel_parens().kind {
+                types.push(ResolvedExprType {
+                    path: file.path.clone(),
+                    ty: symbols::type_spec_from_ast(&file.source, ty, None, expr_offset),
+                });
+            } else {
+                for target in
+                    resolved_callable_targets(file, current_contract, callee, args, context)
+                {
+                    if let Some(signature) = callable_signature_for_target(&target, context) {
+                        if let Some(first_return_type) = signature.first_return_type {
+                            types.push(ResolvedExprType {
+                                path: target.path,
+                                ty: first_return_type,
+                            });
+                        }
                     }
                 }
             }
+        }
+        ExprKind::Payable(_) => {
+            types.push(ResolvedExprType {
+                path: file.path.clone(),
+                ty: TypeSpec::Elementary {
+                    display: "address payable".to_string(),
+                },
+            });
         }
         ExprKind::Index(base, IndexKind::Index(_) | IndexKind::Range(_, _)) => {
             for resolved in infer_value_types_from_expr(file, current_contract, base, context) {
@@ -2130,9 +2480,7 @@ fn resolve_contract_targets_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            for target in
-                resolved_callable_targets(file, current_contract, callee, args.len(), context)
-            {
+            for target in resolved_callable_targets(file, current_contract, callee, args, context) {
                 if let Some(signature) = callable_signature_for_target(&target, context) {
                     if let Some(first_return_type) = signature.first_return_type {
                         targets.extend(resolve_contract_targets_from_type_spec(
@@ -2179,6 +2527,18 @@ fn dedup_callable_targets(candidates: Vec<CallableTargetKey>) -> Vec<CallableTar
 }
 
 fn resolved_callable_targets(
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
+    callee: &Expr<'_>,
+    args: &solar_ast::CallArgs<'_>,
+    context: &SinkSummaryContext<'_>,
+) -> Vec<CallableTargetKey> {
+    let candidates =
+        resolved_callable_targets_by_arity(file, current_contract, callee, args.len(), context);
+    narrow_callable_targets_by_arguments(file, current_contract, args, candidates, context)
+}
+
+fn resolved_callable_targets_by_arity(
     file: &FileSemanticInfo,
     current_contract: Option<&str>,
     callee: &Expr<'_>,
@@ -2370,6 +2730,147 @@ fn resolved_callable_targets(
     }
 }
 
+fn narrow_callable_targets_by_arguments(
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
+    args: &solar_ast::CallArgs<'_>,
+    candidates: Vec<CallableTargetKey>,
+    context: &SinkSummaryContext<'_>,
+) -> Vec<CallableTargetKey> {
+    if candidates.len() <= 1 {
+        return candidates;
+    }
+
+    let matching = candidates
+        .iter()
+        .filter(|target| {
+            callable_target_accepts_arguments(file, current_contract, args, target, context)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // Type inference is intentionally partial. If it cannot identify any
+    // candidate, retain the arity-filtered set and let conservative summary
+    // intersection decide whether a finding is sound.
+    if matching.is_empty() {
+        candidates
+    } else {
+        matching
+    }
+}
+
+fn callable_target_accepts_arguments(
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
+    args: &solar_ast::CallArgs<'_>,
+    target: &CallableTargetKey,
+    context: &SinkSummaryContext<'_>,
+) -> bool {
+    let Some(parameters) = context
+        .semantic_files
+        .get(&target.path)
+        .and_then(|target_file| target_file.callable_parameters.get(&target.offset))
+    else {
+        return true;
+    };
+
+    let argument_pairs = match &args.kind {
+        solar_ast::CallArgsKind::Unnamed(_) => args
+            .exprs()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                parameters.get(index).map(|parameter| (argument, parameter))
+            })
+            .collect::<Vec<_>>(),
+        solar_ast::CallArgsKind::Named(named) => {
+            let mut pairs = Vec::with_capacity(named.len());
+            for argument in named.iter() {
+                let Some(parameter) = parameters
+                    .iter()
+                    .find(|parameter| parameter.name.as_deref() == Some(argument.name.as_str()))
+                else {
+                    return false;
+                };
+                pairs.push((&*argument.value, parameter));
+            }
+            pairs
+        }
+    };
+
+    argument_pairs.into_iter().all(|(argument, parameter)| {
+        let inferred = infer_value_types_from_expr(file, current_contract, argument, context);
+        inferred.is_empty()
+            || inferred
+                .iter()
+                .any(|argument_type| type_specs_compatible(&argument_type.ty, &parameter.ty))
+    })
+}
+
+fn type_specs_compatible(argument: &TypeSpec, parameter: &TypeSpec) -> bool {
+    match (argument, parameter) {
+        (
+            TypeSpec::Elementary { display: argument },
+            TypeSpec::Elementary { display: parameter },
+        ) => canonical_type_display(argument) == canonical_type_display(parameter),
+        (
+            TypeSpec::Custom { path: argument, .. },
+            TypeSpec::Custom {
+                path: parameter, ..
+            },
+        ) => argument == parameter,
+        (
+            TypeSpec::Array {
+                element: argument,
+                display: argument_display,
+            },
+            TypeSpec::Array {
+                element: parameter,
+                display: parameter_display,
+            },
+        ) => {
+            type_specs_compatible(argument, parameter)
+                && canonical_type_display(argument_display)
+                    == canonical_type_display(parameter_display)
+        }
+        (TypeSpec::Function { display: argument }, TypeSpec::Function { display: parameter })
+        | (TypeSpec::Other { display: argument }, TypeSpec::Other { display: parameter }) => {
+            canonical_type_display(argument) == canonical_type_display(parameter)
+        }
+        _ => false,
+    }
+}
+
+fn canonical_type_display(display: &str) -> String {
+    display
+        .split_whitespace()
+        .filter(|part| !matches!(*part, "memory" | "calldata" | "storage" | "payable"))
+        .map(|part| match part {
+            "uint" => "uint256",
+            "int" => "int256",
+            "byte" => "bytes1",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn callable_target_signature_key(
+    target: &CallableTargetKey,
+    context: &SinkSummaryContext<'_>,
+) -> Option<Vec<String>> {
+    context
+        .semantic_files
+        .get(&target.path)?
+        .callable_parameters
+        .get(&target.offset)
+        .map(|parameters| {
+            parameters
+                .iter()
+                .map(|parameter| canonical_type_display(parameter.ty.display()))
+                .collect()
+        })
+}
+
 fn resolve_contract_callable_targets(
     file: &FileSemanticInfo,
     contract_name: &str,
@@ -2388,9 +2889,10 @@ fn resolve_contract_callable_targets(
     };
 
     let mut candidates = Vec::new();
+    let mut current_candidates = Vec::new();
     if include_current {
         if let Some(callables) = contract.callables.get(callable_name) {
-            candidates.extend(
+            current_candidates.extend(
                 callables
                     .iter()
                     .filter(|callable| callable.arg_count == arg_count)
@@ -2415,6 +2917,18 @@ fn resolve_contract_callable_targets(
             true,
             visited,
         ));
+    }
+
+    if !current_candidates.is_empty() {
+        let current_signatures = current_candidates
+            .iter()
+            .filter_map(|target| callable_target_signature_key(target, context))
+            .collect::<HashSet<_>>();
+        candidates.retain(|target| {
+            callable_target_signature_key(target, context)
+                .is_none_or(|signature| !current_signatures.contains(&signature))
+        });
+        candidates.extend(current_candidates);
     }
 
     candidates
@@ -2683,37 +3197,49 @@ fn cached_source(
 
 fn sink_indices_for_summary(
     callee_sinks: &HashSet<usize>,
-    callee_parameter_names: &[String],
-    argument_parameters: &[Option<String>],
-    current_parameter_names: &[String],
+    callee_parameter_names: &[Option<String>],
+    argument_parameters: &ArgumentParameterBindings,
+    current_parameter_names: &[Option<String>],
 ) -> HashSet<usize> {
     let mut propagated = HashSet::new();
     for callee_index in callee_sinks {
-        let Some(parameter_name) = callee_parameter_names.get(*callee_index) else {
-            continue;
-        };
-        let Some(Some(argument_name)) = argument_parameters.get(*callee_index) else {
+        let Some(argument_name) = argument_parameter_for_index(
+            argument_parameters,
+            callee_parameter_names,
+            *callee_index,
+        ) else {
             continue;
         };
         let Some(current_index) = current_parameter_names
             .iter()
-            .position(|name| name == argument_name)
+            .position(|name| name.as_deref() == Some(argument_name))
         else {
             continue;
         };
         propagated.insert(current_index);
-        if parameter_name == argument_name {
-            propagated.insert(current_index);
-        }
     }
     propagated
+}
+
+fn argument_parameter_for_index<'a>(
+    bindings: &'a ArgumentParameterBindings,
+    callee_parameter_names: &[Option<String>],
+    index: usize,
+) -> Option<&'a str> {
+    match bindings {
+        ArgumentParameterBindings::Positional(parameters) => parameters.get(index)?.as_deref(),
+        ArgumentParameterBindings::Named(parameters) => {
+            let parameter_name = callee_parameter_names.get(index)?.as_deref()?;
+            parameters.get(parameter_name)?.as_deref()
+        }
+    }
 }
 
 fn sink_indices_for_summary_kind(
     summary: &FunctionSinkSummary,
     sink_kind: SinkKind,
-    argument_parameters: &[Option<String>],
-    current_parameter_names: &[String],
+    argument_parameters: &ArgumentParameterBindings,
+    current_parameter_names: &[Option<String>],
 ) -> HashSet<usize> {
     let callee_sinks = match sink_kind {
         SinkKind::Delegatecall => &summary.delegatecall_parameters,
@@ -2732,7 +3258,7 @@ fn propagate_sink_indices_through_edge(
     sink_kind: SinkKind,
     edge: &FunctionCallEdge,
     previous: &HashMap<CallableTargetKey, FunctionSinkSummary>,
-    current_parameter_names: &[String],
+    current_parameter_names: &[Option<String>],
 ) -> bool {
     let mut propagated_candidates = Vec::<HashSet<usize>>::new();
     for callee in &edge.callees {
@@ -2745,7 +3271,7 @@ fn propagate_sink_indices_through_edge(
             &edge.argument_parameters,
             current_parameter_names,
         );
-        if propagated.is_empty() || propagated_candidates.contains(&propagated) {
+        if propagated_candidates.contains(&propagated) {
             continue;
         }
         propagated_candidates.push(propagated);
@@ -2778,8 +3304,7 @@ fn common_propagated_parameters(
 ) -> Vec<(String, SinkKind)> {
     let mut sets = candidates
         .into_iter()
-        .map(|candidate| candidate.into_iter().collect::<BTreeSet<_>>())
-        .filter(|candidate| !candidate.is_empty());
+        .map(|candidate| candidate.into_iter().collect::<BTreeSet<_>>());
     let Some(mut common) = sets.next() else {
         return Vec::new();
     };
@@ -2815,8 +3340,7 @@ fn propagated_sink_summary(
         .and_then(|function| file.callable_contracts.get(&function.name_span.start))
         .and_then(|contract| contract.as_deref());
     let (call_name, call_span) = call_site_label_and_span(callee_expr)?;
-    let candidates =
-        resolved_callable_targets(file, current_contract, callee_expr, args.len(), &context);
+    let candidates = resolved_callable_targets(file, current_contract, callee_expr, args, &context);
     let mut propagated_candidates = candidates
         .into_iter()
         .filter_map(|callee| {
@@ -2824,7 +3348,7 @@ fn propagated_sink_summary(
             let propagated = normalized_propagated_parameters(propagated_parameters_for_summary(
                 file, args, summary,
             ));
-            (!propagated.is_empty()).then_some(propagated)
+            Some(propagated)
         })
         .collect::<Vec<_>>();
     propagated_candidates.sort();
@@ -2840,7 +3364,8 @@ fn propagated_parameters_for_summary(
 ) -> Vec<(String, SinkKind)> {
     let mut propagated = Vec::new();
     for index in &summary.delegatecall_parameters {
-        let Some(argument) = args.exprs().nth(*index) else {
+        let Some(argument) = call_argument_for_parameter(args, &summary.parameter_names, *index)
+        else {
             continue;
         };
         if let Some(parameter_name) = resolved_parameter_name(file, argument) {
@@ -2848,7 +3373,8 @@ fn propagated_parameters_for_summary(
         }
     }
     for index in &summary.eth_transfer_parameters {
-        let Some(argument) = args.exprs().nth(*index) else {
+        let Some(argument) = call_argument_for_parameter(args, &summary.parameter_names, *index)
+        else {
             continue;
         };
         if let Some(parameter_name) = resolved_parameter_name(file, argument) {
@@ -2856,6 +3382,42 @@ fn propagated_parameters_for_summary(
         }
     }
     propagated
+}
+
+fn call_argument_for_parameter<'a, 'ast>(
+    args: &'a solar_ast::CallArgs<'ast>,
+    parameter_names: &[Option<String>],
+    index: usize,
+) -> Option<&'a Expr<'ast>> {
+    match &args.kind {
+        solar_ast::CallArgsKind::Unnamed(_) => args.exprs().nth(index),
+        solar_ast::CallArgsKind::Named(named) => {
+            let parameter_name = parameter_names.get(index)?.as_deref()?;
+            named
+                .iter()
+                .find(|argument| argument.name.as_str() == parameter_name)
+                .map(|argument| &*argument.value)
+        }
+    }
+}
+
+fn argument_parameter_bindings(args: &solar_ast::CallArgs<'_>) -> ArgumentParameterBindings {
+    match &args.kind {
+        solar_ast::CallArgsKind::Unnamed(_) => ArgumentParameterBindings::Positional(
+            args.exprs().map(parameter_name_for_expr).collect(),
+        ),
+        solar_ast::CallArgsKind::Named(named) => ArgumentParameterBindings::Named(
+            named
+                .iter()
+                .map(|argument| {
+                    (
+                        argument.name.as_str().to_string(),
+                        parameter_name_for_expr(argument.value),
+                    )
+                })
+                .collect(),
+        ),
+    }
 }
 
 fn resolved_parameter_name(file: &FileSemanticInfo, expr: &Expr<'_>) -> Option<String> {
@@ -2890,6 +3452,7 @@ fn parameter_name_and_span_for_expr(expr: &Expr<'_>) -> Option<(String, std::ops
 }
 
 fn delegatecall_target_identifier_from_sink_expr(
+    file: &FileSemanticInfo,
     expr: &Expr<'_>,
 ) -> Option<(String, std::ops::Range<usize>)> {
     let ExprKind::Call(callee, _) = &expr.kind else {
@@ -2902,12 +3465,14 @@ fn delegatecall_target_identifier_from_sink_expr(
     let ExprKind::Member(base, member) = &callee.kind else {
         return None;
     };
-    (member.as_str() == "delegatecall")
-        .then(|| delegatecall_target_identifier(base))
-        .flatten()
+    (member.as_str() == "delegatecall"
+        && is_low_level_address_receiver(&file.source, &file.table, base))
+    .then(|| delegatecall_target_identifier(base))
+    .flatten()
 }
 
 fn eth_transfer_target_identifier_from_sink_expr(
+    file: &FileSemanticInfo,
     expr: &Expr<'_>,
 ) -> Option<(String, &'static str, std::ops::Range<usize>)> {
     let ExprKind::Call(callee, args) = &expr.kind else {
@@ -2923,18 +3488,21 @@ fn eth_transfer_target_identifier_from_sink_expr(
             (
                 base,
                 member,
-                call_options_contain_named_arg(options, "value"),
+                call_options_contain_nonzero_named_arg(options, "value"),
             )
         }
         _ => return None,
     };
 
     let method_label = match member.as_str() {
-        "send" => ".send()",
+        "send" if args.len() == 1 => ".send()",
         "transfer" if args.len() == 1 => ".transfer()",
         "call" if has_value_option => ".call{value: ...}()",
         _ => return None,
     };
+    if !is_low_level_address_receiver(&file.source, &file.table, base) {
+        return None;
+    }
     let (target_name, span) = delegatecall_target_identifier(base)?;
     Some((target_name, method_label, span))
 }
@@ -3299,6 +3867,38 @@ contract Broken is MissingBase {
                     "compiler/unresolved-type".into(),
                 ))
         }));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_use_overlay_for_imported_base_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("Base.sol");
+        let main_path = dir.path().join("Main.sol");
+        let base_source = "pragma solidity ^0.8.0; contract Base {}";
+        let overlay_source = "pragma solidity ^0.8.0; contract RenamedBase {}";
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Main is Base {}
+"#;
+        fs::write(&base_path, base_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+        let index = ProjectIndex::build(dir.path());
+        let canonical_base = base_path.canonicalize().unwrap();
+        let get_source = |candidate: &Path| {
+            if candidate.canonicalize().ok().as_ref() == Some(&canonical_base) {
+                Some(overlay_source.to_string())
+            } else {
+                fs::read_to_string(candidate).ok()
+            }
+        };
+
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-base-contract")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
     }
 
     #[test]
@@ -4723,6 +5323,347 @@ contract Main {
         )
         .expect("valid finding metadata");
         assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_native_detectors_ignore_ordinary_abi_methods_named_like_primitives() {
+        let source = r#"pragma solidity ^0.8.0;
+interface Executor {
+    function delegatecall(bytes calldata payload) external returns (bool);
+    function call(bytes calldata payload) external payable returns (bool);
+    function transfer(uint256 amount) external;
+    function send(uint256 amount) external returns (bool);
+}
+
+contract Main {
+    function wrapper(Executor executor, bytes calldata payload) internal {
+        executor.delegatecall(payload);
+        executor.call{value: 1}(payload);
+        executor.transfer(1);
+        executor.send(1);
+    }
+
+    function run(Executor executor, bytes calldata payload) external {
+        wrapper(executor, payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic_code(diagnostic),
+                Some(
+                    UNCHECKED_LOW_LEVEL_CALL_ID
+                        | USER_CONTROLLED_DELEGATECALL_ID
+                        | USER_CONTROLLED_ETH_TRANSFER_ID
+                )
+            )
+        }));
+    }
+
+    #[test]
+    fn test_native_detectors_recognize_typed_address_expressions() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    mapping(uint256 => address payable) recipients;
+
+    function implementation() internal view returns (address) {
+        return msg.sender;
+    }
+
+    function run(bytes calldata payload) external {
+        msg.sender.call(payload);
+        recipients[0].call{value: 1}("");
+        implementation().delegatecall(payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+        let unchecked = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic_code(diagnostic) == Some(UNCHECKED_LOW_LEVEL_CALL_ID))
+            .count();
+
+        assert_eq!(unchecked, 3, "diagnostics: {diagnostics:#?}");
+    }
+
+    #[test]
+    fn test_zero_value_call_is_not_an_eth_transfer() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(address payable recipient) external {
+        recipient.call{value: 0}("");
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_ETH_TRANSFER_ID)
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(UNCHECKED_LOW_LEVEL_CALL_ID)
+        }));
+    }
+
+    #[test]
+    fn test_sink_summary_preserves_unnamed_parameter_positions() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function sink(uint256, address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+
+    function run(uint256 marker, address implementation, bytes memory payload) external {
+        sink(marker, implementation, payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic.message.contains("argument `implementation`")
+                && diagnostic.message.contains("via `sink`")
+        }));
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic.message.contains("argument `marker`")
+        }));
+    }
+
+    #[test]
+    fn test_named_call_arguments_map_to_declared_parameters() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function sink(uint256 marker, address target, bytes memory payload) internal {
+        marker;
+        target.delegatecall(payload);
+    }
+
+    function run(uint256 marker, address implementation, bytes memory payload) external {
+        sink({payload: payload, marker: marker, target: implementation});
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic.message.contains("argument `implementation`")
+                && diagnostic.message.contains("via `sink`")
+        }));
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic.message.contains("argument `marker`")
+        }));
+    }
+
+    #[test]
+    fn test_safe_same_arity_overload_does_not_inherit_dangerous_summary() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function bridge(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+
+    function bridge(bytes memory data, bytes memory payload) internal pure {
+        data;
+        payload;
+    }
+
+    function run(bytes memory data, bytes memory payload) external {
+        bridge(data, payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic
+                    .message
+                    .contains("flows into delegatecall via `bridge`")
+        }));
+    }
+
+    #[test]
+    fn test_safe_override_does_not_inherit_base_summary() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    function bridge(address target, bytes memory payload) internal virtual {
+        target.delegatecall(payload);
+    }
+}
+
+contract Main is Base {
+    function bridge(address target, bytes memory payload) internal override {
+        target;
+        payload;
+    }
+
+    function run(address implementation, bytes memory payload) external {
+        bridge(implementation, payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic
+                    .message
+                    .contains("flows into delegatecall via `bridge`")
+        }));
+    }
+
+    #[test]
+    fn test_multiple_propagated_sinks_at_same_call_are_preserved() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function sink(address first, address second, uint256 amount) internal {
+        payable(first).call{value: amount}("");
+        payable(second).call{value: amount}("");
+    }
+
+    function run(address recipient, address refund, uint256 amount) external {
+        sink(recipient, refund, amount);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+        let propagated = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some(USER_CONTROLLED_ETH_TRANSFER_ID)
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `sink`")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(propagated.len(), 2);
+        assert!(propagated
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("`recipient`")));
+        assert!(propagated
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("`refund`")));
+    }
+
+    #[test]
+    fn test_native_detector_honors_config_and_inline_suppression() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function run(address implementation, bytes memory payload) external {
+        // solgrid-disable-next-line security/user-controlled-delegatecall
+        implementation.delegatecall(payload);
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics_with_config(
+            &index,
+            source,
+            path,
+            &get_source,
+            &Config::default(),
+        );
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+        }));
+
+        let unsuppressed = source.replace(
+            "// solgrid-disable-next-line security/user-controlled-delegatecall\n",
+            "",
+        );
+        let mut config = Config::default();
+        config.lint.rules.insert(
+            USER_CONTROLLED_DELEGATECALL_ID.to_string(),
+            solgrid_config::RuleLevel::Off,
+        );
+        let diagnostics = compiler_to_lsp_diagnostics_with_config(
+            &index,
+            &unsuppressed,
+            path,
+            &get_source,
+            &config,
+        );
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+        }));
+
+        config.lint.rules.insert(
+            USER_CONTROLLED_DELEGATECALL_ID.to_string(),
+            solgrid_config::RuleLevel::Info,
+        );
+        let diagnostics = compiler_to_lsp_diagnostics_with_config(
+            &index,
+            &unsuppressed,
+            path,
+            &get_source,
+            &config,
+        );
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID))
+            .expect("configured detector should be emitted");
+        assert_eq!(
+            diagnostic.severity,
+            Some(ls_types::DiagnosticSeverity::INFORMATION)
+        );
+    }
+
+    #[test]
+    fn test_member_resolution_requires_the_expected_symbol_kind() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function Missing() internal {}
+
+    function run() external {
+        emit Missing();
+        revert Missing();
+    }
+}
+"#;
+        let path = Path::new("Main.sol");
+        let index = ProjectIndex::new(None);
+        let get_source = |_candidate: &Path| None;
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, path, &get_source);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some("compiler/unresolved-event")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some("compiler/unresolved-error")
+        }));
     }
 
     #[test]
