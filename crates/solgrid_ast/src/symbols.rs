@@ -613,6 +613,21 @@ fn signature_data_for_function(source: &str, func: &ItemFunction<'_>) -> Signatu
     }
 }
 
+fn signature_data_for_parameter_labels(
+    source: &str,
+    def_span: &Range<usize>,
+    param_labels: Vec<String>,
+) -> SignatureData {
+    let label = normalize_whitespace(&source[def_span.clone()]);
+    let parameters = map_parameter_offsets(&label, &param_labels);
+    SignatureData {
+        label,
+        parameters,
+        return_types: Vec::new(),
+        first_return_type: None,
+    }
+}
+
 fn map_parameter_offsets(label: &str, param_labels: &[String]) -> Vec<SignatureParam> {
     let mut search_start = 0usize;
     let mut parameters = Vec::with_capacity(param_labels.len());
@@ -833,36 +848,104 @@ fn collect_item(
 
         ItemKind::Event(ev) => {
             let name_span = span_to_range(ev.name.span);
+            let def_span = span_to_range(item.span);
+            let event_scope = table.push_scope(Some(parent_scope), def_span.clone());
+            let signature = signature_data_for_parameter_labels(
+                source,
+                &def_span,
+                ev.parameters
+                    .iter()
+                    .map(|parameter| parameter_label(source, parameter))
+                    .collect(),
+            );
             table.add_symbol(
                 parent_scope,
                 SymbolDef {
                     name: ev.name.as_str().to_string(),
                     kind: SymbolKind::Event,
                     name_span,
-                    def_span: span_to_range(item.span),
-                    scope: None,
+                    def_span,
+                    scope: Some(event_scope),
                     type_info: None,
-                    signature: None,
+                    signature: Some(signature),
                     visibility: None,
                 },
             );
+            for parameter in ev.parameters.iter() {
+                let Some(name_ident) = parameter.name else {
+                    continue;
+                };
+                let parameter_span = span_to_range(parameter.span);
+                table.add_symbol(
+                    event_scope,
+                    SymbolDef {
+                        name: name_ident.as_str().to_string(),
+                        kind: SymbolKind::Parameter,
+                        name_span: span_to_range(name_ident.span),
+                        def_span: parameter_span.clone(),
+                        scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &parameter.ty,
+                            parameter.data_location,
+                            parameter_span.start,
+                        )),
+                        signature: None,
+                        visibility: None,
+                    },
+                );
+            }
         }
 
         ItemKind::Error(err) => {
             let name_span = span_to_range(err.name.span);
+            let def_span = span_to_range(item.span);
+            let error_scope = table.push_scope(Some(parent_scope), def_span.clone());
+            let signature = signature_data_for_parameter_labels(
+                source,
+                &def_span,
+                err.parameters
+                    .iter()
+                    .map(|parameter| parameter_label(source, parameter))
+                    .collect(),
+            );
             table.add_symbol(
                 parent_scope,
                 SymbolDef {
                     name: err.name.as_str().to_string(),
                     kind: SymbolKind::Error,
                     name_span,
-                    def_span: span_to_range(item.span),
-                    scope: None,
+                    def_span,
+                    scope: Some(error_scope),
                     type_info: None,
-                    signature: None,
+                    signature: Some(signature),
                     visibility: None,
                 },
             );
+            for parameter in err.parameters.iter() {
+                let Some(name_ident) = parameter.name else {
+                    continue;
+                };
+                let parameter_span = span_to_range(parameter.span);
+                table.add_symbol(
+                    error_scope,
+                    SymbolDef {
+                        name: name_ident.as_str().to_string(),
+                        kind: SymbolKind::Parameter,
+                        name_span: span_to_range(name_ident.span),
+                        def_span: parameter_span.clone(),
+                        scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &parameter.ty,
+                            parameter.data_location,
+                            parameter_span.start,
+                        )),
+                        signature: None,
+                        visibility: None,
+                    },
+                );
+            }
         }
 
         ItemKind::Struct(s) => {

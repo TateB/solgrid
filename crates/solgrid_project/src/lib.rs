@@ -5475,6 +5475,310 @@ fn named_call_argument_targets(
     targets
 }
 
+fn named_path_call_argument_targets(
+    snapshot: &ProjectSnapshot,
+    path: &solar_ast::AstPath<'_>,
+    argument_names: &[&str],
+    target_name: &str,
+    expected_kind: SymbolKind,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<ReferenceTarget> {
+    let segments = path
+        .segments()
+        .iter()
+        .map(|segment| segment.as_str())
+        .collect::<Vec<_>>();
+    let Some(first) = segments.first().copied() else {
+        return Vec::new();
+    };
+    let offset = solgrid_ast::span_to_range(path.span()).start;
+    let mut targets = Vec::new();
+
+    if segments.len() == 1 {
+        let local = snapshot.table.resolve_all(first, offset);
+        if !local.is_empty() {
+            collect_named_key_targets(
+                &snapshot.table,
+                &snapshot.path,
+                local
+                    .into_iter()
+                    .filter(|definition| definition.kind == expected_kind),
+                argument_names,
+                target_name,
+                &mut targets,
+            );
+            return targets;
+        }
+
+        if let Some(cross) =
+            resolve_cross_file_symbol(&snapshot.table, first, &snapshot.path, get_source, resolver)
+        {
+            if cross.def.kind == expected_kind {
+                collect_named_key_targets(
+                    &cross.table,
+                    &cross.resolved_path,
+                    [&cross.def],
+                    argument_names,
+                    target_name,
+                    &mut targets,
+                );
+            }
+        }
+        collect_inherited_named_path_call_targets(
+            snapshot,
+            offset,
+            first,
+            expected_kind,
+            argument_names,
+            target_name,
+            get_source,
+            resolver,
+            &mut targets,
+        );
+        return targets;
+    }
+
+    if segments.len() == 2 {
+        let local_containers = snapshot.table.resolve_all(first, offset);
+        if !local_containers.is_empty() {
+            for container in local_containers {
+                collect_named_key_targets(
+                    &snapshot.table,
+                    &snapshot.path,
+                    snapshot
+                        .table
+                        .resolve_member_all(container, segments[1])
+                        .into_iter()
+                        .filter(|definition| definition.kind == expected_kind),
+                    argument_names,
+                    target_name,
+                    &mut targets,
+                );
+            }
+            return targets;
+        }
+
+        if let Some(cross) = resolve_cross_file_member_symbol(
+            &snapshot.table,
+            first,
+            segments[1],
+            &snapshot.path,
+            get_source,
+            resolver,
+        ) {
+            if cross.def.kind == expected_kind {
+                collect_named_key_targets(
+                    &cross.table,
+                    &cross.resolved_path,
+                    [&cross.def],
+                    argument_names,
+                    target_name,
+                    &mut targets,
+                );
+            }
+        }
+        return targets;
+    }
+
+    let Some(cross) = resolve_cross_file_member_symbol(
+        &snapshot.table,
+        first,
+        segments[1],
+        &snapshot.path,
+        get_source,
+        resolver,
+    ) else {
+        return targets;
+    };
+    let mut current = cross.def.clone();
+    for segment in &segments[2..segments.len() - 1] {
+        let definitions = cross.table.resolve_member_all(&current, segment);
+        let [definition] = definitions.as_slice() else {
+            return targets;
+        };
+        current = (*definition).clone();
+    }
+    collect_named_key_targets(
+        &cross.table,
+        &cross.resolved_path,
+        cross
+            .table
+            .resolve_member_all(&current, segments[segments.len() - 1])
+            .into_iter()
+            .filter(|definition| definition.kind == expected_kind),
+        argument_names,
+        target_name,
+        &mut targets,
+    );
+
+    targets
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_inherited_named_path_call_targets(
+    snapshot: &ProjectSnapshot,
+    offset: usize,
+    member_name: &str,
+    expected_kind: SymbolKind,
+    argument_names: &[&str],
+    target_name: &str,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    targets: &mut Vec<ReferenceTarget>,
+) {
+    let Some(contract_def) = snapshot
+        .table
+        .file_level_symbols()
+        .iter()
+        .find(|definition| {
+            is_contract_container_symbol(definition.kind) && definition.def_span.contains(&offset)
+        })
+    else {
+        return;
+    };
+    let mut visited = HashSet::new();
+    collect_inherited_named_path_call_targets_from_contract(
+        snapshot,
+        contract_def,
+        member_name,
+        expected_kind,
+        argument_names,
+        target_name,
+        get_source,
+        resolver,
+        targets,
+        &mut visited,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_inherited_named_path_call_targets_from_contract(
+    snapshot: &ProjectSnapshot,
+    contract_def: &SymbolDef,
+    member_name: &str,
+    expected_kind: SymbolKind,
+    argument_names: &[&str],
+    target_name: &str,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    targets: &mut Vec<ReferenceTarget>,
+    visited: &mut HashSet<(PathBuf, usize)>,
+) {
+    let Some(contract) = find_contract_decl(snapshot, contract_def) else {
+        return;
+    };
+    for base in &contract.bases {
+        let Some(resolved) = resolve_contract_type_path(snapshot, base, get_source, resolver)
+        else {
+            continue;
+        };
+        let visit_key = (resolved.snapshot.path.clone(), resolved.def.name_span.start);
+        if !visited.insert(visit_key) {
+            continue;
+        }
+
+        collect_named_key_targets(
+            &resolved.snapshot.table,
+            &resolved.snapshot.path,
+            resolved
+                .snapshot
+                .table
+                .resolve_member_all(&resolved.def, member_name)
+                .into_iter()
+                .filter(|definition| definition.kind == expected_kind),
+            argument_names,
+            target_name,
+            targets,
+        );
+        collect_inherited_named_path_call_targets_from_contract(
+            &resolved.snapshot,
+            &resolved.def,
+            member_name,
+            expected_kind,
+            argument_names,
+            target_name,
+            get_source,
+            resolver,
+            targets,
+            visited,
+        );
+    }
+}
+
+fn resolve_contract_type_path(
+    snapshot: &ProjectSnapshot,
+    path: &TypePath,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<ResolvedPathTarget> {
+    let [first, rest @ ..] = path.segments.as_slice() else {
+        return None;
+    };
+
+    if let Some(definition) = snapshot.table.resolve(first, 0) {
+        let mut definition = definition.clone();
+        for segment in rest {
+            let definitions = snapshot.table.resolve_member_all(&definition, segment);
+            let [next] = definitions.as_slice() else {
+                return None;
+            };
+            definition = (*next).clone();
+        }
+        return is_contract_container_symbol(definition.kind).then(|| ResolvedPathTarget {
+            snapshot: snapshot.clone(),
+            def: definition,
+        });
+    }
+
+    let cross = if rest.is_empty() {
+        resolve_cross_file_symbol(&snapshot.table, first, &snapshot.path, get_source, resolver)
+    } else {
+        let mut cross = resolve_cross_file_member_symbol(
+            &snapshot.table,
+            first,
+            &rest[0],
+            &snapshot.path,
+            get_source,
+            resolver,
+        )?;
+        for segment in &rest[1..] {
+            let definitions = cross.table.resolve_member_all(&cross.def, segment);
+            let [next] = definitions.as_slice() else {
+                return None;
+            };
+            cross.def = (*next).clone();
+        }
+        Some(cross)
+    }?;
+    if !is_contract_container_symbol(cross.def.kind) {
+        return None;
+    }
+    Some(ResolvedPathTarget {
+        snapshot: ProjectSnapshot {
+            path: cross.resolved_path.clone(),
+            source: cross.source.clone(),
+            table: cross.table,
+            contracts: collect_contract_declarations(
+                &cross.source,
+                &cross.resolved_path.to_string_lossy(),
+            ),
+            callables: collect_callable_declarations(
+                &cross.source,
+                &cross.resolved_path.to_string_lossy(),
+            ),
+        },
+        def: cross.def,
+    })
+}
+
+fn is_contract_container_symbol(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Contract | SymbolKind::Interface | SymbolKind::Library
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_typed_container_named_key_targets(
     snapshot: &ProjectSnapshot,
@@ -5605,6 +5909,7 @@ fn collect_named_key_targets<'a, I>(
     for definition in definitions {
         let member_kind = match definition.kind {
             SymbolKind::Function | SymbolKind::Modifier => SymbolKind::Parameter,
+            SymbolKind::Event | SymbolKind::Error => SymbolKind::Parameter,
             SymbolKind::Struct => SymbolKind::StructField,
             _ => continue,
         };
@@ -5664,6 +5969,42 @@ fn scan_named_argument_item(item: &solar_ast::Item<'_>, finder: &mut NamedArgume
     }
 }
 
+fn scan_named_path_call_arguments(
+    path: &solar_ast::AstPath<'_>,
+    arguments: &solar_ast::CallArgs<'_>,
+    expected_kind: SymbolKind,
+    finder: &mut NamedArgumentFinder<'_>,
+) {
+    let CallArgsKind::Named(arguments) = &arguments.kind else {
+        return;
+    };
+    let Some(argument) = arguments
+        .iter()
+        .find(|argument| solgrid_ast::span_to_range(argument.name.span) == *finder.target_span)
+    else {
+        return;
+    };
+
+    finder.saw_named_argument = true;
+    let argument_names = arguments
+        .iter()
+        .map(|argument| argument.name.as_str())
+        .collect::<Vec<_>>();
+    for target in named_path_call_argument_targets(
+        finder.snapshot,
+        path,
+        &argument_names,
+        argument.name.as_str(),
+        expected_kind,
+        finder.get_source,
+        finder.resolver,
+    ) {
+        if !finder.targets.contains(&target) {
+            finder.targets.push(target);
+        }
+    }
+}
+
 fn scan_named_argument_stmts(stmts: &[Stmt<'_>], finder: &mut NamedArgumentFinder<'_>) {
     for stmt in stmts {
         match &stmt.kind {
@@ -5687,7 +6028,14 @@ fn scan_named_argument_stmts(stmts: &[Stmt<'_>], finder: &mut NamedArgumentFinde
                 scan_named_argument_stmts(std::slice::from_ref(body), finder);
                 scan_named_argument_expr(condition, finder);
             }
-            StmtKind::Emit(_, arguments) | StmtKind::Revert(_, arguments) => {
+            StmtKind::Emit(path, arguments) => {
+                scan_named_path_call_arguments(path, arguments, SymbolKind::Event, finder);
+                for argument in arguments.exprs() {
+                    scan_named_argument_expr(argument, finder);
+                }
+            }
+            StmtKind::Revert(path, arguments) => {
+                scan_named_path_call_arguments(path, arguments, SymbolKind::Error, finder);
                 for argument in arguments.exprs() {
                     scan_named_argument_expr(argument, finder);
                 }
@@ -7269,6 +7617,220 @@ contract Main {
                         ..source.rfind("amount: 1").unwrap() + "amount".len()),
                 )
         }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_named_emit_and_revert_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    event Paid(address payer, uint256 amount);
+    error Failed(address account, uint256 code);
+
+    function run() external {
+        emit Paid({amount: 1, payer: msg.sender});
+        revert Failed({code: 2, account: msg.sender});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        for (declaration, named_key) in [
+            ("payer, uint256", "payer: msg.sender"),
+            ("account, uint256", "account: msg.sender"),
+        ] {
+            let declaration = source.find(declaration).unwrap();
+            let plan = index
+                .rename_plan(
+                    &path,
+                    source,
+                    offset_to_position(source, declaration),
+                    &|candidate| fs::read_to_string(candidate).ok(),
+                )
+                .unwrap();
+
+            assert_eq!(plan.locations.len(), 2);
+            let named_key = source.find(named_key).unwrap();
+            assert!(plan.locations.iter().any(|location| {
+                location.range
+                    == span_to_range(source, &(named_key..named_key + plan.placeholder.len()))
+            }));
+        }
+    }
+
+    #[test]
+    fn test_rename_plan_includes_imported_named_error_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let errors_path = dir.path().join("Errors.sol");
+        let errors_source = r#"pragma solidity ^0.8.0;
+error Unauthorized(address account, uint256 code);
+"#;
+        fs::write(&errors_path, errors_source).unwrap();
+        let main_path = dir.path().join("Main.sol");
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Unauthorized} from "./Errors.sol";
+contract Main {
+    function run() external {
+        revert Unauthorized({code: 1, account: msg.sender});
+    }
+}
+"#;
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = errors_source.find("account, uint256").unwrap();
+        let plan = index
+            .rename_plan(
+                &errors_path,
+                errors_source,
+                offset_to_position(errors_source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 2);
+        let named_key = main_source.find("account: msg.sender").unwrap();
+        assert!(plan.locations.iter().any(|location| {
+            location.uri == path_to_uri(&normalize_path(&main_path)).unwrap()
+                && location.range
+                    == span_to_range(main_source, &(named_key..named_key + "account".len()))
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_imported_named_event_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("Events.sol");
+        let events_source = r#"pragma solidity ^0.8.0;
+contract Events {
+    event Paid(address payer, uint256 amount);
+}
+"#;
+        fs::write(&events_path, events_source).unwrap();
+        let main_path = dir.path().join("Main.sol");
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Events} from "./Events.sol";
+contract Main {
+    function run() external {
+        emit Events.Paid({amount: 1, payer: msg.sender});
+    }
+}
+"#;
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = events_source.find("payer, uint256").unwrap();
+        let plan = index
+            .rename_plan(
+                &events_path,
+                events_source,
+                offset_to_position(events_source, declaration),
+                &|candidate| fs::read_to_string(candidate).ok(),
+            )
+            .unwrap();
+
+        assert_eq!(plan.locations.len(), 2);
+        let named_key = main_source.find("payer: msg.sender").unwrap();
+        assert!(plan.locations.iter().any(|location| {
+            location.uri == path_to_uri(&normalize_path(&main_path)).unwrap()
+                && location.range
+                    == span_to_range(main_source, &(named_key..named_key + "payer".len()))
+        }));
+    }
+
+    #[test]
+    fn test_rename_plan_includes_inherited_unqualified_event_and_error_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    event Paid(address payer, uint256 amount);
+    error Failed(address account, uint256 code);
+}
+contract Main is Base {
+    function run() external {
+        emit Paid({amount: 1, payer: msg.sender});
+        revert Failed({code: 2, account: msg.sender});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        for (declaration, named_key) in [
+            ("payer, uint256", "payer: msg.sender"),
+            ("account, uint256", "account: msg.sender"),
+        ] {
+            let declaration = source.find(declaration).unwrap();
+            let plan = index
+                .rename_plan(
+                    &path,
+                    source,
+                    offset_to_position(source, declaration),
+                    &|candidate| fs::read_to_string(candidate).ok(),
+                )
+                .unwrap();
+
+            assert_eq!(plan.locations.len(), 2);
+            let named_key = source.find(named_key).unwrap();
+            assert!(plan.locations.iter().any(|location| {
+                location.range
+                    == span_to_range(source, &(named_key..named_key + plan.placeholder.len()))
+            }));
+        }
+    }
+
+    #[test]
+    fn test_rename_plan_includes_imported_inherited_event_and_error_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("Base.sol");
+        let base_source = r#"pragma solidity ^0.8.0;
+contract Base {
+    event Paid(address payer, uint256 amount);
+    error Failed(address account, uint256 code);
+}
+"#;
+        fs::write(&base_path, base_source).unwrap();
+        let main_path = dir.path().join("Main.sol");
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Base} from "./Base.sol";
+contract Main is Base {
+    function run() external {
+        emit Paid({amount: 1, payer: msg.sender});
+        revert Failed({code: 2, account: msg.sender});
+    }
+}
+"#;
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        for (declaration, named_key) in [
+            ("payer, uint256", "payer: msg.sender"),
+            ("account, uint256", "account: msg.sender"),
+        ] {
+            let declaration = base_source.find(declaration).unwrap();
+            let plan = index
+                .rename_plan(
+                    &base_path,
+                    base_source,
+                    offset_to_position(base_source, declaration),
+                    &|candidate| fs::read_to_string(candidate).ok(),
+                )
+                .unwrap();
+
+            assert_eq!(plan.locations.len(), 2);
+            let named_key = main_source.find(named_key).unwrap();
+            assert!(plan.locations.iter().any(|location| {
+                location.uri == path_to_uri(&normalize_path(&main_path)).unwrap()
+                    && location.range
+                        == span_to_range(
+                            main_source,
+                            &(named_key..named_key + plan.placeholder.len()),
+                        )
+            }));
+        }
     }
 
     #[test]
