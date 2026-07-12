@@ -12,7 +12,9 @@ use solgrid_diagnostics::{
 };
 use solgrid_linter::suppression::{parse_suppressions, Suppressions};
 use solgrid_linter::LintEngine;
-use solgrid_parser::solar_ast::{self, Expr, ExprKind, IndexKind, ItemKind, Stmt, StmtKind, Type};
+use solgrid_parser::solar_ast::{
+    self, Expr, ExprKind, FunctionKind, IndexKind, ItemKind, Stmt, StmtKind, Type,
+};
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
 use solgrid_project::{
@@ -352,7 +354,11 @@ impl<'a> CompilerDiagnosticContext<'a> {
                 for modifier in function.header.modifiers.iter() {
                     let modifier_name = modifier.name.to_string();
                     let modifier_span = solgrid_ast::span_to_range(modifier.name.span());
-                    if !self.resolve_modifier_path(&modifier.name, modifier_span.start) {
+                    let resolves_as_modifier =
+                        self.resolve_modifier_path(&modifier.name, modifier_span.start);
+                    let resolves_as_base_constructor = function.kind == FunctionKind::Constructor
+                        && self.resolve_constructor_base_path(&modifier.name, modifier_span.start);
+                    if !resolves_as_modifier && !resolves_as_base_constructor {
                         self.push(
                             "compiler/unresolved-modifier",
                             "Unresolved modifier",
@@ -720,10 +726,8 @@ impl<'a> CompilerDiagnosticContext<'a> {
                     }
                 }
             }
-            ExprKind::Ident(_)
-            | ExprKind::Lit(_, _)
-            | ExprKind::Type(_)
-            | ExprKind::TypeCall(_) => {}
+            ExprKind::TypeCall(ty) => self.visit_type(ty),
+            ExprKind::Ident(_) | ExprKind::Lit(_, _) | ExprKind::Type(_) => {}
         }
     }
 
@@ -734,6 +738,15 @@ impl<'a> CompilerDiagnosticContext<'a> {
 
     fn resolve_modifier_path(&self, path: &solar_ast::AstPath<'_>, resolve_offset: usize) -> bool {
         self.resolve_member_path(path, resolve_offset, &[SymbolKind::Modifier])
+    }
+
+    fn resolve_constructor_base_path(
+        &self,
+        path: &solar_ast::AstPath<'_>,
+        resolve_offset: usize,
+    ) -> bool {
+        let path = ast_path_to_type_path(path);
+        self.resolve_path_with_kinds(&path, resolve_offset, &[SymbolKind::Contract])
     }
 
     fn resolve_member_path(
@@ -3892,6 +3905,36 @@ contract Broken is MissingBase {
     }
 
     #[test]
+    fn test_compiler_diagnostics_visit_type_call_operands() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TypeCalls.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface Known {}
+contract TypeCalls {
+    function knownInterfaceId() external pure returns (bytes4) {
+        return type(Known).interfaceId;
+    }
+
+    function missingInterfaceId() external pure returns (bytes4) {
+        return type(Missing).interfaceId;
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_types = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic_code(diagnostic) == Some("compiler/unresolved-type"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(unresolved_types.len(), 1, "diagnostics: {diagnostics:#?}");
+        assert!(unresolved_types[0].message.contains("Missing"));
+    }
+
+    #[test]
     fn test_compiler_diagnostics_use_overlay_for_imported_base_resolution() {
         let dir = tempfile::tempdir().unwrap();
         let base_path = dir.path().join("Base.sol");
@@ -3992,6 +4035,43 @@ contract Main is Base {
             }),
             "got diagnostics: {diagnostics:?}"
         );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_constructor_base_specifier_and_modifiers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Constructors.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    constructor(uint256 value) {}
+}
+
+contract Child is Base {
+    modifier onlyReady() {
+        _;
+    }
+
+    constructor() Base(1) onlyReady missingModifier {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_modifiers = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-modifier")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_modifiers.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_modifiers[0].message.contains("missingModifier"));
     }
 
     #[test]
