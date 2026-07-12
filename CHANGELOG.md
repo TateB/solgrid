@@ -78,10 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed VS Code graph previews to make trackpad pinch zoom more responsive, lay out branch paths as distinct lanes, attach branch labels directly to graph edges, hide synthetic terminal-to-exit edges, and move source actions into graph nodes
 - Fixed VS Code graph previews to expose accessible node, relationship, and source details, remain readable in narrow and high-contrast layouts, preserve manual zoom on resize, and show request-scoped loading, empty, and error states
 - Fixed VS Code security and coverage views with compact action toolbars, stable view registration, truthful loading and failure states, richer accessibility labels, non-color coverage markers, guarded coverage runs, safe source paths, and resilient language-server restart handling
+- Fixed VS Code security focus to retain uncoded setup errors and exclude ignored baselines from group suppression and fix actions
 - Fixed VS Code reference CodeLens actions by wiring `solgrid.showReferences` to the native references peek command and suppressing transient `0 references` counts while the workspace index is warming
 - Fixed VS Code reference CodeLens clicks to reuse precomputed locations instead of rerunning the references provider before opening peek
 - Fixed VS Code VSIX packaging to run through pnpm, bundle the local release binary, and avoid requiring npm on PATH
 - Fixed LSP compiler-style member diagnostics to resolve modifiers, custom errors, and events inherited from imported base contracts/interfaces
+- Fixed LSP compiler diagnostics for constructor base specifiers and `type(...)` operands, and stopped showing ABI selector hints for top-level free functions
 - Fixed hover and go-to-definition for inherited contract/interface members such as custom errors used from derived contracts
 - Fixed native semantic detectors to honor rule configuration and inline suppressions, distinguish typed low-level address calls from same-named ABI methods, preserve named/unnamed parameter mappings, avoid overload or override contamination, and respect local-variable shadowing during interprocedural sink propagation
 - Fixed inline suppression parsing so comment markers inside strings or block comments cannot hide or forge directives
@@ -91,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed LSP open-buffer canonicalization, transitive diagnostic invalidation, background index replacement races, stale dependency and manual-workspace publications, semantic-token dependency refreshes, inherited overload lookup, and readonly token false positives
 - Fixed VS Code coverage merging and path resolution, refresh/task races, duplicate custom arguments, provider independence, supported Foundry/Hardhat invocation, security suppression grouping, graph request ordering, unsafe-fix setting shadowing, and language-server enablement reload behavior
 - Fixed VSIX target packaging and publishing to reject missing, non-executable, or architecture-mismatched binaries, and hardened the LSP/E2E harness against missed notifications, split UTF-8 frames, early task exits, shutdown pipe errors, and vacuous feature assertions
-- Fixed version bump tooling to keep workspace entries in `Cargo.lock` synchronized, reject invalid SemVer input, and require locked release builds
+- Fixed version bump tooling to keep workspace entries in `Cargo.lock` synchronized, reject invalid SemVer input, require locked release builds, and propagate Cargo metadata failures
 
 ### Security
 - Updated `crossbeam-epoch` to a release that resolves RUSTSEC-2026-0204
