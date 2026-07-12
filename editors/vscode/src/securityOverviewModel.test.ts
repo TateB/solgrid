@@ -80,6 +80,42 @@ describe("extractSecurityFindings", () => {
       suppressible: false,
     });
   });
+
+  it("keeps uncoded error diagnostics visible as compiler setup failures", () => {
+    const findings = extractSecurityFindings({
+      uri: "file:///workspace/Test.sol",
+      diagnostics: [
+        {
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+          severity: 1,
+          source: "solgrid",
+          message: "Failed to load solgrid.toml",
+        },
+      ],
+    });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      code: "compiler/setup",
+      meta: {
+        id: "compiler/setup",
+        category: "compiler",
+        kind: "compiler",
+        severity: "error",
+        suppressible: false,
+      },
+    });
+
+    const groups = buildOverviewTree(findings, "file", "security");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].children).toHaveLength(1);
+    expect(groups[0].children[0].finding.message).toBe(
+      "Failed to load solgrid.toml"
+    );
+  });
 });
 
 describe("buildOverviewTree", () => {

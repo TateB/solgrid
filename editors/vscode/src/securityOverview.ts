@@ -485,7 +485,11 @@ export async function suppressGroupNextLine(
     return;
   }
   await suppressFindings(
-    collectSuppressibleGroupFindings(node.children.map((child) => child.finding)),
+    collectSuppressibleGroupFindings(
+      node.children
+        .filter((child) => !child.ignored)
+        .map((child) => child.finding)
+    ),
     false
   );
 }
@@ -497,7 +501,11 @@ export async function applyGroupFixes(
     return;
   }
   await applyFixes(
-    collectFixableGroupFindings(node.children.map((child) => child.finding)),
+    collectFixableGroupFindings(
+      node.children
+        .filter((child) => !child.ignored)
+        .map((child) => child.finding)
+    ),
     false
   );
 }

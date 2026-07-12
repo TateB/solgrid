@@ -113,7 +113,9 @@ export function extractSecurityFindings(
           ? diagnostic.code
           : typeof diagnostic.code === "number"
             ? String(diagnostic.code)
-            : "unknown";
+            : diagnostic.severity === 1
+              ? "compiler/setup"
+              : "unknown";
 
       return {
         uri: params.uri,
