@@ -128,6 +128,29 @@ updated_lock_entries=$(grep -Fc 'version = "0.1.0"' "$stale_root/Cargo.lock")
 [ "$updated_lock_entries" -eq 2 ] ||
   fail "expected two refreshed workspace entries in Cargo.lock, found $updated_lock_entries"
 
+# Check mode must propagate cargo metadata failures instead of continuing into
+# the lockfile text check and accidentally returning success.
+metadata_root=$(new_fixture)
+"$metadata_root/scripts/version.sh" --write > "$metadata_root/write.out"
+real_cargo=$(command -v cargo)
+mkdir -p "$metadata_root/fake-bin"
+cat > "$metadata_root/fake-bin/cargo" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "metadata" ]; then
+  echo "forced cargo metadata failure" >&2
+  exit 86
+fi
+exec "$real_cargo" "\$@"
+EOF
+chmod +x "$metadata_root/fake-bin/cargo"
+if PATH="$metadata_root/fake-bin:$PATH" \
+  "$metadata_root/scripts/version.sh" > "$metadata_root/metadata.out" 2>&1; then
+  fail "check mode ignored a cargo metadata failure"
+fi
+assert_contains "$metadata_root/metadata.out" "forced cargo metadata failure"
+assert_contains "$metadata_root/metadata.out" \
+  "ERROR: cargo metadata could not validate the locked workspace"
+
 # Stable, prerelease, and build-metadata SemVer forms are accepted end to end.
 assert_set_version "0.0.0"
 assert_set_version "1.2.3"

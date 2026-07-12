@@ -128,9 +128,14 @@ check_workspace_lock_versions() {
     echo "ERROR: Cargo lockfile not found: $CARGO_LOCK" >&2
     return 1
   fi
-  cargo metadata --locked --no-deps --format-version 1 \
-    --manifest-path "$CARGO_TOML" >/dev/null
-  package_names=$(get_workspace_package_names | paste -sd, -)
+  if ! cargo metadata --locked --no-deps --format-version 1 \
+    --manifest-path "$CARGO_TOML" >/dev/null; then
+    echo "ERROR: cargo metadata could not validate the locked workspace" >&2
+    return 1
+  fi
+  if ! package_names=$(get_workspace_package_names | paste -sd, -); then
+    return 1
+  fi
 
   awk -v RS='' -v packages="$package_names" -v expected="$expected" '
     BEGIN {
