@@ -1813,9 +1813,8 @@ pub(crate) fn selector_hints_in_range(
                         self.contract_stack.pop();
                     }
                     ItemKind::Function(function)
-                        if is_selector_visible_function(function)
-                            || (self.contract_stack.is_empty()
-                                && function.kind == FunctionKind::Function) =>
+                        if !self.contract_stack.is_empty()
+                            && is_selector_visible_function(function) =>
                     {
                         if let Some(selector) = self.selectors.function_selector_info(
                             self.contract_stack.last().map(String::as_str),
@@ -2754,6 +2753,44 @@ contract Router {
             .iter()
             .any(|label| label.starts_with("interface ID: ")));
         assert_eq!(labels.len(), 3);
+    }
+
+    #[test]
+    fn test_selector_hints_skip_top_level_free_functions() {
+        let source = r#"function topLevel(uint256 amount) pure returns (uint256) {
+    return amount;
+}
+
+contract Router {
+    function swap(uint256 amount) public returns (uint256) {
+        return amount;
+    }
+
+    function quote(uint256 amount) external view returns (uint256) {
+        return amount;
+    }
+}"#;
+
+        let hints = selector_hints_in_range(
+            source,
+            0,
+            source.len(),
+            None,
+            &noop_source,
+            &noop_resolver(),
+        );
+        let tooltips = hints
+            .into_iter()
+            .map(|hint| hint.tooltip)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            tooltips,
+            vec![
+                "Function selector for `swap(uint256)`",
+                "Function selector for `quote(uint256)`",
+            ]
+        );
     }
 
     #[test]
