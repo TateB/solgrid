@@ -1110,17 +1110,11 @@ impl<B: NavBackend> ProjectIndex<B> {
         path: &Path,
         source: &str,
         target_offset: usize,
+        get_source: &dyn Fn(&Path) -> Option<String>,
     ) -> Option<GraphDocument> {
         let snapshot = self.snapshot_for_source(path, source)?;
         let filename = snapshot.path.to_string_lossy().to_string();
-        let get_source = |candidate: &Path| {
-            let normalized = normalize_path(candidate);
-            self.files
-                .get(&normalized)
-                .map(|file| file.snapshot.source.clone())
-                .or_else(|| std::fs::read_to_string(&normalized).ok())
-        };
-        let contract_linearization = linearized_contract_refs(self, &snapshot, &get_source);
+        let contract_linearization = linearized_contract_refs(self, &snapshot, get_source);
 
         let session = solgrid_parser::solar_interface::Session::builder()
             .with_buffer_emitter(solgrid_parser::solar_interface::ColorChoice::Never)
@@ -1635,12 +1629,17 @@ impl<B: NavBackend> ProjectIndex<B> {
             }
         }
 
+        if let Some(source) = get_source(&normalized) {
+            if let Some(snapshot) = self.snapshot_for_source(&normalized, &source) {
+                return Some(snapshot);
+            }
+        }
+
         if let Some(file) = self.files.get(&normalized) {
             return Some(file.snapshot.clone());
         }
 
-        let source = get_source(&normalized)?;
-        self.snapshot_for_source(&normalized, &source)
+        None
     }
 
     fn resolve_contract_decl_path(
@@ -4892,32 +4891,21 @@ fn reference_scan_names(
             continue;
         };
 
-        let Some(resolved) = resolver.resolve(&import.path, &snapshot.path) else {
-            continue;
-        };
-        let resolved = normalize_path(&resolved);
-        if resolved != target.file_path {
-            continue;
-        }
-
-        let Some(imported_source) = get_source(&resolved) else {
-            continue;
-        };
-        let filename = resolved.to_string_lossy().to_string();
-        let Some(imported_table) = symbols::build_symbol_table(&imported_source, &filename) else {
-            continue;
-        };
-
         for (original, alias) in imported_names {
-            if original != &target.name {
-                continue;
-            }
-            let Some(def) = imported_table.resolve(original, 0) else {
+            let local_name = alias.as_deref().unwrap_or(original);
+            let Some(imported) = resolve_cross_file_symbol(
+                &snapshot.table,
+                local_name,
+                &snapshot.path,
+                get_source,
+                resolver,
+            ) else {
                 continue;
             };
-            let imported_target = reference_target_from_def(&resolved, def, None);
+            let imported_target =
+                reference_target_from_def(&imported.resolved_path, &imported.def, None);
             if imported_target == *target {
-                names.insert(alias.clone().unwrap_or_else(|| original.clone()));
+                names.insert(local_name.to_string());
             }
         }
     }
@@ -6289,7 +6277,17 @@ fn import_clause_reference_target(
         if definitions.len() == 1 {
             return Some(reference_target_from_def(&resolved, definitions[0], None));
         }
-        return None;
+        if !definitions.is_empty() {
+            return None;
+        }
+
+        let imported =
+            resolve_cross_file_symbol(&imported_table, name, &resolved, get_source, resolver)?;
+        return Some(reference_target_from_def(
+            &imported.resolved_path,
+            &imported.def,
+            None,
+        ));
     }
 
     None
@@ -7430,6 +7428,36 @@ contract Token {
     }
 
     #[test]
+    fn test_candidate_snapshot_prefers_overlay_and_preserves_source_fallbacks() {
+        let dir = tempfile::tempdir().unwrap();
+        let indexed_path = dir.path().join("Indexed.sol");
+        let indexed_source = "pragma solidity ^0.8.0; contract Indexed {}\n";
+        fs::write(&indexed_path, indexed_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let overlay_source = "pragma solidity ^0.8.0; contract Overlay {}\n";
+        let overlay_snapshot = index
+            .candidate_snapshot(&indexed_path, None, &|_| Some(overlay_source.to_string()))
+            .expect("overlay snapshot");
+        assert_eq!(overlay_snapshot.source, overlay_source);
+
+        let indexed_snapshot = index
+            .candidate_snapshot(&indexed_path, None, &|_| None)
+            .expect("indexed fallback snapshot");
+        assert_eq!(indexed_snapshot.source, indexed_source);
+
+        let disk_path = dir.path().join("AddedAfterIndex.sol");
+        let disk_source = "pragma solidity ^0.8.0; contract AddedAfterIndex {}\n";
+        fs::write(&disk_path, disk_source).unwrap();
+        let disk_snapshot = index
+            .candidate_snapshot(&disk_path, None, &|candidate| {
+                fs::read_to_string(candidate).ok()
+            })
+            .expect("disk fallback snapshot");
+        assert_eq!(disk_snapshot.source, disk_source);
+    }
+
+    #[test]
     fn test_find_references_cross_file_named_import_and_alias() {
         let dir = tempfile::tempdir().unwrap();
         let token_path = dir.path().join("Token.sol");
@@ -7454,6 +7482,62 @@ contract Main is T {}
         assert!(refs
             .iter()
             .any(|location| location.uri == path_to_uri(&normalize_path(&main_path)).unwrap()));
+    }
+
+    #[test]
+    fn test_transitive_reexport_alias_references_and_code_lens_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let token_path = dir.path().join("Token.sol");
+        let token_source = "pragma solidity ^0.8.0;\ncontract Token {}\n";
+        fs::write(&token_path, token_source).unwrap();
+
+        let reexport_path = dir.path().join("Reexport.sol");
+        fs::write(
+            &reexport_path,
+            "pragma solidity ^0.8.0;\nimport {Token} from \"./Token.sol\";\n",
+        )
+        .unwrap();
+
+        let consumer_path = dir.path().join("Consumer.sol");
+        fs::write(
+            &consumer_path,
+            "pragma solidity ^0.8.0;\nimport {Token as T} from \"./Reexport.sol\";\ncontract Consumer is T {}\n",
+        )
+        .unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let position = offset_to_position(token_source, token_source.find("Token").unwrap());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let references =
+            index.find_references(&token_path, token_source, position, true, &get_source);
+
+        assert_eq!(references.len(), 5);
+        for (path, expected) in [(&token_path, 1), (&reexport_path, 1), (&consumer_path, 3)] {
+            let uri = path_to_uri(&normalize_path(path)).unwrap();
+            assert_eq!(
+                references
+                    .iter()
+                    .filter(|location| location.uri == uri)
+                    .count(),
+                expected,
+                "unexpected reference count for {}",
+                path.display()
+            );
+        }
+
+        let code_lens_index = ProjectIndex::build(dir.path());
+        let token_lens = code_lens_index
+            .code_lenses(&token_path, token_source, &get_source)
+            .into_iter()
+            .find(|lens| lens.range.start.line == 1)
+            .expect("Token code lens");
+        assert_eq!(
+            token_lens
+                .command
+                .as_ref()
+                .map(|command| command.title.as_str()),
+            Some("4 references")
+        );
     }
 
     #[test]
@@ -8150,7 +8234,12 @@ contract Main {
             linearized_contract_refs(&index, &snapshot, &|path| fs::read_to_string(path).ok())
         );
         let graph = index
-            .control_flow_graph(&main, &main_source, main_source.find("run").unwrap())
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &|path| fs::read_to_string(path).ok(),
+            )
             .expect("control-flow graph");
         eprintln!(
             "nodes={:#?}",
@@ -8229,7 +8318,12 @@ contract Main {
         let index = ProjectIndex::build(dir.path());
         let main_source = fs::read_to_string(&main).unwrap();
         let graph = index
-            .control_flow_graph(&main, &main_source, main_source.find("run").unwrap())
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &|path| fs::read_to_string(path).ok(),
+            )
             .expect("control-flow graph");
 
         assert!(graph
@@ -8269,7 +8363,9 @@ contract Main {
 
         let index = ProjectIndex::build(dir.path());
         let graph = index
-            .control_flow_graph(&main, source, source.find("run").unwrap())
+            .control_flow_graph(&main, source, source.find("run").unwrap(), &|path| {
+                fs::read_to_string(path).ok()
+            })
             .expect("control-flow graph");
         let return_id = graph
             .nodes
@@ -8361,7 +8457,12 @@ contract Main is Base {
         let index = ProjectIndex::build(dir.path());
         let main_source = fs::read_to_string(&main).unwrap();
         let graph = index
-            .control_flow_graph(&main, &main_source, main_source.find("run").unwrap())
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &|path| fs::read_to_string(path).ok(),
+            )
             .expect("control-flow graph");
 
         assert!(graph
@@ -8377,6 +8478,69 @@ contract Main is Base {
             node.label == "call require" && node.kind == Some(GraphNodeKind::Call)
         }));
         assert!(!graph.nodes.iter().any(|node| node.label == "_"));
+    }
+
+    #[test]
+    fn test_control_flow_graph_uses_unsaved_cross_file_modifier_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("Base.sol");
+        let main = dir.path().join("Main.sol");
+
+        fs::write(
+            &base,
+            r#"pragma solidity ^0.8.0;
+contract Base {
+    modifier guarded() {
+        require(false);
+        _;
+    }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            &main,
+            r#"pragma solidity ^0.8.0;
+import "./Base.sol";
+
+contract Main is Base {
+    function run() public guarded returns (uint256) {
+        return 1;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let main_source = fs::read_to_string(&main).unwrap();
+        let unsaved_base = r#"pragma solidity ^0.8.0;
+contract Base {
+    modifier guarded() {
+        assert(true);
+        _;
+    }
+}
+"#;
+        let get_source = |path: &Path| {
+            if normalize_path(path) == normalize_path(&base) {
+                Some(unsaved_base.to_string())
+            } else {
+                fs::read_to_string(path).ok()
+            }
+        };
+
+        let graph = index
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &get_source,
+            )
+            .expect("control-flow graph");
+
+        assert!(graph.nodes.iter().any(|node| node.label == "call assert"));
+        assert!(!graph.nodes.iter().any(|node| node.label == "call require"));
     }
 
     #[test]
@@ -8407,7 +8571,12 @@ contract Main {
         let index = ProjectIndex::build(dir.path());
         let main_source = fs::read_to_string(&main).unwrap();
         let graph = index
-            .control_flow_graph(&main, &main_source, main_source.find("run").unwrap())
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &|path| fs::read_to_string(path).ok(),
+            )
             .expect("control-flow graph");
 
         assert!(graph
@@ -8468,7 +8637,12 @@ contract Main {
         let index = ProjectIndex::build(dir.path());
         let main_source = fs::read_to_string(&main).unwrap();
         let graph = index
-            .control_flow_graph(&main, &main_source, main_source.find("run").unwrap())
+            .control_flow_graph(
+                &main,
+                &main_source,
+                main_source.find("run").unwrap(),
+                &|path| fs::read_to_string(path).ok(),
+            )
             .expect("control-flow graph");
 
         assert!(graph

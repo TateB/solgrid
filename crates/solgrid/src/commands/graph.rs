@@ -129,6 +129,7 @@ fn build_graph_document(
                     target
                         .target_offset
                         .expect("control-flow lens must have a target offset"),
+                    &get_source,
                 )
                 .ok_or_else(|| {
                     format!(

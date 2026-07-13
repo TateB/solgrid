@@ -643,7 +643,7 @@ impl SolgridServer {
                 &get_source,
             ),
             GraphKind::ControlFlow => {
-                project_index.control_flow_graph(&path, &source, args.target_offset?)
+                project_index.control_flow_graph(&path, &source, args.target_offset?, &get_source)
             }
         }
     }
