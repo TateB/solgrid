@@ -13,7 +13,8 @@ use solgrid_diagnostics::{
 use solgrid_linter::suppression::{parse_suppressions, Suppressions};
 use solgrid_linter::LintEngine;
 use solgrid_parser::solar_ast::{
-    self, Expr, ExprKind, FunctionKind, IndexKind, ItemKind, Stmt, StmtKind, Type,
+    self, DataLocation, Expr, ExprKind, FunctionKind, IndexKind, ItemKind, StateMutability, Stmt,
+    StmtKind, Type, Visibility,
 };
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
@@ -225,6 +226,55 @@ struct CompilerDiagnosticContext<'a> {
     current_contracts: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OverrideMemberIdentity {
+    kind: OverrideMemberKind,
+    name: String,
+    parameter_types: Vec<OverrideTypeIdentity>,
+    output_types: Vec<OverrideTypeIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverrideMemberKind {
+    Function {
+        visibility: Option<Visibility>,
+        state_mutability: StateMutability,
+        overridable: bool,
+    },
+    Modifier {
+        overridable: bool,
+    },
+    PublicGetter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OverrideTypeIdentity {
+    Located {
+        ty: Box<OverrideTypeIdentity>,
+        data_location: Option<DataLocation>,
+    },
+    ResolvedCustom {
+        path: PathBuf,
+        name_offset: usize,
+        kind: SymbolKind,
+    },
+    Display(String),
+    Array {
+        element: Box<OverrideTypeIdentity>,
+        suffix: String,
+    },
+    Mapping {
+        key: Box<OverrideTypeIdentity>,
+        value: Box<OverrideTypeIdentity>,
+    },
+    Function {
+        parameter_types: Vec<OverrideTypeIdentity>,
+        output_types: Vec<OverrideTypeIdentity>,
+        visibility: Option<Visibility>,
+        state_mutability: StateMutability,
+    },
+}
+
 fn ast_path_to_type_path(path: &solar_ast::AstPath<'_>) -> TypePath {
     TypePath {
         segments: path
@@ -233,6 +283,628 @@ fn ast_path_to_type_path(path: &solar_ast::AstPath<'_>) -> TypePath {
             .map(|segment| segment.as_str().to_string())
             .collect(),
     }
+}
+
+fn override_identities_are_compatible(
+    current: &OverrideMemberIdentity,
+    target: &OverrideMemberIdentity,
+) -> bool {
+    if current.name != target.name {
+        return false;
+    }
+
+    match (current.kind, target.kind) {
+        (
+            OverrideMemberKind::Function {
+                visibility: current_visibility,
+                state_mutability: current_mutability,
+                ..
+            },
+            OverrideMemberKind::Function {
+                visibility: target_visibility,
+                state_mutability: target_mutability,
+                overridable: true,
+            },
+        ) => {
+            override_visibility_is_compatible(current_visibility, target_visibility)
+                && override_mutability_is_compatible(current_mutability, target_mutability)
+                && override_type_lists_are_compatible(
+                    &current.parameter_types,
+                    &target.parameter_types,
+                    target_visibility,
+                )
+                && override_type_lists_are_compatible(
+                    &current.output_types,
+                    &target.output_types,
+                    target_visibility,
+                )
+        }
+        (
+            OverrideMemberKind::PublicGetter,
+            OverrideMemberKind::Function {
+                visibility: Some(Visibility::External),
+                state_mutability: target_mutability,
+                overridable: true,
+            },
+        ) => {
+            override_mutability_is_compatible(StateMutability::View, target_mutability)
+                && override_type_lists_are_compatible(
+                    &current.parameter_types,
+                    &target.parameter_types,
+                    Some(Visibility::External),
+                )
+                && override_type_lists_are_compatible(
+                    &current.output_types,
+                    &target.output_types,
+                    Some(Visibility::External),
+                )
+        }
+        (
+            OverrideMemberKind::Modifier { .. },
+            OverrideMemberKind::Modifier { overridable: true },
+        ) => {
+            override_type_lists_are_compatible(
+                &current.parameter_types,
+                &target.parameter_types,
+                Some(Visibility::Internal),
+            ) && current.output_types.is_empty()
+                && target.output_types.is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn override_type_lists_are_compatible(
+    current: &[OverrideTypeIdentity],
+    target: &[OverrideTypeIdentity],
+    target_visibility: Option<Visibility>,
+) -> bool {
+    current.len() == target.len()
+        && current.iter().zip(target).all(|(current, target)| {
+            override_types_are_compatible(current, target, target_visibility)
+        })
+}
+
+fn override_types_are_compatible(
+    current: &OverrideTypeIdentity,
+    target: &OverrideTypeIdentity,
+    target_visibility: Option<Visibility>,
+) -> bool {
+    match (current, target) {
+        (
+            OverrideTypeIdentity::Located {
+                ty: current,
+                data_location: current_location,
+            },
+            OverrideTypeIdentity::Located {
+                ty: target,
+                data_location: target_location,
+            },
+        ) => {
+            override_data_locations_are_compatible(
+                *current_location,
+                *target_location,
+                target_visibility,
+            ) && override_types_are_compatible(current, target, target_visibility)
+        }
+        (
+            OverrideTypeIdentity::Array {
+                element: current_element,
+                suffix: current_suffix,
+            },
+            OverrideTypeIdentity::Array {
+                element: target_element,
+                suffix: target_suffix,
+            },
+        ) => {
+            current_suffix == target_suffix
+                && override_types_are_compatible(current_element, target_element, target_visibility)
+        }
+        (
+            OverrideTypeIdentity::Mapping {
+                key: current_key,
+                value: current_value,
+            },
+            OverrideTypeIdentity::Mapping {
+                key: target_key,
+                value: target_value,
+            },
+        ) => {
+            override_types_are_compatible(current_key, target_key, target_visibility)
+                && override_types_are_compatible(current_value, target_value, target_visibility)
+        }
+        (
+            OverrideTypeIdentity::Function {
+                parameter_types: current_parameters,
+                output_types: current_outputs,
+                visibility: current_visibility,
+                state_mutability: current_mutability,
+            },
+            OverrideTypeIdentity::Function {
+                parameter_types: target_parameters,
+                output_types: target_outputs,
+                visibility: target_visibility,
+                state_mutability: target_mutability,
+            },
+        ) => {
+            current_visibility == target_visibility
+                && current_mutability == target_mutability
+                && override_type_lists_are_compatible(current_parameters, target_parameters, None)
+                && override_type_lists_are_compatible(current_outputs, target_outputs, None)
+        }
+        _ => current == target,
+    }
+}
+
+fn override_data_locations_are_compatible(
+    current: Option<DataLocation>,
+    target: Option<DataLocation>,
+    target_visibility: Option<Visibility>,
+) -> bool {
+    current == target
+        || target_visibility == Some(Visibility::External)
+            && matches!(
+                (current, target),
+                (Some(DataLocation::Memory), Some(DataLocation::Calldata))
+                    | (Some(DataLocation::Calldata), Some(DataLocation::Memory))
+            )
+}
+
+fn override_mutability_is_compatible(current: StateMutability, target: StateMutability) -> bool {
+    match target {
+        StateMutability::Payable => current == StateMutability::Payable,
+        StateMutability::NonPayable => matches!(
+            current,
+            StateMutability::NonPayable | StateMutability::View | StateMutability::Pure
+        ),
+        StateMutability::View => {
+            matches!(current, StateMutability::View | StateMutability::Pure)
+        }
+        StateMutability::Pure => current == StateMutability::Pure,
+    }
+}
+
+fn override_visibility_is_compatible(
+    current: Option<Visibility>,
+    target: Option<Visibility>,
+) -> bool {
+    match target {
+        Some(Visibility::External) => {
+            matches!(current, Some(Visibility::External | Visibility::Public))
+        }
+        Some(Visibility::Public) => current == Some(Visibility::Public),
+        Some(Visibility::Internal) => current == Some(Visibility::Internal),
+        Some(Visibility::Private) | None => false,
+    }
+}
+
+fn build_override_member_identity(
+    file: &FileSemanticInfo,
+    definition: &SymbolDef,
+    context: &SinkSummaryContext<'_>,
+) -> Option<OverrideMemberIdentity> {
+    match definition.kind {
+        SymbolKind::Function => {
+            let (parameter_types, output_types) = if let Some(types) = file
+                .override_callable_types
+                .get(&definition.name_span.start)
+            {
+                (
+                    types
+                        .parameter_types
+                        .iter()
+                        .map(|ty| override_type_shape_identity(file, ty, context))
+                        .collect(),
+                    types
+                        .output_types
+                        .iter()
+                        .map(|ty| override_type_shape_identity(file, ty, context))
+                        .collect(),
+                )
+            } else {
+                let signature = definition.signature.as_ref()?;
+                (
+                    signature
+                        .parameters
+                        .iter()
+                        .map(|parameter| OverrideTypeIdentity::Located {
+                            ty: Box::new(OverrideTypeIdentity::Display(
+                                override_parameter_type_identity(&parameter.label),
+                            )),
+                            data_location: None,
+                        })
+                        .collect(),
+                    signature
+                        .return_types
+                        .iter()
+                        .map(|ty| OverrideTypeIdentity::Located {
+                            ty: Box::new(override_type_spec_identity(file, ty, context)),
+                            data_location: None,
+                        })
+                        .collect(),
+                )
+            };
+            Some(OverrideMemberIdentity {
+                kind: OverrideMemberKind::Function {
+                    visibility: definition.visibility,
+                    state_mutability: file
+                        .override_callable_types
+                        .get(&definition.name_span.start)
+                        .map_or(StateMutability::NonPayable, |types| types.state_mutability),
+                    overridable: file
+                        .override_callable_types
+                        .get(&definition.name_span.start)
+                        .is_some_and(|types| types.overridable),
+                },
+                name: definition.name.clone(),
+                parameter_types,
+                output_types,
+            })
+        }
+        SymbolKind::Modifier => {
+            let types = file
+                .override_callable_types
+                .get(&definition.name_span.start)?;
+            Some(OverrideMemberIdentity {
+                kind: OverrideMemberKind::Modifier {
+                    overridable: types.overridable,
+                },
+                name: definition.name.clone(),
+                parameter_types: types
+                    .parameter_types
+                    .iter()
+                    .map(|ty| override_type_shape_identity(file, ty, context))
+                    .collect(),
+                output_types: Vec::new(),
+            })
+        }
+        SymbolKind::StateVariable if definition.visibility == Some(Visibility::Public) => {
+            let mut parameter_types = Vec::new();
+            let output =
+                collect_public_getter_types(definition.type_info.as_ref()?, &mut parameter_types);
+            let output_shape = file
+                .override_declared_types
+                .get(&definition.name_span.start)
+                .map(collect_public_getter_type_shape);
+            Some(OverrideMemberIdentity {
+                kind: OverrideMemberKind::PublicGetter,
+                name: definition.name.clone(),
+                parameter_types: parameter_types
+                    .iter()
+                    .map(|ty| OverrideTypeIdentity::Located {
+                        ty: Box::new(override_type_spec_identity(file, ty, context)),
+                        data_location: public_getter_data_location(file, ty, context),
+                    })
+                    .collect(),
+                output_types: public_getter_output_identities(file, output, output_shape, context)
+                    .into_iter()
+                    .map(|(ty, data_location)| OverrideTypeIdentity::Located {
+                        ty: Box::new(ty),
+                        data_location,
+                    })
+                    .collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn collect_public_getter_types<'a>(
+    ty: &'a TypeSpec,
+    parameters: &mut Vec<TypeSpec>,
+) -> &'a TypeSpec {
+    match ty {
+        TypeSpec::Mapping { key, value, .. } => {
+            parameters.push((**key).clone());
+            collect_public_getter_types(value, parameters)
+        }
+        TypeSpec::Array { element, .. } => {
+            parameters.push(TypeSpec::Elementary {
+                display: "uint256".to_string(),
+            });
+            collect_public_getter_types(element, parameters)
+        }
+        _ => ty,
+    }
+}
+
+fn collect_public_getter_type_shape(shape: &OverrideTypeShape) -> &OverrideTypeShape {
+    match shape {
+        OverrideTypeShape::Array { element, .. } => collect_public_getter_type_shape(element),
+        OverrideTypeShape::Mapping { value, .. } => collect_public_getter_type_shape(value),
+        _ => shape,
+    }
+}
+
+fn public_getter_output_identities(
+    file: &FileSemanticInfo,
+    output: &TypeSpec,
+    output_shape: Option<&OverrideTypeShape>,
+    context: &SinkSummaryContext<'_>,
+) -> Vec<(OverrideTypeIdentity, Option<DataLocation>)> {
+    let TypeSpec::Custom {
+        path,
+        resolve_offset,
+        ..
+    } = output
+    else {
+        return vec![(
+            output_shape.map_or_else(
+                || override_type_spec_identity(file, output, context),
+                |shape| override_type_shape_identity(file, shape, context),
+            ),
+            public_getter_data_location(file, output, context),
+        )];
+    };
+    let Some((struct_path, definition)) =
+        resolve_override_type_symbol(file, path, *resolve_offset, context)
+    else {
+        return vec![(
+            override_type_spec_identity(file, output, context),
+            public_getter_data_location(file, output, context),
+        )];
+    };
+    if definition.kind != SymbolKind::Struct {
+        return vec![(
+            OverrideTypeIdentity::ResolvedCustom {
+                path: struct_path,
+                name_offset: definition.name_span.start,
+                kind: definition.kind,
+            },
+            None,
+        )];
+    }
+    let Some(struct_file) = context.semantic_files.get(&struct_path) else {
+        return Vec::new();
+    };
+    let Some(scope) = definition.scope else {
+        return Vec::new();
+    };
+    struct_file
+        .table
+        .scope_symbols(scope)
+        .iter()
+        .filter(|field| field.kind == SymbolKind::StructField)
+        .filter_map(|field| {
+            let ty = field.type_info.as_ref()?;
+            if matches!(ty, TypeSpec::Mapping { .. } | TypeSpec::Array { .. }) {
+                return None;
+            }
+            let identity = struct_file
+                .override_declared_types
+                .get(&field.name_span.start)
+                .map_or_else(
+                    || override_type_spec_identity(struct_file, ty, context),
+                    |shape| override_type_shape_identity(struct_file, shape, context),
+                );
+            Some((
+                identity,
+                public_getter_data_location(struct_file, ty, context),
+            ))
+        })
+        .collect()
+}
+
+fn public_getter_data_location(
+    file: &FileSemanticInfo,
+    ty: &TypeSpec,
+    context: &SinkSummaryContext<'_>,
+) -> Option<DataLocation> {
+    match ty {
+        TypeSpec::Elementary { display } => matches!(
+            override_parameter_type_identity(display).as_str(),
+            "bytes" | "string"
+        )
+        .then_some(DataLocation::Memory),
+        TypeSpec::Array { .. } | TypeSpec::Mapping { .. } => Some(DataLocation::Memory),
+        TypeSpec::Custom {
+            path,
+            resolve_offset,
+            ..
+        } => resolve_override_type_symbol(file, path, *resolve_offset, context)
+            .is_some_and(|(_, definition)| definition.kind == SymbolKind::Struct)
+            .then_some(DataLocation::Memory),
+        TypeSpec::Function { .. } | TypeSpec::Other { .. } => None,
+    }
+}
+
+fn override_type_shape_identity(
+    file: &FileSemanticInfo,
+    shape: &OverrideTypeShape,
+    context: &SinkSummaryContext<'_>,
+) -> OverrideTypeIdentity {
+    match shape {
+        OverrideTypeShape::Located { ty, data_location } => OverrideTypeIdentity::Located {
+            ty: Box::new(override_type_shape_identity(file, ty, context)),
+            data_location: *data_location,
+        },
+        OverrideTypeShape::Display(display) => {
+            OverrideTypeIdentity::Display(override_parameter_type_identity(display))
+        }
+        OverrideTypeShape::Custom {
+            path,
+            resolve_offset,
+        } => resolve_override_type_symbol(file, path, *resolve_offset, context).map_or_else(
+            || OverrideTypeIdentity::Display(path.as_display()),
+            |(path, definition)| OverrideTypeIdentity::ResolvedCustom {
+                path,
+                name_offset: definition.name_span.start,
+                kind: definition.kind,
+            },
+        ),
+        OverrideTypeShape::Array { element, size } => OverrideTypeIdentity::Array {
+            element: Box::new(override_type_shape_identity(file, element, context)),
+            suffix: format!("[{size}]"),
+        },
+        OverrideTypeShape::Mapping { key, value } => OverrideTypeIdentity::Mapping {
+            key: Box::new(override_type_shape_identity(file, key, context)),
+            value: Box::new(override_type_shape_identity(file, value, context)),
+        },
+        OverrideTypeShape::Function {
+            parameter_types,
+            output_types,
+            visibility,
+            state_mutability,
+        } => OverrideTypeIdentity::Function {
+            parameter_types: parameter_types
+                .iter()
+                .map(|ty| override_type_shape_identity(file, ty, context))
+                .collect(),
+            output_types: output_types
+                .iter()
+                .map(|ty| override_type_shape_identity(file, ty, context))
+                .collect(),
+            visibility: *visibility,
+            state_mutability: *state_mutability,
+        },
+    }
+}
+
+fn override_type_spec_identity(
+    file: &FileSemanticInfo,
+    ty: &TypeSpec,
+    context: &SinkSummaryContext<'_>,
+) -> OverrideTypeIdentity {
+    match ty {
+        TypeSpec::Custom {
+            path,
+            resolve_offset,
+            ..
+        } => resolve_override_type_symbol(file, path, *resolve_offset, context).map_or_else(
+            || OverrideTypeIdentity::Display(path.as_display()),
+            |(path, definition)| OverrideTypeIdentity::ResolvedCustom {
+                path,
+                name_offset: definition.name_span.start,
+                kind: definition.kind,
+            },
+        ),
+        TypeSpec::Array { element, display } => {
+            let normalized_display = override_parameter_type_identity(display);
+            let normalized_element = override_parameter_type_identity(element.display());
+            let suffix = normalized_display
+                .strip_prefix(&normalized_element)
+                .unwrap_or(&normalized_display)
+                .to_string();
+            OverrideTypeIdentity::Array {
+                element: Box::new(override_type_spec_identity(file, element, context)),
+                suffix,
+            }
+        }
+        TypeSpec::Mapping { key, value, .. } => OverrideTypeIdentity::Mapping {
+            key: Box::new(override_type_spec_identity(file, key, context)),
+            value: Box::new(override_type_spec_identity(file, value, context)),
+        },
+        TypeSpec::Elementary { display }
+        | TypeSpec::Function { display }
+        | TypeSpec::Other { display } => {
+            OverrideTypeIdentity::Display(override_parameter_type_identity(display))
+        }
+    }
+}
+
+fn resolve_override_type_symbol(
+    file: &FileSemanticInfo,
+    path: &TypePath,
+    resolve_offset: usize,
+    context: &SinkSummaryContext<'_>,
+) -> Option<(PathBuf, SymbolDef)> {
+    let [first, remaining @ ..] = path.segments.as_slice() else {
+        return None;
+    };
+    if let Some(root) = file.table.resolve(first, resolve_offset) {
+        let definition = resolve_override_member_chain(&file.table, root, remaining)?;
+        return Some((file.path.clone(), definition));
+    }
+
+    let cached_source =
+        |candidate: &Path| cached_source(candidate, context.semantic_files, context.get_source);
+    if remaining.is_empty() {
+        let cross = resolve_cross_file_symbol(
+            &file.table,
+            first,
+            &file.path,
+            &cached_source,
+            context.resolver,
+        )?;
+        return Some((cross.resolved_path, cross.def));
+    }
+
+    let mut cross = resolve_cross_file_member_symbol(
+        &file.table,
+        first,
+        &remaining[0],
+        &file.path,
+        &cached_source,
+        context.resolver,
+    )?;
+    cross.def = resolve_override_member_chain(&cross.table, &cross.def, &remaining[1..])?;
+    Some((cross.resolved_path, cross.def))
+}
+
+fn resolve_override_member_chain(
+    table: &SymbolTable,
+    root: &SymbolDef,
+    remaining: &[String],
+) -> Option<SymbolDef> {
+    let mut current = root.clone();
+    for segment in remaining {
+        let definitions = table.resolve_member_all(&current, segment);
+        let [next] = definitions.as_slice() else {
+            return None;
+        };
+        current = (*next).clone();
+    }
+    Some(current)
+}
+
+fn override_parameter_type_identity(label: &str) -> String {
+    let trimmed = label.trim();
+    let type_text = match trimmed.rsplit_once(char::is_whitespace) {
+        Some((prefix, last))
+            if is_override_signature_identifier(last) && !is_override_signature_modifier(last) =>
+        {
+            prefix.trim_end()
+        }
+        _ => trimmed,
+    };
+    let normalized = type_text
+        .split_whitespace()
+        .filter(|part| !matches!(*part, "memory" | "storage" | "calldata"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (short, canonical) in [
+        ("uint", "uint256"),
+        ("int", "int256"),
+        ("fixed", "fixed128x18"),
+        ("ufixed", "ufixed128x18"),
+    ] {
+        if normalized == short {
+            return canonical.to_string();
+        }
+        if normalized
+            .strip_prefix(short)
+            .is_some_and(|suffix| suffix.starts_with('['))
+        {
+            return normalized.replacen(short, canonical, 1);
+        }
+    }
+    normalized
+}
+
+fn is_override_signature_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first == '$' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+}
+
+fn is_override_signature_modifier(value: &str) -> bool {
+    matches!(
+        value,
+        "memory" | "storage" | "calldata" | "payable" | "indexed"
+    )
 }
 
 impl<'a> CompilerDiagnosticContext<'a> {
@@ -260,6 +932,16 @@ impl<'a> CompilerDiagnosticContext<'a> {
 
     fn finish(self) -> Vec<ls_types::Diagnostic> {
         self.diagnostics
+    }
+
+    fn override_member_identity(&self, definition: &SymbolDef) -> Option<OverrideMemberIdentity> {
+        let file = self.semantic_files.get(&self.snapshot.path)?;
+        let context = SinkSummaryContext {
+            semantic_files: &self.semantic_files,
+            resolver: self.resolver,
+            get_source: self.get_source,
+        };
+        build_override_member_identity(file, definition, &context)
     }
 
     fn push(&mut self, id: &str, title: &str, message: String, span: std::ops::Range<usize>) {
@@ -324,7 +1006,8 @@ impl<'a> CompilerDiagnosticContext<'a> {
                 for base in contract.bases.iter() {
                     let base_name = base.name.to_string();
                     let base_span = solgrid_ast::span_to_range(base.name.span());
-                    if !self.resolve_ast_path(&base.name, base_span.start) {
+                    if !self.resolve_contract_base_path(&base.name, base_span.start, contract.kind)
+                    {
                         self.push(
                             "compiler/unresolved-base-contract",
                             "Unresolved base contract",
@@ -373,10 +1056,19 @@ impl<'a> CompilerDiagnosticContext<'a> {
                     }
                 }
                 if let Some(override_) = &function.header.override_ {
+                    let override_identity =
+                        function_identity_name_span(function).and_then(|name_span| {
+                            self.snapshot
+                                .table
+                                .definition_at_name_span(&name_span)
+                                .and_then(|definition| self.override_member_identity(definition))
+                        });
                     for path in override_.paths.iter() {
                         let override_name = path.to_string();
                         let override_span = solgrid_ast::span_to_range(path.span());
-                        if !self.resolve_ast_path(path, override_span.start) {
+                        if override_identity.as_ref().is_none_or(|identity| {
+                            !self.resolve_override_path(path, override_span.start, identity)
+                        }) {
                             self.push(
                                 "compiler/unresolved-override",
                                 "Unresolved override target",
@@ -450,10 +1142,19 @@ impl<'a> CompilerDiagnosticContext<'a> {
     fn visit_variable_definition(&mut self, variable: &solar_ast::VariableDefinition<'_>) {
         self.visit_type(&variable.ty);
         if let Some(override_) = &variable.override_ {
+            let override_identity = variable.name.and_then(|name| {
+                let name_span = solgrid_ast::span_to_range(name.span);
+                self.snapshot
+                    .table
+                    .definition_at_name_span(&name_span)
+                    .and_then(|definition| self.override_member_identity(definition))
+            });
             for path in override_.paths.iter() {
                 let override_name = path.to_string();
                 let override_span = solgrid_ast::span_to_range(path.span());
-                if !self.resolve_ast_path(path, override_span.start) {
+                if override_identity.as_ref().is_none_or(|identity| {
+                    !self.resolve_override_path(path, override_span.start, identity)
+                }) {
                     self.push(
                         "compiler/unresolved-override",
                         "Unresolved override target",
@@ -740,16 +1441,141 @@ impl<'a> CompilerDiagnosticContext<'a> {
     }
 
     fn resolve_modifier_path(&self, path: &solar_ast::AstPath<'_>, resolve_offset: usize) -> bool {
-        self.resolve_member_path(path, resolve_offset, &[SymbolKind::Modifier])
+        let path = ast_path_to_type_path(path);
+        match path.segments.as_slice() {
+            [] => false,
+            [_] => self.resolve_inherited_member_path(&path, &[SymbolKind::Modifier]),
+            _ => self.resolve_qualified_modifier_path(&path, resolve_offset),
+        }
+    }
+
+    fn resolve_contract_base_path(
+        &self,
+        path: &solar_ast::AstPath<'_>,
+        resolve_offset: usize,
+        contract_kind: solar_ast::ContractKind,
+    ) -> bool {
+        let path = ast_path_to_type_path(path);
+        let accepted_kinds = match contract_kind {
+            solar_ast::ContractKind::Interface => &[SymbolKind::Interface][..],
+            solar_ast::ContractKind::Contract | solar_ast::ContractKind::AbstractContract => {
+                &[SymbolKind::Contract, SymbolKind::Interface][..]
+            }
+            solar_ast::ContractKind::Library => &[],
+        };
+        self.resolve_path_with_kinds(&path, resolve_offset, accepted_kinds)
     }
 
     fn resolve_constructor_base_path(
         &self,
         path: &solar_ast::AstPath<'_>,
-        resolve_offset: usize,
+        _resolve_offset: usize,
     ) -> bool {
         let path = ast_path_to_type_path(path);
-        self.resolve_path_with_kinds(&path, resolve_offset, &[SymbolKind::Contract])
+        let Some(current_contract) = self.current_contracts.last() else {
+            return false;
+        };
+        let Some(current_file) = self.semantic_files.get(&self.snapshot.path) else {
+            return false;
+        };
+        let context = SinkSummaryContext {
+            semantic_files: &self.semantic_files,
+            resolver: self.resolver,
+            get_source: self.get_source,
+        };
+        let Some((target_path, target_contract)) =
+            resolve_contract_path_target(current_file, &path, &context)
+        else {
+            return false;
+        };
+        if target_path == current_file.path && target_contract == *current_contract {
+            return false;
+        }
+        let Some(target_file) = self.semantic_files.get(&target_path) else {
+            return false;
+        };
+        if target_file
+            .table
+            .resolve(&target_contract, 0)
+            .is_none_or(|definition| definition.kind != SymbolKind::Contract)
+        {
+            return false;
+        }
+
+        self.contract_hierarchy_contains_contract(
+            current_file,
+            current_contract,
+            &target_path,
+            &target_contract,
+            &context,
+            &mut HashSet::new(),
+        )
+    }
+
+    fn resolve_override_path(
+        &self,
+        path: &solar_ast::AstPath<'_>,
+        _resolve_offset: usize,
+        current_identity: &OverrideMemberIdentity,
+    ) -> bool {
+        let path = ast_path_to_type_path(path);
+        let Some(current_contract) = self.current_contracts.last() else {
+            return false;
+        };
+        let Some(current_file) = self.semantic_files.get(&self.snapshot.path) else {
+            return false;
+        };
+        let context = SinkSummaryContext {
+            semantic_files: &self.semantic_files,
+            resolver: self.resolver,
+            get_source: self.get_source,
+        };
+        let Some((target_path, target_contract)) =
+            resolve_contract_path_target(current_file, &path, &context)
+        else {
+            return false;
+        };
+        if target_path == current_file.path && target_contract == *current_contract {
+            return false;
+        }
+        let Some(target_file) = self.semantic_files.get(&target_path) else {
+            return false;
+        };
+        if target_file
+            .table
+            .resolve(&target_contract, 0)
+            .is_none_or(|definition| {
+                !matches!(
+                    definition.kind,
+                    SymbolKind::Contract | SymbolKind::Interface
+                )
+            })
+        {
+            return false;
+        }
+
+        if !self.contract_hierarchy_contains_contract(
+            current_file,
+            current_contract,
+            &target_path,
+            &target_contract,
+            &context,
+            &mut HashSet::new(),
+        ) {
+            return false;
+        }
+
+        let Some(target_contract_def) = target_file.table.resolve(&target_contract, 0) else {
+            return false;
+        };
+        target_file
+            .table
+            .resolve_member_all(target_contract_def, &current_identity.name)
+            .into_iter()
+            .filter_map(|definition| {
+                build_override_member_identity(target_file, definition, &context)
+            })
+            .any(|candidate| override_identities_are_compatible(current_identity, &candidate))
     }
 
     fn resolve_member_path(
@@ -839,6 +1665,99 @@ impl<'a> CompilerDiagnosticContext<'a> {
             &context,
             &mut visited,
         )
+    }
+
+    fn resolve_qualified_modifier_path(&self, path: &TypePath, _resolve_offset: usize) -> bool {
+        let [qualifier @ .., modifier_name] = path.segments.as_slice() else {
+            return false;
+        };
+        if qualifier.is_empty() {
+            return false;
+        }
+        let Some(current_contract) = self.current_contracts.last() else {
+            return false;
+        };
+        let Some(current_file) = self.semantic_files.get(&self.snapshot.path) else {
+            return false;
+        };
+        let context = SinkSummaryContext {
+            semantic_files: &self.semantic_files,
+            resolver: self.resolver,
+            get_source: self.get_source,
+        };
+        let qualifier = TypePath {
+            segments: qualifier.to_vec(),
+        };
+        let Some((target_path, target_contract)) =
+            resolve_contract_path_target(current_file, &qualifier, &context)
+        else {
+            return false;
+        };
+        if !self.contract_hierarchy_contains_contract(
+            current_file,
+            current_contract,
+            &target_path,
+            &target_contract,
+            &context,
+            &mut HashSet::new(),
+        ) {
+            return false;
+        }
+
+        let Some(target_file) = self.semantic_files.get(&target_path) else {
+            return false;
+        };
+        self.contract_hierarchy_declares_member(
+            target_file,
+            &target_contract,
+            modifier_name,
+            &[SymbolKind::Modifier],
+            &context,
+            &mut HashSet::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn contract_hierarchy_contains_contract(
+        &self,
+        file: &FileSemanticInfo,
+        contract_name: &str,
+        target_path: &Path,
+        target_contract: &str,
+        context: &SinkSummaryContext<'_>,
+        visited: &mut HashSet<(PathBuf, String)>,
+    ) -> bool {
+        if file.path == target_path && contract_name == target_contract {
+            return true;
+        }
+        if !visited.insert((file.path.clone(), contract_name.to_string())) {
+            return false;
+        }
+
+        let Some(contract) = file.contracts.get(contract_name) else {
+            return false;
+        };
+        for base in &contract.bases {
+            let Some((base_path, base_name)) = resolve_contract_path_target(file, base, context)
+            else {
+                continue;
+            };
+            let Some(base_file) = self.semantic_files.get(&base_path) else {
+                continue;
+            };
+            if self.contract_hierarchy_contains_contract(
+                base_file,
+                &base_name,
+                target_path,
+                target_contract,
+                context,
+                visited,
+            ) {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn contract_hierarchy_declares_member(
@@ -1350,6 +2269,8 @@ struct CallableSignatureRef {
 struct ContractSemanticInfo {
     bases: Vec<TypePath>,
     callables: HashMap<String, Vec<CallableSignatureRef>>,
+    modifiers: HashMap<String, Vec<CallableSignatureRef>>,
+    constructors: Vec<CallableSignatureRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -1361,12 +2282,49 @@ struct FileSemanticInfo {
     callable_contracts: HashMap<usize, Option<String>>,
     callable_signatures: HashMap<usize, SignatureData>,
     callable_parameters: HashMap<usize, Vec<CallableParameter>>,
+    override_callable_types: HashMap<usize, OverrideCallableTypes>,
+    override_declared_types: HashMap<usize, OverrideTypeShape>,
 }
 
 #[derive(Debug, Clone)]
 struct CallableParameter {
     name: Option<String>,
     ty: TypeSpec,
+}
+
+#[derive(Debug, Clone)]
+struct OverrideCallableTypes {
+    parameter_types: Vec<OverrideTypeShape>,
+    output_types: Vec<OverrideTypeShape>,
+    state_mutability: StateMutability,
+    overridable: bool,
+}
+
+#[derive(Debug, Clone)]
+enum OverrideTypeShape {
+    Located {
+        ty: Box<OverrideTypeShape>,
+        data_location: Option<DataLocation>,
+    },
+    Display(String),
+    Custom {
+        path: TypePath,
+        resolve_offset: usize,
+    },
+    Array {
+        element: Box<OverrideTypeShape>,
+        size: String,
+    },
+    Mapping {
+        key: Box<OverrideTypeShape>,
+        value: Box<OverrideTypeShape>,
+    },
+    Function {
+        parameter_types: Vec<OverrideTypeShape>,
+        output_types: Vec<OverrideTypeShape>,
+        visibility: Option<Visibility>,
+        state_mutability: StateMutability,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1503,104 +2461,185 @@ fn load_semantic_file(
         return false;
     };
 
-    let Ok((contracts, callable_contracts, callable_signatures, callable_parameters)) =
-        with_parsed_ast_sequential(&source, &filename, |source_unit| {
-            let mut contracts = HashMap::<String, ContractSemanticInfo>::new();
-            let mut callable_contracts = HashMap::<usize, Option<String>>::new();
-            let mut callable_signatures = HashMap::<usize, SignatureData>::new();
-            let mut callable_parameters = HashMap::<usize, Vec<CallableParameter>>::new();
+    let Ok((
+        contracts,
+        callable_contracts,
+        callable_signatures,
+        callable_parameters,
+        override_callable_types,
+        override_declared_types,
+    )) = with_parsed_ast_sequential(&source, &filename, |source_unit| {
+        let mut contracts = HashMap::<String, ContractSemanticInfo>::new();
+        let mut callable_contracts = HashMap::<usize, Option<String>>::new();
+        let mut callable_signatures = HashMap::<usize, SignatureData>::new();
+        let mut callable_parameters = HashMap::<usize, Vec<CallableParameter>>::new();
+        let mut override_callable_types = HashMap::<usize, OverrideCallableTypes>::new();
+        let mut override_declared_types = HashMap::<usize, OverrideTypeShape>::new();
 
-            for item in source_unit.items.iter() {
-                match &item.kind {
-                    ItemKind::Contract(contract) => {
-                        let bases = contract
-                            .bases
-                            .iter()
-                            .map(|base| TypePath {
-                                segments: base
-                                    .name
-                                    .segments()
-                                    .iter()
-                                    .map(|segment| segment.as_str().to_string())
-                                    .collect(),
-                            })
-                            .collect::<Vec<_>>();
-                        let contract_info = contracts
-                            .entry(contract.name.as_str().to_string())
-                            .or_default();
-                        contract_info.bases = bases;
-                        for body_item in contract.body.iter() {
-                            let ItemKind::Function(function) = &body_item.kind else {
-                                continue;
-                            };
-                            if !function.is_implemented() {
-                                continue;
+        for item in source_unit.items.iter() {
+            match &item.kind {
+                ItemKind::Contract(contract) => {
+                    let bases = contract
+                        .bases
+                        .iter()
+                        .map(|base| TypePath {
+                            segments: base
+                                .name
+                                .segments()
+                                .iter()
+                                .map(|segment| segment.as_str().to_string())
+                                .collect(),
+                        })
+                        .collect::<Vec<_>>();
+                    let contract_info = contracts
+                        .entry(contract.name.as_str().to_string())
+                        .or_default();
+                    contract_info.bases = bases;
+                    for body_item in contract.body.iter() {
+                        match &body_item.kind {
+                            ItemKind::Variable(variable) => record_override_declared_type(
+                                &source,
+                                variable,
+                                &mut override_declared_types,
+                            ),
+                            ItemKind::Struct(struct_) => {
+                                for field in struct_.fields.iter() {
+                                    record_override_declared_type(
+                                        &source,
+                                        field,
+                                        &mut override_declared_types,
+                                    );
+                                }
                             }
-                            let Some(target_offset) = function_target_offset(function) else {
-                                continue;
-                            };
-                            let Some(name) =
-                                function.header.name.map(|ident| ident.as_str().to_string())
-                            else {
-                                continue;
-                            };
-                            if let Some(signature) =
-                                lookup_callable_signature(&table, &name, target_offset)
-                            {
-                                callable_signatures.insert(target_offset, signature);
-                            }
-                            callable_parameters.insert(
-                                target_offset,
-                                callable_parameters_for_function(&source, function, target_offset),
-                            );
-                            let target = CallableTargetKey {
-                                path: path.clone(),
-                                offset: target_offset,
-                            };
-                            record_callable_signature(
-                                &mut contract_info.callables,
-                                &name,
-                                target,
-                                function.header.parameters.len(),
-                            );
-                            callable_contracts
-                                .insert(target_offset, Some(contract.name.as_str().to_string()));
+                            _ => {}
                         }
-                    }
-                    ItemKind::Function(function) => {
-                        if !function.is_implemented() {
+                        let ItemKind::Function(function) = &body_item.kind else {
                             continue;
-                        }
+                        };
                         let Some(target_offset) = function_target_offset(function) else {
                             continue;
                         };
-                        let Some(name) =
-                            function.header.name.map(|ident| ident.as_str().to_string())
-                        else {
+                        let name = function.header.name.map(|ident| ident.as_str().to_string());
+                        if matches!(
+                            function.kind,
+                            FunctionKind::Function
+                                | FunctionKind::Modifier
+                                | FunctionKind::Fallback
+                                | FunctionKind::Receive
+                        ) {
+                            override_callable_types.insert(
+                                target_offset,
+                                override_callable_types_for_function(
+                                    &source,
+                                    function,
+                                    contract.kind == solar_ast::ContractKind::Interface,
+                                ),
+                            );
+                        }
+                        if !function.is_implemented() {
                             continue;
+                        }
+                        let signature = if function.kind == FunctionKind::Constructor {
+                            lookup_constructor_signature(
+                                &table,
+                                contract.name.as_str(),
+                                target_offset,
+                            )
+                        } else {
+                            name.as_deref().and_then(|name| {
+                                lookup_callable_signature(&table, name, target_offset)
+                            })
                         };
-                        if let Some(signature) =
-                            lookup_callable_signature(&table, &name, target_offset)
-                        {
+                        if let Some(signature) = signature {
                             callable_signatures.insert(target_offset, signature);
                         }
                         callable_parameters.insert(
                             target_offset,
                             callable_parameters_for_function(&source, function, target_offset),
                         );
-                        callable_contracts.insert(target_offset, None);
+                        let target = CallableTargetKey {
+                            path: path.clone(),
+                            offset: target_offset,
+                        };
+                        let signature_ref = CallableSignatureRef {
+                            target,
+                            arg_count: function.header.parameters.len(),
+                        };
+                        match function.kind {
+                            FunctionKind::Constructor => {
+                                contract_info.constructors.push(signature_ref);
+                            }
+                            FunctionKind::Modifier => {
+                                let Some(name) = name else {
+                                    continue;
+                                };
+                                contract_info
+                                    .modifiers
+                                    .entry(name)
+                                    .or_default()
+                                    .push(signature_ref);
+                            }
+                            _ => {
+                                let Some(name) = name else {
+                                    continue;
+                                };
+                                contract_info
+                                    .callables
+                                    .entry(name)
+                                    .or_default()
+                                    .push(signature_ref);
+                            }
+                        }
+                        callable_contracts
+                            .insert(target_offset, Some(contract.name.as_str().to_string()));
                     }
-                    _ => {}
                 }
+                ItemKind::Function(function) => {
+                    if !function.is_implemented() {
+                        continue;
+                    }
+                    let Some(target_offset) = function_target_offset(function) else {
+                        continue;
+                    };
+                    let Some(name) = function.header.name.map(|ident| ident.as_str().to_string())
+                    else {
+                        continue;
+                    };
+                    override_callable_types.insert(
+                        target_offset,
+                        override_callable_types_for_function(&source, function, false),
+                    );
+                    if let Some(signature) = lookup_callable_signature(&table, &name, target_offset)
+                    {
+                        callable_signatures.insert(target_offset, signature);
+                    }
+                    callable_parameters.insert(
+                        target_offset,
+                        callable_parameters_for_function(&source, function, target_offset),
+                    );
+                    callable_contracts.insert(target_offset, None);
+                }
+                ItemKind::Variable(variable) => {
+                    record_override_declared_type(&source, variable, &mut override_declared_types)
+                }
+                ItemKind::Struct(struct_) => {
+                    for field in struct_.fields.iter() {
+                        record_override_declared_type(&source, field, &mut override_declared_types);
+                    }
+                }
+                _ => {}
             }
+        }
 
-            (
-                contracts,
-                callable_contracts,
-                callable_signatures,
-                callable_parameters,
-            )
-        })
+        (
+            contracts,
+            callable_contracts,
+            callable_signatures,
+            callable_parameters,
+            override_callable_types,
+            override_declared_types,
+        )
+    })
     else {
         return false;
     };
@@ -1621,6 +2660,8 @@ fn load_semantic_file(
             callable_contracts,
             callable_signatures,
             callable_parameters,
+            override_callable_types,
+            override_declared_types,
         },
     );
 
@@ -1652,15 +2693,132 @@ fn callable_parameters_for_function(
         .collect()
 }
 
-fn record_callable_signature(
-    map: &mut HashMap<String, Vec<CallableSignatureRef>>,
-    name: &str,
-    target: CallableTargetKey,
-    arg_count: usize,
+fn record_override_declared_type(
+    source: &str,
+    variable: &solar_ast::VariableDefinition<'_>,
+    override_declared_types: &mut HashMap<usize, OverrideTypeShape>,
 ) {
-    map.entry(name.to_string())
-        .or_default()
-        .push(CallableSignatureRef { target, arg_count });
+    let Some(name) = variable.name else {
+        return;
+    };
+    override_declared_types.insert(
+        solgrid_ast::span_to_range(name.span).start,
+        override_type_shape_from_ast(source, &variable.ty),
+    );
+}
+
+fn override_callable_types_for_function(
+    source: &str,
+    function: &solar_ast::ItemFunction<'_>,
+    implicitly_virtual: bool,
+) -> OverrideCallableTypes {
+    let parameter_types = function
+        .header
+        .parameters
+        .iter()
+        .map(|parameter| override_parameter_type_shape_from_ast(source, parameter))
+        .collect();
+    let output_types = function
+        .header
+        .returns()
+        .iter()
+        .map(|parameter| override_parameter_type_shape_from_ast(source, parameter))
+        .collect();
+    OverrideCallableTypes {
+        parameter_types,
+        output_types,
+        state_mutability: function.header.state_mutability(),
+        overridable: implicitly_virtual || function.header.virtual_(),
+    }
+}
+
+fn override_parameter_type_shape_from_ast(
+    source: &str,
+    parameter: &solar_ast::VariableDefinition<'_>,
+) -> OverrideTypeShape {
+    OverrideTypeShape::Located {
+        ty: Box::new(override_type_shape_from_ast(source, &parameter.ty)),
+        data_location: parameter.data_location,
+    }
+}
+
+fn override_type_shape_from_ast(source: &str, ty: &Type<'_>) -> OverrideTypeShape {
+    match &ty.kind {
+        solar_ast::TypeKind::Elementary(elementary) => {
+            OverrideTypeShape::Display(elementary.to_string())
+        }
+        solar_ast::TypeKind::Custom(path) => OverrideTypeShape::Custom {
+            path: ast_path_to_type_path(path),
+            resolve_offset: solgrid_ast::span_to_range(ty.span).start,
+        },
+        solar_ast::TypeKind::Array(array) => OverrideTypeShape::Array {
+            element: Box::new(override_type_shape_from_ast(source, &array.element)),
+            size: array
+                .size
+                .as_ref()
+                .map(|size| canonical_override_array_length(source, size))
+                .unwrap_or_default(),
+        },
+        solar_ast::TypeKind::Mapping(mapping) => OverrideTypeShape::Mapping {
+            key: Box::new(override_type_shape_from_ast(source, &mapping.key)),
+            value: Box::new(override_type_shape_from_ast(source, &mapping.value)),
+        },
+        solar_ast::TypeKind::Function(function) => OverrideTypeShape::Function {
+            parameter_types: function
+                .parameters
+                .iter()
+                .map(|parameter| override_parameter_type_shape_from_ast(source, parameter))
+                .collect(),
+            output_types: function
+                .returns()
+                .iter()
+                .map(|parameter| override_parameter_type_shape_from_ast(source, parameter))
+                .collect(),
+            visibility: Some(function.visibility().unwrap_or(Visibility::Internal)),
+            state_mutability: function.state_mutability(),
+        },
+    }
+}
+
+fn canonical_override_array_length(source: &str, size: &Expr<'_>) -> String {
+    if let ExprKind::Lit(literal, None) = &size.peel_parens().kind {
+        if let solar_ast::LitKind::Number(value) = literal.kind {
+            return value.to_string();
+        }
+    }
+    if let Some(value) = evaluate_override_array_length(size) {
+        return value.to_string();
+    }
+    let span = solgrid_ast::span_to_range(size.span);
+    source[span].split_whitespace().collect::<String>()
+}
+
+fn evaluate_override_array_length(expr: &Expr<'_>) -> Option<u128> {
+    match &expr.peel_parens().kind {
+        ExprKind::Lit(literal, None) => match literal.kind {
+            solar_ast::LitKind::Number(value) => u128::try_from(value).ok(),
+            _ => None,
+        },
+        ExprKind::Binary(left, operator, right) => {
+            let left = evaluate_override_array_length(left)?;
+            let right = evaluate_override_array_length(right)?;
+            match operator.kind {
+                solar_ast::BinOpKind::Add => left.checked_add(right),
+                solar_ast::BinOpKind::Sub => left.checked_sub(right),
+                solar_ast::BinOpKind::Mul => left.checked_mul(right),
+                solar_ast::BinOpKind::Div => left.checked_div(right),
+                solar_ast::BinOpKind::Rem => left.checked_rem(right),
+                solar_ast::BinOpKind::Pow => left.checked_pow(u32::try_from(right).ok()?),
+                solar_ast::BinOpKind::Shl => left.checked_shl(u32::try_from(right).ok()?),
+                solar_ast::BinOpKind::Shr => left.checked_shr(u32::try_from(right).ok()?),
+                solar_ast::BinOpKind::BitAnd => Some(left & right),
+                solar_ast::BinOpKind::BitOr => Some(left | right),
+                solar_ast::BinOpKind::BitXor => Some(left ^ right),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn lookup_callable_signature(
@@ -1673,6 +2831,19 @@ fn lookup_callable_signature(
         .into_iter()
         .find(|def| def.name_span.start == target_offset)
         .and_then(|def| def.signature.clone())
+}
+
+fn lookup_constructor_signature(
+    table: &SymbolTable,
+    contract_name: &str,
+    target_offset: usize,
+) -> Option<SignatureData> {
+    let contract = table.resolve(contract_name, 0)?;
+    table
+        .constructors(contract)
+        .into_iter()
+        .find(|constructor| constructor.name_span.start == target_offset)
+        .and_then(|constructor| constructor.signature.clone())
 }
 
 fn summarize_semantic_file_functions(
@@ -1762,6 +2933,15 @@ fn summarize_function_sinks(
         })
         .collect::<HashMap<_, _>>();
 
+    collect_function_header_sink_edges(
+        file,
+        current_contract,
+        function,
+        &parameter_indexes,
+        context,
+        &mut summary,
+    );
+
     if let Some(body) = &function.body {
         collect_function_sink_stmts(
             file,
@@ -1774,6 +2954,253 @@ fn summarize_function_sinks(
     }
 
     summary
+}
+
+fn collect_function_header_sink_edges(
+    file: &FileSemanticInfo,
+    current_contract: Option<&str>,
+    function: &solar_ast::ItemFunction<'_>,
+    parameter_indexes: &HashMap<usize, usize>,
+    context: &SinkSummaryContext<'_>,
+    summary: &mut FunctionSinkSummary,
+) {
+    let Some(current_contract) = current_contract else {
+        return;
+    };
+
+    for invocation in function.header.modifiers.iter() {
+        let mut callees = resolved_modifier_targets(
+            file,
+            current_contract,
+            &invocation.name,
+            &invocation.arguments,
+            context,
+        );
+        if function.kind == FunctionKind::Constructor {
+            callees.extend(resolved_ancestor_constructor_targets(
+                file,
+                current_contract,
+                &invocation.name,
+                &invocation.arguments,
+                context,
+            ));
+        }
+        let callees = dedup_callable_targets(callees);
+        if !callees.is_empty() {
+            summary.call_edges.push(FunctionCallEdge {
+                callees,
+                argument_parameters: argument_parameter_bindings(
+                    file,
+                    &invocation.arguments,
+                    parameter_indexes,
+                ),
+            });
+        }
+
+        for argument in invocation.arguments.exprs() {
+            collect_function_sink_expr(
+                file,
+                Some(current_contract),
+                argument,
+                parameter_indexes,
+                context,
+                summary,
+            );
+        }
+    }
+}
+
+fn resolved_modifier_targets(
+    file: &FileSemanticInfo,
+    current_contract: &str,
+    path: &solar_ast::AstPath<'_>,
+    args: &solar_ast::CallArgs<'_>,
+    context: &SinkSummaryContext<'_>,
+) -> Vec<CallableTargetKey> {
+    let segments = path
+        .segments()
+        .iter()
+        .map(|segment| segment.as_str().to_string())
+        .collect::<Vec<_>>();
+    let Some(modifier_name) = segments.last() else {
+        return Vec::new();
+    };
+
+    let candidates = if segments.len() == 1 {
+        resolve_contract_modifier_targets(
+            file,
+            current_contract,
+            modifier_name,
+            args.len(),
+            context,
+            &mut HashSet::new(),
+        )
+    } else {
+        let qualifier = TypePath {
+            segments: segments[..segments.len() - 1].to_vec(),
+        };
+        let Some((target_path, target_contract)) =
+            resolve_contract_path_target(file, &qualifier, context)
+        else {
+            return Vec::new();
+        };
+        if !contract_hierarchy_contains_target(
+            file,
+            current_contract,
+            &target_path,
+            &target_contract,
+            context,
+            &mut HashSet::new(),
+        ) {
+            return Vec::new();
+        }
+        let Some(target_file) = context.semantic_files.get(&target_path) else {
+            return Vec::new();
+        };
+        resolve_contract_modifier_targets(
+            target_file,
+            &target_contract,
+            modifier_name,
+            args.len(),
+            context,
+            &mut HashSet::new(),
+        )
+    };
+
+    narrow_callable_targets_by_arguments(file, Some(current_contract), args, candidates, context)
+}
+
+fn resolve_contract_modifier_targets(
+    file: &FileSemanticInfo,
+    contract_name: &str,
+    modifier_name: &str,
+    arg_count: usize,
+    context: &SinkSummaryContext<'_>,
+    visited: &mut HashSet<(PathBuf, String)>,
+) -> Vec<CallableTargetKey> {
+    if !visited.insert((file.path.clone(), contract_name.to_string())) {
+        return Vec::new();
+    }
+    let Some(contract) = file.contracts.get(contract_name) else {
+        return Vec::new();
+    };
+
+    let current = contract
+        .modifiers
+        .get(modifier_name)
+        .into_iter()
+        .flatten()
+        .filter(|modifier| modifier.arg_count == arg_count)
+        .map(|modifier| modifier.target.clone())
+        .collect::<Vec<_>>();
+    let mut inherited = Vec::new();
+    for base in &contract.bases {
+        let Some((base_path, base_name)) = resolve_contract_path_target(file, base, context) else {
+            continue;
+        };
+        let Some(base_file) = context.semantic_files.get(&base_path) else {
+            continue;
+        };
+        inherited.extend(resolve_contract_modifier_targets(
+            base_file,
+            &base_name,
+            modifier_name,
+            arg_count,
+            context,
+            visited,
+        ));
+    }
+
+    if current.is_empty() {
+        return inherited;
+    }
+    let current_signatures = current
+        .iter()
+        .filter_map(|target| callable_target_signature_key(target, context))
+        .collect::<HashSet<_>>();
+    inherited.retain(|target| {
+        callable_target_signature_key(target, context)
+            .is_none_or(|signature| !current_signatures.contains(&signature))
+    });
+    inherited.extend(current);
+    inherited
+}
+
+fn resolved_ancestor_constructor_targets(
+    file: &FileSemanticInfo,
+    current_contract: &str,
+    path: &solar_ast::AstPath<'_>,
+    args: &solar_ast::CallArgs<'_>,
+    context: &SinkSummaryContext<'_>,
+) -> Vec<CallableTargetKey> {
+    let target_path = ast_path_to_type_path(path);
+    let Some((target_file_path, target_contract)) =
+        resolve_contract_path_target(file, &target_path, context)
+    else {
+        return Vec::new();
+    };
+    if target_file_path == file.path && target_contract == current_contract {
+        return Vec::new();
+    }
+    if !contract_hierarchy_contains_target(
+        file,
+        current_contract,
+        &target_file_path,
+        &target_contract,
+        context,
+        &mut HashSet::new(),
+    ) {
+        return Vec::new();
+    }
+    let Some(target_file) = context.semantic_files.get(&target_file_path) else {
+        return Vec::new();
+    };
+    let Some(contract) = target_file.contracts.get(&target_contract) else {
+        return Vec::new();
+    };
+    let candidates = contract
+        .constructors
+        .iter()
+        .filter(|constructor| constructor.arg_count == args.len())
+        .map(|constructor| constructor.target.clone())
+        .collect::<Vec<_>>();
+    narrow_callable_targets_by_arguments(file, Some(current_contract), args, candidates, context)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contract_hierarchy_contains_target(
+    file: &FileSemanticInfo,
+    contract_name: &str,
+    target_path: &Path,
+    target_contract: &str,
+    context: &SinkSummaryContext<'_>,
+    visited: &mut HashSet<(PathBuf, String)>,
+) -> bool {
+    if file.path == target_path && contract_name == target_contract {
+        return true;
+    }
+    if !visited.insert((file.path.clone(), contract_name.to_string())) {
+        return false;
+    }
+    let Some(contract) = file.contracts.get(contract_name) else {
+        return false;
+    };
+    contract.bases.iter().any(|base| {
+        let Some((base_path, base_name)) = resolve_contract_path_target(file, base, context) else {
+            return false;
+        };
+        let Some(base_file) = context.semantic_files.get(&base_path) else {
+            return false;
+        };
+        contract_hierarchy_contains_target(
+            base_file,
+            &base_name,
+            target_path,
+            target_contract,
+            context,
+            visited,
+        )
+    })
 }
 
 fn collect_function_sink_stmts(
@@ -2332,6 +3759,15 @@ fn resolve_member_defs_from_expr(
     dedup_resolved_expr_defs(defs)
 }
 
+fn deployed_custom_type_from_callee<'a, 'ast>(callee: &'a Expr<'ast>) -> Option<&'a Type<'ast>> {
+    let callee = callee.peel_parens();
+    match &callee.kind {
+        ExprKind::New(ty) if matches!(&ty.kind, solar_ast::TypeKind::Custom(_)) => Some(ty),
+        ExprKind::CallOptions(inner, _) => deployed_custom_type_from_callee(inner),
+        _ => None,
+    }
+}
+
 fn infer_value_types_from_expr(
     file: &FileSemanticInfo,
     current_contract: Option<&str>,
@@ -2388,7 +3824,12 @@ fn infer_value_types_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            if let ExprKind::Type(ty) = &callee.peel_parens().kind {
+            if let Some(ty) = deployed_custom_type_from_callee(callee) {
+                types.push(ResolvedExprType {
+                    path: file.path.clone(),
+                    ty: symbols::type_spec_from_ast(&file.source, ty, None, expr_offset),
+                });
+            } else if let ExprKind::Type(ty) = &callee.peel_parens().kind {
                 types.push(ResolvedExprType {
                     path: file.path.clone(),
                     ty: symbols::type_spec_from_ast(&file.source, ty, None, expr_offset),
@@ -2510,14 +3951,23 @@ fn resolve_contract_targets_from_expr(
             }
         }
         ExprKind::Call(callee, args) => {
-            for target in resolved_callable_targets(file, current_contract, callee, args, context) {
-                if let Some(signature) = callable_signature_for_target(&target, context) {
-                    if let Some(first_return_type) = signature.first_return_type {
-                        targets.extend(resolve_contract_targets_from_type_spec(
-                            &target.path,
-                            &first_return_type,
-                            context,
-                        ));
+            if let Some(ty) = deployed_custom_type_from_callee(callee) {
+                let type_spec = symbols::type_spec_from_ast(&file.source, ty, None, expr_offset);
+                targets.extend(resolve_contract_targets_from_type_spec(
+                    &file.path, &type_spec, context,
+                ));
+            } else {
+                for target in
+                    resolved_callable_targets(file, current_contract, callee, args, context)
+                {
+                    if let Some(signature) = callable_signature_for_target(&target, context) {
+                        if let Some(first_return_type) = signature.first_return_type {
+                            targets.extend(resolve_contract_targets_from_type_spec(
+                                &target.path,
+                                &first_return_type,
+                                context,
+                            ));
+                        }
                     }
                 }
             }
@@ -2577,6 +4027,34 @@ fn resolved_callable_targets_by_arity(
 ) -> Vec<CallableTargetKey> {
     let callee = callee.peel_parens();
     match &callee.kind {
+        ExprKind::CallOptions(inner, _) => {
+            resolved_callable_targets_by_arity(file, current_contract, inner, arg_count, context)
+        }
+        ExprKind::New(ty) => {
+            let solar_ast::TypeKind::Custom(path) = &ty.kind else {
+                return Vec::new();
+            };
+            let contract_path = ast_path_to_type_path(path);
+            let Some((target_path, target_contract)) =
+                resolve_contract_path_target(file, &contract_path, context)
+            else {
+                return Vec::new();
+            };
+            let Some(target_file) = context.semantic_files.get(&target_path) else {
+                return Vec::new();
+            };
+            let Some(contract) = target_file.contracts.get(&target_contract) else {
+                return Vec::new();
+            };
+            dedup_callable_targets(
+                contract
+                    .constructors
+                    .iter()
+                    .filter(|constructor| constructor.arg_count == arg_count)
+                    .map(|constructor| constructor.target.clone())
+                    .collect(),
+            )
+        }
         ExprKind::Ident(ident) => {
             let offset = solgrid_ast::span_to_range(ident.span).start;
             let defs = file
@@ -3555,15 +5033,48 @@ fn is_callable_symbol(def: &SymbolDef, arg_count: usize) -> bool {
 }
 
 fn function_target_offset(function: &solar_ast::ItemFunction<'_>) -> Option<usize> {
+    if matches!(
+        function.kind,
+        FunctionKind::Constructor | FunctionKind::Fallback | FunctionKind::Receive
+    ) {
+        return Some(solgrid_ast::span_to_range(function.header.span).start);
+    }
     function
         .header
         .name
         .map(|name| solgrid_ast::span_to_range(name.span).start)
 }
 
+fn function_identity_name_span(
+    function: &solar_ast::ItemFunction<'_>,
+) -> Option<std::ops::Range<usize>> {
+    if let Some(name) = function.header.name {
+        return Some(solgrid_ast::span_to_range(name.span));
+    }
+    if !matches!(
+        function.kind,
+        FunctionKind::Fallback | FunctionKind::Receive
+    ) {
+        return None;
+    }
+    let start = function_target_offset(function)?;
+    Some(start..start + function.kind.to_str().len())
+}
+
 fn call_site_label_and_span(callee: &Expr<'_>) -> Option<(String, std::ops::Range<usize>)> {
     let callee = callee.peel_parens();
     match &callee.kind {
+        ExprKind::CallOptions(inner, _) => call_site_label_and_span(inner),
+        ExprKind::New(ty) => {
+            let solar_ast::TypeKind::Custom(path) = &ty.kind else {
+                return None;
+            };
+            let segment = path.segments().last()?;
+            Some((
+                segment.as_str().to_string(),
+                solgrid_ast::span_to_range(segment.span),
+            ))
+        }
         ExprKind::Ident(ident) => Some((
             ident.as_str().to_string(),
             solgrid_ast::span_to_range(ident.span),
@@ -3908,6 +5419,784 @@ contract Broken is MissingBase {
     }
 
     #[test]
+    fn test_compiler_diagnostics_reject_non_contract_inheritance_bases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Inheritance.sol");
+        let source = r#"pragma solidity ^0.8.0;
+struct Payload { uint256 value; }
+interface ParentInterface {}
+interface KnownInterface is ParentInterface {}
+contract KnownBase {}
+contract Valid is KnownBase, KnownInterface {}
+contract Invalid is Payload {}
+interface InvalidInterface is KnownBase {}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_bases = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-base-contract")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(unresolved_bases.len(), 2, "diagnostics: {diagnostics:#?}");
+        for invalid_base in ["Payload", "KnownBase"] {
+            let start = source.rfind(invalid_base).unwrap();
+            let expected_range =
+                convert::span_to_range(source, &(start..start + invalid_base.len()));
+            assert!(unresolved_bases.iter().any(|diagnostic| {
+                diagnostic.range == expected_range && diagnostic.message.contains(invalid_base)
+            }));
+        }
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_reject_imported_namespace_wrong_kind_bases() {
+        let dir = tempfile::tempdir().unwrap();
+        let types = dir.path().join("Types.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &types,
+            r#"pragma solidity ^0.8.0;
+struct Payload { uint256 value; }
+library Helpers {}
+interface ParentInterface {}
+contract KnownBase {}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import * as Types from "./Types.sol";
+contract Valid is Types.KnownBase, Types.ParentInterface {}
+contract InvalidStruct is Types.Payload {}
+contract InvalidLibrary is Types.Helpers {}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&types, &fs::read_to_string(&types).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+        let unresolved_bases = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-base-contract")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(unresolved_bases.len(), 2, "diagnostics: {diagnostics:#?}");
+        for invalid_base in ["Types.Payload", "Types.Helpers"] {
+            let start = source.find(invalid_base).unwrap();
+            let expected_range =
+                convert::span_to_range(source, &(start..start + invalid_base.len()));
+            assert!(unresolved_bases.iter().any(|diagnostic| {
+                diagnostic.range == expected_range && diagnostic.message.contains(invalid_base)
+            }));
+        }
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_reject_wrong_kind_and_unrelated_override_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Overrides.sol");
+        let source = r#"pragma solidity ^0.8.0;
+struct WrongKind { uint256 value; }
+contract Unrelated {}
+contract Base {
+    function first() public virtual {}
+    function second() public virtual {}
+}
+contract Child is Base {
+    function first() public override(WrongKind) {}
+    function second() public override(Unrelated) {}
+    uint256 public override(WrongKind) value;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            3,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert_eq!(
+            unresolved_overrides
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains("WrongKind"))
+                .count(),
+            2
+        );
+        assert!(unresolved_overrides
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Unrelated")));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_require_compatible_direct_override_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Overrides.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Root {
+    function inherited(uint256 value) public virtual {}
+}
+contract Base is Root {
+    function typed(uint256 value) public virtual {}
+    function getter(uint256 index) external view returns (uint256);
+}
+contract Child is Base {
+    function inherited(uint256 value) public override(Base) {}
+    function typed(address value) public override(Base) {}
+    uint256 public override(Base) getter;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            3,
+            "diagnostics: {diagnostics:#?}"
+        );
+        let expected_ranges = source
+            .match_indices("override(Base)")
+            .map(|(start, _)| {
+                let start = start + "override(".len();
+                convert::span_to_range(source, &(start..start + "Base".len()))
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            unresolved_overrides
+                .iter()
+                .map(|diagnostic| diagnostic.range)
+                .collect::<HashSet<_>>(),
+            expected_ranges
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_enforce_override_member_kind_and_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Overrides.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract VariableBase {
+    uint256 public stored;
+    uint256 public callable;
+}
+interface GetterReturnBase {
+    function getterReturn() external view returns (address);
+}
+interface FunctionReturnBase {
+    function functionReturn() external view returns (address);
+}
+contract Child is VariableBase, GetterReturnBase, FunctionReturnBase {
+    uint256 public override(VariableBase) stored;
+    function callable() public override(VariableBase) returns (uint256) { return 1; }
+    uint256 public override(GetterReturnBase) getterReturn;
+    function functionReturn() public override(FunctionReturnBase) returns (uint256) { return 1; }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            4,
+            "diagnostics: {diagnostics:#?}"
+        );
+        for target in ["VariableBase", "GetterReturnBase", "FunctionReturnBase"] {
+            assert!(unresolved_overrides
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(target)));
+        }
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_require_overridable_visibility_compatible_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Overrides.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract FixedBase {
+    function fixedFunction() public returns (uint256) { return 1; }
+}
+interface ExternalBase {
+    function widened() external returns (uint256);
+}
+contract Child is FixedBase, ExternalBase {
+    function fixedFunction() public override(FixedBase) returns (uint256) { return 1; }
+    function widened() public override(ExternalBase) returns (uint256) { return 1; }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides[0].message.contains("FixedBase"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_enforce_override_mutability_lattice() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Mutability.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    function payableGood() public payable virtual {}
+    function payableBad() public payable virtual {}
+    function nonpayableView() public virtual {}
+    function nonpayablePure() public virtual {}
+    function nonpayableBad() public virtual {}
+    function viewPure() public view virtual {}
+    function viewBad() public view virtual {}
+    function purePure() public pure virtual {}
+    function pureBad() public pure virtual {}
+}
+contract Child is Base {
+    function payableGood() public payable override(Base) {}
+    function payableBad() public override(Base) {}
+    function nonpayableView() public view override(Base) {}
+    function nonpayablePure() public pure override(Base) {}
+    function nonpayableBad() public payable override(Base) {}
+    function viewPure() public pure override(Base) {}
+    function viewBad() public override(Base) {}
+    function purePure() public pure override(Base) {}
+    function pureBad() public view override(Base) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            4,
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_enforce_override_data_locations_by_visibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Locations.sol");
+        let source = r#"pragma solidity ^0.8.14;
+abstract contract Base {
+    function publicParam(bytes memory value) public virtual;
+    function publicReturn() public virtual returns (bytes memory);
+    function internalParam(bytes calldata value) internal virtual;
+    function internalReturn() internal virtual returns (bytes calldata);
+}
+interface ExternalBase {
+    function externalParam(bytes calldata value) external;
+}
+contract Child is Base, ExternalBase {
+    function publicParam(bytes calldata value) public override(Base) {}
+    function publicReturn() public override(Base) returns (bytes calldata) { revert(); }
+    function internalParam(bytes memory value) internal override(Base) {}
+    function internalReturn() internal override(Base) returns (bytes memory) { revert(); }
+    function externalParam(bytes memory value) public override(ExternalBase) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            4,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("ExternalBase")));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_normalize_nested_function_visibility_and_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("NestedLocations.sol");
+        let source = r#"pragma solidity ^0.8.14;
+abstract contract Base {
+    function defaultVisibility(function(bytes memory) returns (bytes memory) callback) internal virtual;
+    function nestedLocation(function(bytes memory) internal callback) internal virtual;
+    function nestedExternalLocation(function(bytes memory) external callback) internal virtual;
+}
+contract Child is Base {
+    function defaultVisibility(function(bytes memory) internal returns (bytes memory) callback)
+        internal override(Base) {}
+    function nestedLocation(function(bytes calldata) internal callback)
+        internal override(Base) {}
+    function nestedExternalLocation(function(bytes calldata) external callback)
+        internal override(Base) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            2,
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_fallback_and_receive_override_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SpecialFunctions.sol");
+        let source = r#"pragma solidity ^0.8.14;
+contract BaseA {
+    fallback() external virtual {}
+    receive() external payable virtual {}
+}
+contract BaseB {
+    fallback() external virtual {}
+    receive() external payable virtual {}
+}
+contract Child is BaseA, BaseB {
+    fallback() external override(BaseA, BaseB) {}
+    receive() external payable override(BaseA, BaseB) {}
+}
+contract FallbackOnly {
+    fallback() external virtual {}
+}
+contract WrongSpecialKind is FallbackOnly {
+    receive() external payable override(FallbackOnly) {}
+}
+contract FixedFallback {
+    fallback() external {}
+}
+contract FixedChild is FixedFallback {
+    fallback() external override(FixedFallback) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            2,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("FallbackOnly")));
+        assert!(unresolved_overrides
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("FixedFallback")));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_canonicalize_fixed_array_lengths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ArrayLengths.sol");
+        let source = r#"pragma solidity ^0.8.14;
+contract Base {
+    function equivalent(uint256[2] memory values) public virtual {}
+    function mismatch(uint256[2] memory values) public virtual {}
+}
+contract Child is Base {
+    function equivalent(uint256[1 + 1] memory values) public override(Base) {}
+    function mismatch(uint256[3] memory values) public override(Base) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_validate_modifier_override_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("Base.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &base,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+contract Base {
+    modifier guarded(Token token) virtual { _; }
+    modifier fixedGuard() { _; }
+}
+contract Unrelated {
+    modifier outsider() virtual { _; }
+}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {Base as Parent, Token as T, Unrelated} from "./Base.sol";
+contract Child is Parent {
+    modifier guarded(T renamed) override(Parent) { _; }
+    modifier fixedGuard() override(Parent) { _; }
+    modifier missing() override(Parent) { _; }
+    modifier outsider() override(Unrelated) { _; }
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&base, &fs::read_to_string(&base).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            3,
+            "diagnostics: {diagnostics:#?}"
+        );
+        let guarded_target = source.find("override(Parent)").unwrap() + "override(".len();
+        let guarded_range =
+            convert::span_to_range(source, &(guarded_target..guarded_target + "Parent".len()));
+        assert!(unresolved_overrides
+            .iter()
+            .all(|diagnostic| diagnostic.range != guarded_range));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_compare_public_struct_getter_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Getters.sol");
+        let source = r#"pragma solidity ^0.8.0;
+struct Record {
+    uint256 amount;
+    address owner;
+    mapping(address => uint256) ignoredMapping;
+    uint256[] ignoredArray;
+}
+interface GoodRecords {
+    function records(uint256 id) external view returns (uint256, address);
+}
+interface BadRecords {
+    function badRecords(uint256 id) external view returns (uint256, bool);
+}
+contract GoodStore is GoodRecords {
+    mapping(uint256 => Record) public override(GoodRecords) records;
+}
+contract BadStore is BadRecords {
+    mapping(uint256 => Record) public override(BadRecords) badRecords;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides[0].message.contains("BadRecords"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_match_reference_type_public_getters() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ReferenceGetters.sol");
+        let source = r#"pragma solidity ^0.8.14;
+interface GetterApi {
+    function version() external view returns (string memory);
+    function payload() external view returns (bytes memory);
+    function labels(string calldata key) external view returns (uint256);
+    function blobs(bytes calldata key) external view returns (uint256);
+}
+contract Store is GetterApi {
+    string public override(GetterApi) version;
+    bytes public override(GetterApi) payload;
+    mapping(string => uint256) public override(GetterApi) labels;
+    mapping(bytes => uint256) public override(GetterApi) blobs;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_structurally_match_function_pointer_getters() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("FunctionPointerGetters.sol");
+        let source = r#"pragma solidity ^0.8.14;
+struct HandlerRecord {
+    function(bytes memory) external returns (bytes memory) handler;
+}
+interface GetterApi {
+    function callback()
+        external view returns (function(bytes memory) external returns (bytes memory));
+    function record()
+        external view returns (function(bytes memory) external returns (bytes memory));
+    function mismatch()
+        external view returns (function(bytes memory) external returns (address));
+}
+contract Store is GetterApi {
+    function(bytes memory) external returns (bytes memory)
+        public override(GetterApi) callback;
+    HandlerRecord public override(GetterApi) record;
+    function(bytes memory) external returns (bytes memory)
+        public override(GetterApi) mismatch;
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides[0].message.contains("GetterApi"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_custom_override_types_across_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let types = dir.path().join("Types.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &types,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+interface Api {
+    function named(Token token) external returns (Token);
+    function unnamed(Token) external returns (Token);
+}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {Api as Parent, Token as T} from "./Types.sol";
+contract Child is Parent {
+    function named(T token) external override(Parent) returns (T) { revert(); }
+    function unnamed(T) external override(Parent) returns (T) { revert(); }
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&types, &fs::read_to_string(&types).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_structurally_compare_function_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let types = dir.path().join("Types.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &types,
+            r#"pragma solidity ^0.8.0;
+contract Token {}
+interface Api {
+    function configure(function(Token original) external returns (Token produced) callback) external;
+    function mismatch(function(Token original) external returns (Token produced) callback) external;
+}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {Api as Parent, Token as T} from "./Types.sol";
+contract Child is Parent {
+    function configure(function(T renamed) external returns (T aliased) callback)
+        external override(Parent) {}
+    function mismatch(function(T renamed) external returns (address wrong) callback)
+        external override(Parent) {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&types, &fs::read_to_string(&types).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+        let unresolved_overrides = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_overrides.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_overrides[0].message.contains("Parent"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_accept_imported_ancestor_override_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("Base.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &base,
+            r#"pragma solidity ^0.8.0;
+contract Base {
+    function run() public virtual {}
+}
+interface ValueSource {
+    function value() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {Base as Parent} from "./Base.sol";
+import * as Namespace from "./Base.sol";
+
+contract Child is Parent, Namespace.ValueSource {
+    function run() public override(Parent) {}
+    uint256 public override(Namespace.ValueSource) value;
+    mapping(address => uint256) public override(Namespace.ValueSource) balanceOf;
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&base, &fs::read_to_string(&base).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-override")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn test_compiler_diagnostics_visit_try_return_and_catch_parameter_types() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("TryTypes.sol");
@@ -4120,6 +6409,86 @@ contract Main is Base {
     }
 
     #[test]
+    fn test_compiler_diagnostics_reject_qualified_modifier_from_unrelated_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Modifiers.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Unrelated {
+    modifier guarded() { _; }
+}
+contract Main {
+    function run() external Unrelated.guarded {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_modifiers = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-modifier")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_modifiers.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_modifiers[0]
+            .message
+            .contains("Unrelated.guarded"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_accept_qualified_modifiers_from_imported_bases() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("Base.sol");
+        let main = dir.path().join("Main.sol");
+        fs::write(
+            &base,
+            r#"pragma solidity ^0.8.0;
+contract Root {
+    modifier inheritedGuard() { _; }
+}
+contract Base is Root {
+    modifier guarded() { _; }
+}
+"#,
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {Base as Parent} from "./Base.sol";
+import * as Namespace from "./Base.sol";
+
+contract AliasedChild is Parent {
+    function viaAlias() external Parent.guarded {}
+    function inheritedViaAlias() external Parent.inheritedGuard {}
+}
+
+contract NamespacedChild is Namespace.Base {
+    function viaNamespace() external Namespace.Base.guarded {}
+    function inheritedViaNamespace() external Namespace.Base.inheritedGuard {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&base, &fs::read_to_string(&base).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &main, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-modifier")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
+    }
+
+    #[test]
     fn test_compiler_diagnostics_resolve_constructor_base_specifier_and_modifiers() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Constructors.sol");
@@ -4154,6 +6523,45 @@ contract Child is Base {
             "diagnostics: {diagnostics:#?}"
         );
         assert!(unresolved_modifiers[0].message.contains("missingModifier"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_constrain_constructor_initializers_to_ancestry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Constructors.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Root {
+    constructor(uint256 value) {}
+}
+contract Middle is Root {}
+contract Unrelated {
+    constructor() {}
+}
+contract Valid is Middle {
+    constructor() Root(1) {}
+}
+contract Invalid is Middle {
+    constructor() Unrelated() {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_modifiers = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-modifier")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            unresolved_modifiers.len(),
+            1,
+            "diagnostics: {diagnostics:#?}"
+        );
+        assert!(unresolved_modifiers[0].message.contains("Unrelated"));
     }
 
     #[test]
@@ -4478,6 +6886,367 @@ contract DelegatecallWrapper {
         )
         .expect("valid finding metadata");
         assert_eq!(meta.confidence, Some(Confidence::Medium));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_constructor_delegatecall_flow_with_named_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ConstructorDelegatecall.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(address target, bytes memory payload) {
+        forward(target, payload);
+    }
+
+    function forward(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+}
+
+contract Factory {
+    function deploy(address implementation, bytes memory data) external {
+        new Child({payload: data, target: implementation});
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `Child`")
+            })
+            .expect("constructor delegatecall flow");
+
+        assert!(propagated.message.contains("`implementation`"));
+        let deployed = source.rfind("Child({").unwrap();
+        assert_eq!(
+            propagated.range,
+            convert::span_to_range(source, &(deployed..deployed + "Child".len()))
+        );
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_create_value_constructor_eth_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ConstructorPayment.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(address recipient, uint256 amount) payable {
+        payable(recipient).call{value: amount}("");
+    }
+}
+contract Factory {
+    function deploy(address recipient, uint256 amount) external payable {
+        new Child{value: amount}(recipient, amount);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let propagated = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic_code(diagnostic) == Some(USER_CONTROLLED_ETH_TRANSFER_ID)
+                    && diagnostic
+                        .message
+                        .contains("flows into an ETH transfer via `Child`")
+            })
+            .expect("constructor ETH transfer flow");
+        assert!(propagated.message.contains("`recipient`"));
+        assert!(!propagated.message.contains("`amount`"));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_imported_constructor_flows_through_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_path = dir.path().join("Child.sol");
+        let main_path = dir.path().join("Main.sol");
+        let child_source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(address target, bytes memory payload) {
+        forward(target, payload);
+    }
+    function forward(address target, bytes memory payload) internal {
+        target.delegatecall(payload);
+    }
+}
+"#;
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Child as Spawn} from "./Child.sol";
+import * as ChildNs from "./Child.sol";
+contract Factory {
+    function deployAlias(address implementation, bytes memory payload, bytes32 salt) external {
+        new Spawn{salt: salt}(implementation, payload);
+    }
+    function deployNamespace(address implementation, bytes memory payload) external {
+        new ChildNs.Child(implementation, payload);
+    }
+}
+"#;
+        fs::write(&child_path, child_source).unwrap();
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, main_source, &main_path, &get_source);
+        let propagated = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                    && diagnostic.message.contains("flows into delegatecall via")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(propagated.len(), 2, "diagnostics: {diagnostics:#?}");
+        assert!(propagated
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("`implementation`")));
+        assert!(propagated
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("`salt`")));
+
+        let alias = main_source.find("Spawn{salt").unwrap();
+        let namespace = main_source.find("Child(implementation").unwrap();
+        for expected in [
+            convert::span_to_range(main_source, &(alias..alias + "Spawn".len())),
+            convert::span_to_range(main_source, &(namespace..namespace + "Child".len())),
+        ] {
+            assert!(propagated
+                .iter()
+                .any(|diagnostic| diagnostic.range == expected));
+        }
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_propagate_constructor_ancestor_and_modifier_sinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ConstructorHeaders.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    constructor(address target, bytes memory payload) {
+        target.delegatecall(payload);
+    }
+}
+abstract contract Middle is Base {}
+contract Unrelated {
+    constructor(address admin, bytes memory payload) {
+        admin.delegatecall(payload);
+    }
+}
+contract Child is Middle {
+    modifier pays(address recipient, uint256 amount) {
+        payable(recipient).transfer(amount);
+        _;
+    }
+    constructor(
+        address target,
+        bytes memory payload,
+        address recipient,
+        uint256 amount,
+        address admin
+    ) pays(recipient, amount) Base(target, payload) Unrelated(admin, payload) {}
+}
+contract Factory {
+    function deploy(
+        address implementation,
+        bytes memory payload,
+        address recipient,
+        uint256 amount,
+        address admin
+    ) external {
+        new Child(implementation, payload, recipient, amount, admin);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let deployment_findings = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("via `Child`"))
+            .collect::<Vec<_>>();
+        assert!(deployment_findings.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic.message.contains("`implementation`")
+        }));
+        assert!(deployment_findings.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_ETH_TRANSFER_ID)
+                && diagnostic.message.contains("`recipient`")
+        }));
+        assert!(deployment_findings
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("`admin`")));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_skip_implicit_array_and_constant_constructor_flows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ConstructorNegatives.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Empty {}
+contract Child {
+    constructor(address target, bytes memory payload) {
+        target.delegatecall(payload);
+    }
+}
+contract Factory {
+    function deployImplicit() external { new Empty(); }
+    function allocate(uint256 size) external pure { new uint256[](size); }
+    function deployConstant(bytes memory payload) external {
+        new Child(address(0), payload);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("via `Empty`")
+                || diagnostic.message.contains("via `uint256`")
+                || diagnostic.message.contains("via `Child`")
+        }));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_report_nested_constructor_deployment_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("NestedConstructors.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Grandchild {
+    constructor(address target, bytes memory payload) {
+        target.delegatecall(payload);
+    }
+}
+contract Child {
+    constructor(address target, bytes memory payload) {
+        new Grandchild(target, payload);
+    }
+}
+contract Factory {
+    function deploy(address implementation, bytes memory payload) external {
+        new Child(implementation, payload);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                && diagnostic
+                    .message
+                    .contains("flows into delegatecall via `Child`")
+                && diagnostic.message.contains("`implementation`")
+        }));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_resolve_calls_on_fresh_contract_deployments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("FreshRunner.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Runner {
+    function run(address target, bytes memory payload) public {
+        target.delegatecall(payload);
+    }
+}
+contract Factory {
+    function direct(address implementation, bytes memory payload) external {
+        (new Runner()).run(implementation, payload);
+    }
+    function create2(
+        address implementation,
+        bytes memory payload,
+        bytes32 salt
+    ) external {
+        new Runner{salt: salt}().run(implementation, payload);
+    }
+    function allocate(uint256 size) external pure {
+        new uint256[](size);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let propagated = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic_code(diagnostic) == Some(USER_CONTROLLED_DELEGATECALL_ID)
+                    && diagnostic
+                        .message
+                        .contains("flows into delegatecall via `run`")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(propagated.len(), 2, "diagnostics: {diagnostics:#?}");
+        assert!(propagated
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("`implementation`")));
+        assert!(propagated
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("`salt`")));
+
+        let expected_ranges = source
+            .match_indices("run(implementation")
+            .map(|(start, _)| convert::span_to_range(source, &(start..start + "run".len())))
+            .collect::<Vec<_>>();
+        assert_eq!(expected_ranges.len(), 2);
+        for expected in expected_ranges {
+            assert!(propagated
+                .iter()
+                .any(|diagnostic| diagnostic.range == expected));
+        }
+        assert!(!diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("via `uint256`")));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_intersect_ambiguous_constructor_summaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("AmbiguousConstructors.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(address target) {
+        target.delegatecall("");
+    }
+    constructor(address safeTarget) {
+        safeTarget;
+    }
+}
+contract Factory {
+    function deploy(address implementation) external {
+        new Child(implementation);
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("flows into delegatecall via `Child`")
+        }));
     }
 
     #[test]
