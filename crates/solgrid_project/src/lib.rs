@@ -1212,11 +1212,14 @@ impl<B: NavBackend> ProjectIndex<B> {
             build_control_flow_graph_from_source_unit(
                 &source_unit,
                 source,
+                &snapshot,
                 &snapshot.path,
                 self.workspace_root(),
                 &contract_linearization,
                 &modifier_lookup,
                 target_offset,
+                get_source,
+                &self.resolver,
             )
         })
     }
@@ -1231,7 +1234,7 @@ impl<B: NavBackend> ProjectIndex<B> {
     ) -> Option<ReferenceTarget> {
         let snapshot = self.snapshot_for_source(path, source)?;
         let offset = position_to_offset(source, position);
-        reference_target_at_offset(&snapshot, offset, get_source, &self.resolver)
+        resolve_reference_target_at_offset(&snapshot, offset, get_source, &self.resolver)
     }
 
     /// Build a safe rename plan for the symbol at `position`.
@@ -1249,7 +1252,8 @@ impl<B: NavBackend> ProjectIndex<B> {
         let snapshot = self.snapshot_for_source(path, source)?;
         let offset = position_to_offset(source, position);
         let (_name, current_span) = symbols::find_ident_at_offset(source, offset)?;
-        let target = reference_target_at_offset(&snapshot, offset, get_source, &self.resolver)?;
+        let target =
+            resolve_reference_target_at_offset(&snapshot, offset, get_source, &self.resolver)?;
         let current_path = normalize_path(path);
         let locations = self
             .find_references_for_target(
@@ -2147,7 +2151,7 @@ impl<B: NavBackend> ProjectIndex<B> {
                     .into_iter()
                     .chain(find_natspec_identifier_occurrences(&snapshot.source, &name));
                 for span in spans {
-                    let Some(resolved_target) = reference_target_at_offset(
+                    let Some(resolved_target) = resolve_reference_target_at_offset(
                         &snapshot,
                         span.start,
                         get_source,
@@ -2237,9 +2241,12 @@ impl<B: NavBackend> ProjectIndex<B> {
                 let Some(candidate_indices) = candidates_by_name.get(name) else {
                     continue;
                 };
-                let Some(resolved_target) =
-                    reference_target_at_offset(&snapshot, span.start, get_source, &self.resolver)
-                else {
+                let Some(resolved_target) = resolve_reference_target_at_offset(
+                    &snapshot,
+                    span.start,
+                    get_source,
+                    &self.resolver,
+                ) else {
                     continue;
                 };
 
@@ -2412,23 +2419,30 @@ impl<'a> ControlFlowBuilder<'a> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_control_flow_graph_from_source_unit<'ast>(
     source_unit: &'ast solar_ast::SourceUnit<'ast>,
     source: &str,
+    snapshot: &ProjectSnapshot,
     path: &Path,
     workspace_root: Option<&Path>,
     contract_linearization: &HashMap<String, Vec<ResolvedContractRef>>,
     modifier_lookup: &HashMap<ModifierLookupKey, ModifierLookupEntry<'ast>>,
     target_offset: usize,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
 ) -> Option<GraphDocument> {
     struct ControlFlowSearch<'a, 'ast> {
         source: &'a str,
+        snapshot: &'a ProjectSnapshot,
         path: &'a Path,
         workspace_root: Option<&'a Path>,
         contract_stack: Vec<String>,
         contract_linearization: &'a HashMap<String, Vec<ResolvedContractRef>>,
         modifier_lookup: &'a HashMap<ModifierLookupKey, ModifierLookupEntry<'ast>>,
         target_offset: usize,
+        get_source: &'a dyn Fn(&Path) -> Option<String>,
+        resolver: &'a ImportResolver,
     }
 
     impl<'a, 'ast> ControlFlowSearch<'a, 'ast> {
@@ -2455,11 +2469,14 @@ fn build_control_flow_graph_from_source_unit<'ast>(
                     (callable.target_offset == self.target_offset).then(|| {
                         let modifier_plans = resolve_modifier_plans(
                             self.source,
+                            self.snapshot,
                             self.path,
                             self.contract_stack.last().map(String::as_str),
                             function,
                             self.contract_linearization,
                             self.modifier_lookup,
+                            self.get_source,
+                            self.resolver,
                         );
                         build_control_flow_graph_document(
                             self.source,
@@ -2478,12 +2495,15 @@ fn build_control_flow_graph_from_source_unit<'ast>(
 
     let mut search = ControlFlowSearch {
         source,
+        snapshot,
         path,
         workspace_root,
         contract_stack: Vec::new(),
         contract_linearization,
         modifier_lookup,
         target_offset,
+        get_source,
+        resolver,
     };
 
     for item in source_unit.items.iter() {
@@ -3860,13 +3880,17 @@ fn linearized_contract_refs<B: NavBackend>(
     order
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_modifier_plans<'ast>(
     source: &str,
+    snapshot: &ProjectSnapshot,
     current_path: &Path,
     current_contract: Option<&str>,
     function: &ItemFunction<'ast>,
     contract_linearization: &HashMap<String, Vec<ResolvedContractRef>>,
     modifier_lookup: &HashMap<ModifierLookupKey, ModifierLookupEntry<'ast>>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
 ) -> Vec<ModifierPlan<'ast>> {
     let Some(current_contract) = current_contract else {
         return Vec::new();
@@ -3887,24 +3911,42 @@ fn resolve_modifier_plans<'ast>(
         .iter()
         .map(|modifier| {
             let label = normalize_graph_text(&source[solgrid_ast::span_to_range(modifier.span())]);
-            let modifier_name = modifier
-                .name
-                .segments()
+            let segments = modifier.name.segments();
+            let modifier_name = segments
                 .last()
                 .map(|segment| segment.as_str().to_string())
                 .unwrap_or_else(|| modifier.name.to_string());
             let argument_count = modifier.arguments.exprs().len();
 
-            let body = search_order.iter().find_map(|contract| {
-                modifier_lookup
-                    .get(&ModifierLookupKey {
-                        path: contract.path.clone(),
-                        contract_name: contract.contract_name.clone(),
-                        modifier_name: modifier_name.clone(),
-                        arity: argument_count,
+            let lookup_body = |contract: &ResolvedContractRef| {
+                modifier_lookup.get(&ModifierLookupKey {
+                    path: contract.path.clone(),
+                    contract_name: contract.contract_name.clone(),
+                    modifier_name: modifier_name.clone(),
+                    arity: argument_count,
+                })
+            };
+            let body = if segments.len() > 1 {
+                let qualifier = TypePath {
+                    segments: segments[..segments.len() - 1]
+                        .iter()
+                        .map(|segment| segment.as_str().to_string())
+                        .collect(),
+                };
+                resolve_contract_type_path(snapshot, &qualifier, get_source, resolver)
+                    .and_then(|resolved| {
+                        search_order.iter().find(|contract| {
+                            contract.path == resolved.snapshot.path
+                                && contract.contract_name == resolved.def.name
+                        })
                     })
+                    .and_then(lookup_body)
                     .cloned()
-            });
+            } else {
+                search_order
+                    .iter()
+                    .find_map(|contract| lookup_body(contract).cloned())
+            };
 
             ModifierPlan {
                 detail: label.clone(),
@@ -5114,7 +5156,11 @@ fn resolve_cross_file_member_symbol_inner(
     None
 }
 
-fn reference_target_at_offset(
+/// Resolve the semantic reference target at a byte offset in an existing snapshot.
+///
+/// The caller supplies the import resolver so editor surfaces with custom
+/// remappings can share the same inherited-member behavior.
+pub fn resolve_reference_target_at_offset(
     snapshot: &ProjectSnapshot,
     offset: usize,
     get_source: &dyn Fn(&Path) -> Option<String>,
@@ -5124,6 +5170,30 @@ fn reference_target_at_offset(
         symbols::find_member_access_at_offset(&snapshot.source, offset)
     {
         let member_name = &snapshot.source[member_range.clone()];
+        let pseudo_receiver_access = match container.as_str() {
+            "this" => Some(InheritedMemberAccess::This),
+            "super" => Some(InheritedMemberAccess::Super),
+            _ => None,
+        };
+        if let Some(access) = pseudo_receiver_access {
+            let targets = resolve_effective_member_targets(
+                snapshot,
+                offset,
+                member_name,
+                access,
+                get_source,
+                resolver,
+            );
+            let [target] = targets.as_slice() else {
+                return None;
+            };
+            return Some(reference_target_from_def(
+                &target.snapshot.path,
+                &target.def,
+                Some(container),
+            ));
+        }
+
         if let Some(container_def) = snapshot.table.resolve(&container, offset) {
             let definitions = snapshot
                 .table
@@ -5185,6 +5255,25 @@ fn reference_target_at_offset(
         ));
     }
     if !definitions.is_empty() {
+        return None;
+    }
+
+    let inherited = resolve_effective_member_targets(
+        snapshot,
+        offset,
+        &name,
+        InheritedMemberAccess::Unqualified,
+        get_source,
+        resolver,
+    );
+    if let [target] = inherited.as_slice() {
+        return Some(reference_target_from_def(
+            &target.snapshot.path,
+            &target.def,
+            None,
+        ));
+    }
+    if !inherited.is_empty() {
         return None;
     }
 
@@ -5760,6 +5849,193 @@ fn resolve_contract_type_path(
     })
 }
 
+#[derive(Clone, Copy)]
+enum InheritedMemberAccess {
+    Unqualified,
+    This,
+    Super,
+}
+
+fn resolve_effective_member_targets(
+    snapshot: &ProjectSnapshot,
+    offset: usize,
+    member_name: &str,
+    access: InheritedMemberAccess,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Vec<ResolvedPathTarget> {
+    let Some(contract_def) = snapshot
+        .table
+        .file_level_symbols()
+        .iter()
+        .find(|definition| {
+            is_contract_container_symbol(definition.kind) && definition.def_span.contains(&offset)
+        })
+        .cloned()
+    else {
+        return Vec::new();
+    };
+    let current = ResolvedPathTarget {
+        snapshot: snapshot.clone(),
+        def: contract_def,
+    };
+    let mut cache = HashMap::new();
+    let mut active = HashSet::new();
+    let Some(linearized) =
+        linearized_contract_targets(&current, get_source, resolver, &mut cache, &mut active)
+    else {
+        return Vec::new();
+    };
+
+    let skip_current = matches!(
+        access,
+        InheritedMemberAccess::Unqualified | InheritedMemberAccess::Super
+    );
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for container in linearized.into_iter().skip(usize::from(skip_current)) {
+        for member in container
+            .snapshot
+            .table
+            .resolve_member_all(&container.def, member_name)
+        {
+            // An inaccessible override still shadows the same signature lower
+            // in the hierarchy, so record the identity before filtering.
+            if !seen.insert(inherited_member_lookup_identity(member)) {
+                continue;
+            }
+            if !inherited_member_is_accessible(member, access) {
+                continue;
+            }
+            targets.push(ResolvedPathTarget {
+                snapshot: container.snapshot.clone(),
+                def: member.clone(),
+            });
+        }
+    }
+    targets
+}
+
+fn inherited_member_is_accessible(def: &SymbolDef, access: InheritedMemberAccess) -> bool {
+    match access {
+        InheritedMemberAccess::This => match def.kind {
+            SymbolKind::Function => matches!(
+                def.visibility,
+                Some(Visibility::Public | Visibility::External)
+            ),
+            SymbolKind::StateVariable => def.visibility == Some(Visibility::Public),
+            _ => false,
+        },
+        InheritedMemberAccess::Unqualified | InheritedMemberAccess::Super => {
+            def.visibility != Some(Visibility::Private)
+                && !(def.kind == SymbolKind::Function
+                    && def.visibility == Some(Visibility::External))
+        }
+    }
+}
+
+fn inherited_member_lookup_identity(def: &SymbolDef) -> (SymbolKind, String) {
+    if let Some(signature) = public_state_getter_signature(def) {
+        return (SymbolKind::Function, signature);
+    }
+    let signature = callable_signature_identity(def).unwrap_or_else(|| def.name.clone());
+    (def.kind, signature)
+}
+
+fn linearized_contract_targets(
+    current: &ResolvedPathTarget,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+    cache: &mut HashMap<(PathBuf, usize), Vec<ResolvedPathTarget>>,
+    active: &mut HashSet<(PathBuf, usize)>,
+) -> Option<Vec<ResolvedPathTarget>> {
+    let key = resolved_path_target_key(current);
+    if let Some(cached) = cache.get(&key) {
+        return Some(cached.clone());
+    }
+    if !active.insert(key.clone()) {
+        return None;
+    }
+
+    let Some(contract) = find_contract_decl(&current.snapshot, &current.def) else {
+        active.remove(&key);
+        return None;
+    };
+    let mut direct_bases = Vec::new();
+    for base in &contract.bases {
+        let Some(resolved) =
+            resolve_contract_type_path(&current.snapshot, base, get_source, resolver)
+        else {
+            active.remove(&key);
+            return None;
+        };
+        direct_bases.push(resolved);
+    }
+    direct_bases.reverse();
+
+    let mut sequences = Vec::new();
+    for base in &direct_bases {
+        let Some(linearized) =
+            linearized_contract_targets(base, get_source, resolver, cache, active)
+        else {
+            active.remove(&key);
+            return None;
+        };
+        sequences.push(linearized);
+    }
+    sequences.push(direct_bases);
+    let Some(merged) = merge_linearized_contract_targets(sequences) else {
+        active.remove(&key);
+        return None;
+    };
+
+    let mut result = Vec::with_capacity(1 + merged.len());
+    result.push(current.clone());
+    result.extend(merged);
+    active.remove(&key);
+    cache.insert(key, result.clone());
+    Some(result)
+}
+
+fn resolved_path_target_key(target: &ResolvedPathTarget) -> (PathBuf, usize) {
+    (target.snapshot.path.clone(), target.def.name_span.start)
+}
+
+fn merge_linearized_contract_targets(
+    mut sequences: Vec<Vec<ResolvedPathTarget>>,
+) -> Option<Vec<ResolvedPathTarget>> {
+    let mut result = Vec::new();
+    loop {
+        sequences.retain(|sequence| !sequence.is_empty());
+        if sequences.is_empty() {
+            return Some(result);
+        }
+
+        let mut selected = None;
+        for sequence in &sequences {
+            let candidate = sequence.first()?.clone();
+            let candidate_key = resolved_path_target_key(&candidate);
+            let blocked = sequences.iter().any(|other| {
+                other
+                    .iter()
+                    .skip(1)
+                    .any(|item| resolved_path_target_key(item) == candidate_key)
+            });
+            if !blocked {
+                selected = Some(candidate);
+                break;
+            }
+        }
+
+        let selected = selected?;
+        let selected_key = resolved_path_target_key(&selected);
+        result.push(selected);
+        for sequence in &mut sequences {
+            sequence.retain(|item| resolved_path_target_key(item) != selected_key);
+        }
+    }
+}
+
 fn is_contract_container_symbol(kind: SymbolKind) -> bool {
     matches!(
         kind,
@@ -6168,6 +6444,33 @@ fn callable_target_at_offset(
         symbols::find_member_access_at_offset(&snapshot.source, offset)
     {
         let member_name = &snapshot.source[member_range.clone()];
+        let pseudo_receiver_access = match container.as_str() {
+            "this" => Some(InheritedMemberAccess::This),
+            "super" => Some(InheritedMemberAccess::Super),
+            _ => None,
+        };
+        if let Some(access) = pseudo_receiver_access {
+            let targets = resolve_effective_member_targets(
+                snapshot,
+                offset,
+                member_name,
+                access,
+                get_source,
+                resolver,
+            )
+            .into_iter()
+            .filter(|target| is_call_hierarchy_kind(target.def.kind))
+            .collect::<Vec<_>>();
+            let [target] = targets.as_slice() else {
+                return None;
+            };
+            return Some(reference_target_from_def(
+                &target.snapshot.path,
+                &target.def,
+                Some(container),
+            ));
+        }
+
         if let Some(container_def) = snapshot.table.resolve(&container, offset) {
             let defs = snapshot
                 .table
@@ -6222,6 +6525,28 @@ fn callable_target_at_offset(
         return Some(reference_target_from_def(&snapshot.path, defs[0], None));
     }
     if !defs.is_empty() {
+        return None;
+    }
+
+    let inherited = resolve_effective_member_targets(
+        snapshot,
+        offset,
+        &name,
+        InheritedMemberAccess::Unqualified,
+        get_source,
+        resolver,
+    )
+    .into_iter()
+    .filter(|target| is_call_hierarchy_kind(target.def.kind))
+    .collect::<Vec<_>>();
+    if let [target] = inherited.as_slice() {
+        return Some(reference_target_from_def(
+            &target.snapshot.path,
+            &target.def,
+            None,
+        ));
+    }
+    if !inherited.is_empty() {
         return None;
     }
 
@@ -7485,6 +7810,139 @@ contract Main is T {}
     }
 
     #[test]
+    fn test_inherited_calls_resolve_across_unqualified_this_and_super_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("Base.sol");
+        let base_source = r#"pragma solidity ^0.8.0;
+contract Base {
+    function inheritedCall() public virtual {}
+}
+"#;
+        fs::write(&base_path, base_source).unwrap();
+
+        let main_path = dir.path().join("Main.sol");
+        let main_source = r#"pragma solidity ^0.8.0;
+import {Base as Parent} from "./Base.sol";
+contract Main is Parent {
+    function invoke() external {
+        inheritedCall();
+        this.inheritedCall();
+        super.inheritedCall();
+    }
+}
+"#;
+        fs::write(&main_path, main_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let declaration = base_source.find("inheritedCall").unwrap();
+        let references = index.find_references(
+            &base_path,
+            base_source,
+            offset_to_position(base_source, declaration),
+            true,
+            &get_source,
+        );
+        assert_eq!(references.len(), 4);
+        assert_eq!(
+            references
+                .iter()
+                .filter(|location| {
+                    location.uri == path_to_uri(&normalize_path(&main_path)).unwrap()
+                })
+                .count(),
+            3
+        );
+
+        let rename = index
+            .rename_plan(
+                &base_path,
+                base_source,
+                offset_to_position(base_source, declaration),
+                &get_source,
+            )
+            .expect("inherited calls should be safely renameable");
+        assert_eq!(rename.locations.len(), 4);
+
+        let invoke_offset = main_source.find("invoke").unwrap();
+        let outgoing =
+            index.outgoing_call_hierarchy(&main_path, main_source, invoke_offset, &get_source);
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].to.path, normalize_path(&base_path));
+        assert_eq!(outgoing[0].to.name, "inheritedCall");
+        assert_eq!(outgoing[0].from_ranges.len(), 3);
+    }
+
+    #[test]
+    fn test_this_and_super_calls_respect_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    function ping() public virtual {}
+}
+contract Main is Base {
+    function ping() public override {}
+    function invoke() external {
+        ping();
+        this.ping();
+        super.ping();
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let base_declaration = source.find("ping() public virtual").unwrap();
+        let derived_declaration = source.find("ping() public override").unwrap();
+
+        let base_references = index.find_references(
+            &path,
+            source,
+            offset_to_position(source, base_declaration),
+            true,
+            &get_source,
+        );
+        assert_eq!(base_references.len(), 2);
+        let derived_references = index.find_references(
+            &path,
+            source,
+            offset_to_position(source, derived_declaration),
+            true,
+            &get_source,
+        );
+        assert_eq!(derived_references.len(), 3);
+    }
+
+    #[test]
+    fn test_this_call_resolves_public_state_getter_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+interface IOwned {
+    function owner() external view returns (address);
+}
+contract Main is IOwned {
+    address public override owner;
+    function readOwner() external view { this.owner(); }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let declaration = source.find("owner;").unwrap();
+        let references = index.find_references(
+            &path,
+            source,
+            offset_to_position(source, declaration),
+            true,
+            &|candidate| fs::read_to_string(candidate).ok(),
+        );
+        assert_eq!(references.len(), 2);
+    }
+
+    #[test]
     fn test_transitive_reexport_alias_references_and_code_lens_count() {
         let dir = tempfile::tempdir().unwrap();
         let token_path = dir.path().join("Token.sol");
@@ -8478,6 +8936,48 @@ contract Main is Base {
             node.label == "call require" && node.kind == Some(GraphNodeKind::Call)
         }));
         assert!(!graph.nodes.iter().any(|node| node.label == "_"));
+    }
+
+    #[test]
+    fn test_control_flow_graph_resolves_qualified_modifier_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("Main.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract BaseA {
+    function baseAOnly() internal {}
+    modifier onlyOwner() {
+        baseAOnly();
+        _;
+    }
+}
+contract BaseB {
+    function baseBOnly() internal {}
+    modifier onlyOwner() {
+        baseBOnly();
+        _;
+    }
+}
+contract Main is BaseA, BaseB {
+    function run() public BaseA.onlyOwner {}
+}
+"#;
+        fs::write(&main, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let graph = index
+            .control_flow_graph(&main, source, source.find("run").unwrap(), &|path| {
+                fs::read_to_string(path).ok()
+            })
+            .expect("control-flow graph");
+
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.label == "call baseAOnly"));
+        assert!(!graph
+            .nodes
+            .iter()
+            .any(|node| node.label == "call baseBOnly"));
     }
 
     #[test]

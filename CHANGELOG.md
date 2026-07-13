@@ -92,9 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed control-flow graphs to unwind returns through modifier postludes, keep Yul terminal builtins on the global exit, distinguish function-pointer overloads, and select CLI targets by canonical signature
 - Fixed LSP open-buffer canonicalization, transitive diagnostic invalidation, background index replacement races, stale dependency and manual-workspace publications, semantic-token dependency refreshes, inherited overload lookup, and readonly token false positives
 - Fixed namespace re-exports and transitive alias reference scans, and made overlay-aware project analysis and control-flow graphs prefer unsaved open documents over indexed snapshots
+- Fixed inherited unqualified and explicit `this`/`super` symbol resolution across references, rename, call hierarchy, and go-to-definition, and made control-flow graphs honor qualified base-modifier targets
 - Fixed VS Code coverage merging and path resolution, refresh/task races, duplicate custom arguments, provider independence, supported Foundry/Hardhat invocation, security suppression grouping, graph request ordering, unsafe-fix setting shadowing, and language-server enablement reload behavior
 - Fixed VSIX target packaging and publishing to reject missing, non-executable, or architecture-mismatched binaries, and hardened the LSP/E2E harness against missed notifications, split UTF-8 frames, early task exits, shutdown pipe errors, and vacuous feature assertions
 - Fixed version bump tooling to keep workspace entries in `Cargo.lock` synchronized, reject invalid SemVer input, require locked release builds, and propagate Cargo metadata failures
+- Fixed manual release dispatches to require an explicit existing tag and consistently publish the checked-out tagged sources
 
 ### Security
 - Updated `crossbeam-epoch` to a release that resolves RUSTSEC-2026-0204

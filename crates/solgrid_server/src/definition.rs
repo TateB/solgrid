@@ -5,6 +5,7 @@ use crate::resolve::ImportResolver;
 use crate::symbols::{self, ImportedSymbols, SymbolDef, SymbolKind, SymbolTable, TypePath};
 use solgrid_parser::solar_ast::{self, ItemKind, Visibility};
 use solgrid_parser::with_parsed_ast_sequential;
+use solgrid_project::{resolve_reference_target_at_offset, NavBackend, SolarNavBackend};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types;
@@ -58,6 +59,27 @@ pub fn goto_definition(
     if let Some((container, _member, member_range)) =
         symbols::find_member_access_at_offset(source, offset)
     {
+        if matches!(container.as_str(), "this" | "super") {
+            let importing_file = uri_to_path(uri)?;
+            let snapshot = SolarNavBackend.snapshot(&importing_file, source)?;
+            let target =
+                resolve_reference_target_at_offset(&snapshot, offset, get_source, resolver)?;
+            let (target_uri, target_source) = if target.file_path == snapshot.path {
+                (uri.clone(), source.to_string())
+            } else {
+                (
+                    path_to_uri(&target.file_path)?,
+                    get_source(&target.file_path)?,
+                )
+            };
+            return Some(ls_types::GotoDefinitionResponse::Scalar(
+                ls_types::Location {
+                    uri: target_uri,
+                    range: convert::span_to_range(&target_source, &target.name_span),
+                },
+            ));
+        }
+
         if let Some(container_def) = table.resolve(&container, offset) {
             let member_name = &source[member_range.clone()];
             if let Some(member_def) = table.resolve_member(container_def, member_name) {
@@ -949,6 +971,100 @@ contract Test {
         } else {
             panic!("expected scalar response");
         }
+    }
+
+    #[test]
+    fn test_goto_definition_resolves_this_member_to_current_contract() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Main {
+    function selected() public {}
+    function run() external { this.selected(); }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+        let usage = source.find("this.selected").unwrap() + "this.".len();
+        let result = goto_definition(
+            source,
+            &convert::offset_to_position(source, usage),
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        let ls_types::GotoDefinitionResponse::Scalar(location) = result.unwrap() else {
+            panic!("expected scalar response");
+        };
+        let declaration = source.find("selected() public").unwrap();
+        assert_eq!(location.uri, uri);
+        assert_eq!(
+            location.range.start,
+            convert::offset_to_position(source, declaration)
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_resolves_super_member_to_next_c3_base() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Left {
+    function selected() public virtual {}
+}
+contract Right {
+    function selected() public virtual {}
+}
+contract Main is Left, Right {
+    function selected() public override(Left, Right) { super.selected(); }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+        let usage = source.find("super.selected").unwrap() + "super.".len();
+        let result = goto_definition(
+            source,
+            &convert::offset_to_position(source, usage),
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        let ls_types::GotoDefinitionResponse::Scalar(location) = result.unwrap() else {
+            panic!("expected scalar response");
+        };
+        let declaration = source.rfind("selected() public virtual").unwrap();
+        assert_eq!(location.uri, uri);
+        assert_eq!(
+            location.range.start,
+            convert::offset_to_position(source, declaration)
+        );
+    }
+
+    #[test]
+    fn test_goto_definition_resolves_inherited_unqualified_member() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    function selected() internal {}
+}
+contract Main is Base {
+    function run() external { selected(); }
+}
+"#;
+        let uri: ls_types::Uri = "file:///test.sol".parse().unwrap();
+        let usage = source.rfind("selected();").unwrap();
+        let result = goto_definition(
+            source,
+            &convert::offset_to_position(source, usage),
+            &uri,
+            &noop_source,
+            &noop_resolver(),
+        );
+
+        let ls_types::GotoDefinitionResponse::Scalar(location) = result.unwrap() else {
+            panic!("expected scalar response");
+        };
+        let declaration = source.find("selected() internal").unwrap();
+        assert_eq!(location.uri, uri);
+        assert_eq!(
+            location.range.start,
+            convert::offset_to_position(source, declaration)
+        );
     }
 
     #[test]
