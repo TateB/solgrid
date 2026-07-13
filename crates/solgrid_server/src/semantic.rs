@@ -1246,6 +1246,14 @@ fn collect_stmt_semantic_tokens(
         StmtKind::Try(try_stmt) => {
             collect_expr_semantic_tokens(try_stmt.expr, semantic, tokens);
             for clause in try_stmt.clauses.iter() {
+                for argument in clause.args.iter() {
+                    collect_variable_declaration_tokens(
+                        argument,
+                        SymbolKind::LocalVariable,
+                        semantic,
+                        tokens,
+                    );
+                }
                 for stmt in clause.block.stmts.iter() {
                     collect_stmt_semantic_tokens(stmt, semantic, tokens);
                 }
@@ -2855,5 +2863,68 @@ contract Main {
             &resolver,
         );
         assert!(!tokens.is_empty());
+    }
+
+    #[test]
+    fn test_semantic_tokens_include_try_clause_types_and_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        let dep_path = dir.path().join("Types.sol");
+        let main_path = dir.path().join("Main.sol");
+        fs::write(
+            &dep_path,
+            "pragma solidity ^0.8.0; struct CatchPayload { uint256 value; }\n",
+        )
+        .unwrap();
+        let source = r#"pragma solidity ^0.8.0;
+import {CatchPayload as ImportedCatchPayload} from "./Types.sol";
+
+struct LocalReturnPayload { uint256 value; }
+
+contract Main {
+    function fetch() external pure returns (LocalReturnPayload memory) {
+        return LocalReturnPayload(1);
+    }
+
+    function run() external {
+        try this.fetch() returns (LocalReturnPayload memory returned) {
+        } catch Error(ImportedCatchPayload memory reason) {
+        }
+    }
+}
+"#;
+        fs::write(&main_path, source).unwrap();
+
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| fs::read_to_string(path).ok();
+        let tokens =
+            collect_raw_semantic_tokens(source, Some(main_path.as_path()), &get_source, &resolver);
+
+        for (needle, expected_kind) in [
+            (
+                "LocalReturnPayload memory returned",
+                SemanticTokenKind::Struct,
+            ),
+            (
+                "ImportedCatchPayload memory reason",
+                SemanticTokenKind::Struct,
+            ),
+        ] {
+            let start = source.rfind(needle).unwrap();
+            let type_name = needle.split_whitespace().next().unwrap();
+            let expected_span = start..start + type_name.len();
+            assert!(tokens.iter().any(|token| {
+                token.span == expected_span && token.kind == expected_kind && token.modifiers == 0
+            }));
+        }
+
+        for name in ["returned", "reason"] {
+            let start = source.rfind(name).unwrap();
+            let expected_span = start..start + name.len();
+            assert!(tokens.iter().any(|token| {
+                token.span == expected_span
+                    && token.kind == SemanticTokenKind::Variable
+                    && token.modifiers & SEMANTIC_TOKEN_MODIFIER_DECLARATION != 0
+            }));
+        }
     }
 }

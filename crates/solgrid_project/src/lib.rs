@@ -1307,6 +1307,21 @@ impl<B: NavBackend> ProjectIndex<B> {
         let snapshot = self.snapshot_for_source(path, source)?;
         let offset = position_to_offset(source, position);
 
+        if let Some(contract_path) = new_contract_path_at_offset(&snapshot, offset) {
+            if let Some(target) = constructor_target_for_contract_path(
+                &snapshot,
+                &contract_path,
+                get_source,
+                &self.resolver,
+            ) {
+                if let Some((target_snapshot, callable)) =
+                    self.callable_decl_for_target(&target, get_source)
+                {
+                    return Some(call_hierarchy_entry_from_decl(&target_snapshot, &callable));
+                }
+            }
+        }
+
         if let Some(callable) = snapshot
             .callables
             .iter()
@@ -4241,6 +4256,11 @@ fn collect_outgoing_calls_for_callable(
                             context.snapshot,
                             context.source,
                             modifier,
+                            if function.kind == FunctionKind::Constructor {
+                                contract_stack.last().map(String::as_str)
+                            } else {
+                                None
+                            },
                             context.get_source,
                             context.resolver,
                             calls,
@@ -4419,7 +4439,14 @@ fn collect_expr_outgoing_calls(
             collect_expr_outgoing_calls(snapshot, source, rhs, get_source, resolver, calls);
         }
         solar_ast::ExprKind::Call(callee, args) => {
-            if let Some(offset) = callable_expr_target_offset(callee) {
+            if let Some((target, target_span)) =
+                constructor_target_for_new_expression(snapshot, callee, get_source, resolver)
+            {
+                calls.push(ResolvedOutgoingCall {
+                    target,
+                    from_range: span_to_range(source, &target_span),
+                });
+            } else if let Some(offset) = callable_expr_target_offset(callee) {
                 if let Some(target) =
                     callable_target_at_offset(snapshot, offset, get_source, resolver)
                 {
@@ -4494,16 +4521,341 @@ fn collect_expr_outgoing_calls(
     }
 }
 
+fn constructor_target_for_new_expression(
+    snapshot: &ProjectSnapshot,
+    expr: &solar_ast::Expr<'_>,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<(ReferenceTarget, ByteRange<usize>)> {
+    let expr = expr.peel_parens();
+    let ty = match &expr.kind {
+        solar_ast::ExprKind::New(ty) => ty,
+        solar_ast::ExprKind::CallOptions(callee, _) => {
+            return constructor_target_for_new_expression(snapshot, callee, get_source, resolver);
+        }
+        _ => return None,
+    };
+    let solar_ast::TypeKind::Custom(path) = &ty.kind else {
+        return None;
+    };
+    let contract_path = TypePath {
+        segments: path
+            .segments()
+            .iter()
+            .map(|segment| segment.as_str().to_string())
+            .collect(),
+    };
+    let target =
+        constructor_target_for_contract_path(snapshot, &contract_path, get_source, resolver)?;
+    let target_span = path
+        .segments()
+        .last()
+        .map(|segment| solgrid_ast::span_to_range(segment.span))?;
+    Some((target, target_span))
+}
+
+fn new_contract_path_at_offset(snapshot: &ProjectSnapshot, offset: usize) -> Option<TypePath> {
+    let filename = snapshot.path.to_string_lossy().to_string();
+    with_parsed_ast_sequential(&snapshot.source, &filename, |source_unit| {
+        find_new_contract_path_in_items(source_unit.items.iter(), offset)
+    })
+    .ok()
+    .flatten()
+}
+
+fn find_new_contract_path_in_items<'a, 'ast>(
+    items: impl Iterator<Item = &'a solar_ast::Item<'ast>>,
+    offset: usize,
+) -> Option<TypePath>
+where
+    'ast: 'a,
+{
+    for item in items {
+        let found = match &item.kind {
+            ItemKind::Contract(contract) => {
+                let mut found = None;
+                for base in contract.bases.iter() {
+                    for argument in base.arguments.exprs() {
+                        found = find_new_contract_path_in_expr(argument, offset);
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                found.or_else(|| find_new_contract_path_in_items(contract.body.iter(), offset))
+            }
+            ItemKind::Function(function) => {
+                let mut found = None;
+                for modifier in function.header.modifiers.iter() {
+                    for argument in modifier.arguments.exprs() {
+                        found = find_new_contract_path_in_expr(argument, offset);
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                found.or_else(|| {
+                    function
+                        .body
+                        .as_ref()
+                        .and_then(|body| find_new_contract_path_in_stmts(body.stmts.iter(), offset))
+                })
+            }
+            ItemKind::Variable(variable) => variable
+                .initializer
+                .as_ref()
+                .and_then(|expr| find_new_contract_path_in_expr(expr, offset)),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+fn find_new_contract_path_in_stmts<'a, 'ast>(
+    stmts: impl Iterator<Item = &'a Stmt<'ast>>,
+    offset: usize,
+) -> Option<TypePath>
+where
+    'ast: 'a,
+{
+    for stmt in stmts {
+        let found = match &stmt.kind {
+            StmtKind::Assembly(_)
+            | StmtKind::Break
+            | StmtKind::Continue
+            | StmtKind::Placeholder
+            | StmtKind::Return(None) => None,
+            StmtKind::Block(block) | StmtKind::UncheckedBlock(block) => {
+                find_new_contract_path_in_stmts(block.stmts.iter(), offset)
+            }
+            StmtKind::DeclSingle(variable) => variable
+                .initializer
+                .as_ref()
+                .and_then(|expr| find_new_contract_path_in_expr(expr, offset)),
+            StmtKind::DeclMulti(_, expr) | StmtKind::Expr(expr) | StmtKind::Return(Some(expr)) => {
+                find_new_contract_path_in_expr(expr, offset)
+            }
+            StmtKind::DoWhile(body, condition) | StmtKind::While(condition, body) => {
+                find_new_contract_path_in_stmts(std::iter::once(&**body), offset)
+                    .or_else(|| find_new_contract_path_in_expr(condition, offset))
+            }
+            StmtKind::Emit(_, arguments) | StmtKind::Revert(_, arguments) => arguments
+                .exprs()
+                .find_map(|expr| find_new_contract_path_in_expr(expr, offset)),
+            StmtKind::For {
+                init,
+                cond,
+                next,
+                body,
+            } => init
+                .as_ref()
+                .and_then(|init| find_new_contract_path_in_stmts(std::iter::once(&**init), offset))
+                .or_else(|| {
+                    cond.as_ref()
+                        .and_then(|expr| find_new_contract_path_in_expr(expr, offset))
+                })
+                .or_else(|| {
+                    next.as_ref()
+                        .and_then(|expr| find_new_contract_path_in_expr(expr, offset))
+                })
+                .or_else(|| find_new_contract_path_in_stmts(std::iter::once(&**body), offset)),
+            StmtKind::If(condition, then_branch, else_branch) => {
+                find_new_contract_path_in_expr(condition, offset)
+                    .or_else(|| {
+                        find_new_contract_path_in_stmts(std::iter::once(&**then_branch), offset)
+                    })
+                    .or_else(|| {
+                        else_branch.as_ref().and_then(|branch| {
+                            find_new_contract_path_in_stmts(std::iter::once(&**branch), offset)
+                        })
+                    })
+            }
+            StmtKind::Try(try_stmt) => find_new_contract_path_in_expr(try_stmt.expr, offset)
+                .or_else(|| {
+                    try_stmt.clauses.iter().find_map(|clause| {
+                        find_new_contract_path_in_stmts(clause.block.stmts.iter(), offset)
+                    })
+                }),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+fn find_new_contract_path_in_expr(expr: &solar_ast::Expr<'_>, offset: usize) -> Option<TypePath> {
+    let expr = expr.peel_parens();
+    match &expr.kind {
+        solar_ast::ExprKind::New(ty) => {
+            let solar_ast::TypeKind::Custom(path) = &ty.kind else {
+                return None;
+            };
+            path.segments()
+                .last()
+                .map(|segment| solgrid_ast::span_to_range(segment.span))
+                .is_some_and(|span| span.contains(&offset))
+                .then(|| TypePath {
+                    segments: path
+                        .segments()
+                        .iter()
+                        .map(|segment| segment.as_str().to_string())
+                        .collect(),
+                })
+        }
+        solar_ast::ExprKind::Array(expressions) => expressions
+            .iter()
+            .find_map(|expr| find_new_contract_path_in_expr(expr, offset)),
+        solar_ast::ExprKind::Tuple(expressions) => expressions.iter().find_map(|expr| {
+            let solgrid_parser::solar_interface::SpannedOption::Some(expr) = expr else {
+                return None;
+            };
+            find_new_contract_path_in_expr(expr, offset)
+        }),
+        solar_ast::ExprKind::Assign(left, _, right)
+        | solar_ast::ExprKind::Binary(left, _, right) => {
+            find_new_contract_path_in_expr(left, offset)
+                .or_else(|| find_new_contract_path_in_expr(right, offset))
+        }
+        solar_ast::ExprKind::Call(callee, arguments) => {
+            find_new_contract_path_in_expr(callee, offset).or_else(|| {
+                arguments
+                    .exprs()
+                    .find_map(|expr| find_new_contract_path_in_expr(expr, offset))
+            })
+        }
+        solar_ast::ExprKind::CallOptions(callee, arguments) => {
+            find_new_contract_path_in_expr(callee, offset).or_else(|| {
+                arguments
+                    .iter()
+                    .find_map(|argument| find_new_contract_path_in_expr(argument.value, offset))
+            })
+        }
+        solar_ast::ExprKind::Delete(expr) | solar_ast::ExprKind::Unary(_, expr) => {
+            find_new_contract_path_in_expr(expr, offset)
+        }
+        solar_ast::ExprKind::Index(expr, index) => find_new_contract_path_in_expr(expr, offset)
+            .or_else(|| match index {
+                solar_ast::IndexKind::Index(index) => index
+                    .as_ref()
+                    .and_then(|index| find_new_contract_path_in_expr(index, offset)),
+                solar_ast::IndexKind::Range(start, end) => start
+                    .as_ref()
+                    .and_then(|start| find_new_contract_path_in_expr(start, offset))
+                    .or_else(|| {
+                        end.as_ref()
+                            .and_then(|end| find_new_contract_path_in_expr(end, offset))
+                    }),
+            }),
+        solar_ast::ExprKind::Member(expr, _) => find_new_contract_path_in_expr(expr, offset),
+        solar_ast::ExprKind::Payable(arguments) => arguments
+            .exprs()
+            .find_map(|expr| find_new_contract_path_in_expr(expr, offset)),
+        solar_ast::ExprKind::Ternary(condition, if_true, if_false) => {
+            find_new_contract_path_in_expr(condition, offset)
+                .or_else(|| find_new_contract_path_in_expr(if_true, offset))
+                .or_else(|| find_new_contract_path_in_expr(if_false, offset))
+        }
+        solar_ast::ExprKind::Ident(_)
+        | solar_ast::ExprKind::Lit(_, _)
+        | solar_ast::ExprKind::TypeCall(_)
+        | solar_ast::ExprKind::Type(_) => None,
+    }
+}
+
+fn constructor_target_for_contract_path(
+    snapshot: &ProjectSnapshot,
+    contract_path: &TypePath,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<ReferenceTarget> {
+    let resolved = resolve_contract_type_path(snapshot, contract_path, get_source, resolver)?;
+    if resolved.def.kind != SymbolKind::Contract {
+        return None;
+    }
+    let constructors = resolved.snapshot.table.constructors(&resolved.def);
+    let [constructor] = constructors.as_slice() else {
+        return None;
+    };
+    Some(reference_target_from_def(
+        &resolved.snapshot.path,
+        constructor,
+        Some(resolved.def.name),
+    ))
+}
+
+fn direct_base_constructor_target(
+    snapshot: &ProjectSnapshot,
+    current_contract: &str,
+    contract_path: &TypePath,
+    get_source: &dyn Fn(&Path) -> Option<String>,
+    resolver: &ImportResolver,
+) -> Option<ReferenceTarget> {
+    let current = snapshot
+        .contracts
+        .iter()
+        .find(|contract| contract.name == current_contract)?;
+    let resolved = resolve_contract_type_path(snapshot, contract_path, get_source, resolver)?;
+    let is_direct_base = current.bases.iter().any(|base| {
+        resolve_contract_type_path(snapshot, base, get_source, resolver).is_some_and(|candidate| {
+            candidate.snapshot.path == resolved.snapshot.path
+                && candidate.def.name_span == resolved.def.name_span
+        })
+    });
+    if !is_direct_base || resolved.def.kind != SymbolKind::Contract {
+        return None;
+    }
+    let constructors = resolved.snapshot.table.constructors(&resolved.def);
+    let [constructor] = constructors.as_slice() else {
+        return None;
+    };
+    Some(reference_target_from_def(
+        &resolved.snapshot.path,
+        constructor,
+        Some(resolved.def.name),
+    ))
+}
+
 fn collect_modifier_outgoing_call(
     snapshot: &ProjectSnapshot,
     source: &str,
     modifier: &solar_ast::Modifier<'_>,
+    current_constructor_contract: Option<&str>,
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
     calls: &mut Vec<ResolvedOutgoingCall>,
 ) {
     if let Some(offset) = modifier_target_offset(modifier) {
-        if let Some(target) = callable_target_at_offset(snapshot, offset, get_source, resolver) {
+        let target =
+            callable_target_at_offset(snapshot, offset, get_source, resolver).or_else(|| {
+                current_constructor_contract.and_then(|current_contract| {
+                    let contract_path = TypePath {
+                        segments: modifier
+                            .name
+                            .segments()
+                            .iter()
+                            .map(|segment| segment.as_str().to_string())
+                            .collect(),
+                    };
+                    direct_base_constructor_target(
+                        snapshot,
+                        current_contract,
+                        &contract_path,
+                        get_source,
+                        resolver,
+                    )
+                })
+            });
+        if let Some(target) = target {
             calls.push(ResolvedOutgoingCall {
                 target,
                 from_range: span_to_range(
@@ -7940,6 +8292,308 @@ contract Main is IOwned {
             &|candidate| fs::read_to_string(candidate).ok(),
         );
         assert_eq!(references.len(), 2);
+    }
+
+    #[test]
+    fn test_call_hierarchy_tracks_same_file_constructor_deployments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Factory.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(uint256 value) {}
+}
+contract Empty {}
+contract Factory {
+    function buildValue() internal returns (uint256) { return 1; }
+    function deriveSalt() internal returns (bytes32) { return bytes32(0); }
+    function sizeHelper() internal returns (uint256) { return 1; }
+    function deployChild() external {
+        new Child(buildValue());
+        new Child(buildValue());
+    }
+    function deployEmpty() external { new Empty{salt: deriveSalt()}(); }
+    function allocateArray() external { new uint256[](sizeHelper()); }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let outgoing = index.outgoing_call_hierarchy(
+            &path,
+            source,
+            source.find("deployChild").unwrap(),
+            &get_source,
+        );
+        assert_eq!(outgoing.len(), 2);
+        let constructor = outgoing
+            .iter()
+            .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+            .expect("constructor deployment call");
+        assert_eq!(constructor.to.name, "constructor");
+        assert_eq!(constructor.to.path, normalize_path(&path));
+        assert_eq!(constructor.from_ranges.len(), 2);
+        let first_deployment = source.find("Child(buildValue").unwrap();
+        let second_deployment = source.rfind("Child(buildValue").unwrap();
+        assert_eq!(
+            constructor.from_ranges,
+            vec![
+                span_to_range(
+                    source,
+                    &(first_deployment..first_deployment + "Child".len())
+                ),
+                span_to_range(
+                    source,
+                    &(second_deployment..second_deployment + "Child".len())
+                ),
+            ]
+        );
+        assert!(outgoing
+            .iter()
+            .any(|call| call.to.name == "buildValue" && call.from_ranges.len() == 2));
+
+        let incoming = index.incoming_call_hierarchy(
+            &path,
+            source,
+            source.find("constructor").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from.name, "deployChild");
+        assert_eq!(incoming[0].from_ranges, constructor.from_ranges);
+
+        let implicit = index.outgoing_call_hierarchy(
+            &path,
+            source,
+            source.find("deployEmpty").unwrap(),
+            &get_source,
+        );
+        assert_eq!(implicit.len(), 1);
+        assert_eq!(implicit[0].to.name, "deriveSalt");
+        assert!(implicit
+            .iter()
+            .all(|call| call.to.kind != LspSymbolKind::CONSTRUCTOR));
+
+        let array = index.outgoing_call_hierarchy(
+            &path,
+            source,
+            source.find("allocateArray").unwrap(),
+            &get_source,
+        );
+        assert_eq!(array.len(), 1);
+        assert_eq!(array[0].to.name, "sizeHelper");
+        assert!(array
+            .iter()
+            .all(|call| call.to.kind != LspSymbolKind::CONSTRUCTOR));
+    }
+
+    #[test]
+    fn test_call_hierarchy_tracks_aliased_import_constructor_deployments() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_path = dir.path().join("Child.sol");
+        let child_source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor(uint256 value) {}
+}
+"#;
+        fs::write(&child_path, child_source).unwrap();
+
+        let factory_path = dir.path().join("Factory.sol");
+        let factory_source = r#"pragma solidity ^0.8.0;
+import {Child as Spawn} from "./Child.sol";
+import * as ChildNs from "./Child.sol";
+contract Factory {
+    function buildValue() internal returns (uint256) { return 1; }
+    function deriveSalt() internal returns (bytes32) { return bytes32(0); }
+    function deploy() external {
+        new Spawn{salt: deriveSalt()}(buildValue());
+    }
+    function deployNamespace() external {
+        new ChildNs.Child(buildValue());
+    }
+}
+"#;
+        fs::write(&factory_path, factory_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let outgoing = index.outgoing_call_hierarchy(
+            &factory_path,
+            factory_source,
+            factory_source.find("deploy").unwrap(),
+            &get_source,
+        );
+        assert_eq!(outgoing.len(), 3);
+        let constructor = outgoing
+            .iter()
+            .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+            .expect("aliased constructor deployment call");
+        assert_eq!(constructor.to.path, normalize_path(&child_path));
+        assert_eq!(constructor.to.name, "constructor");
+        assert_eq!(constructor.from_ranges.len(), 1);
+        assert!(outgoing.iter().any(|call| call.to.name == "deriveSalt"));
+        assert!(outgoing.iter().any(|call| call.to.name == "buildValue"));
+
+        let prepared = index
+            .prepare_call_hierarchy(
+                &factory_path,
+                factory_source,
+                offset_to_position(factory_source, factory_source.find("Spawn{").unwrap()),
+                &get_source,
+            )
+            .expect("deployment type should prepare the constructor");
+        assert_eq!(prepared.kind, LspSymbolKind::CONSTRUCTOR);
+        assert_eq!(prepared.path, normalize_path(&child_path));
+        assert_eq!(prepared.name, "constructor");
+
+        let namespace_path = factory_source.find("ChildNs.Child").unwrap();
+        assert!(index
+            .prepare_call_hierarchy(
+                &factory_path,
+                factory_source,
+                offset_to_position(factory_source, namespace_path),
+                &get_source,
+            )
+            .is_none());
+        let namespace_member = namespace_path + "ChildNs.".len();
+        let namespace_prepared = index
+            .prepare_call_hierarchy(
+                &factory_path,
+                factory_source,
+                offset_to_position(factory_source, namespace_member),
+                &get_source,
+            )
+            .expect("final namespace type segment should prepare the constructor");
+        assert_eq!(namespace_prepared.kind, LspSymbolKind::CONSTRUCTOR);
+        assert_eq!(namespace_prepared.path, normalize_path(&child_path));
+
+        let namespace_outgoing = index.outgoing_call_hierarchy(
+            &factory_path,
+            factory_source,
+            factory_source.find("deployNamespace").unwrap(),
+            &get_source,
+        );
+        let namespace_constructor = namespace_outgoing
+            .iter()
+            .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+            .expect("namespace constructor deployment call");
+        let child_segment = factory_source.rfind("Child(buildValue").unwrap();
+        assert_eq!(
+            namespace_constructor.from_ranges,
+            vec![span_to_range(
+                factory_source,
+                &(child_segment..child_segment + "Child".len())
+            )]
+        );
+
+        let incoming = index.incoming_call_hierarchy(
+            &child_path,
+            child_source,
+            child_source.find("constructor").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 2);
+        let aliased_incoming = incoming
+            .iter()
+            .find(|call| call.from.name == "deploy")
+            .expect("aliased incoming deployment");
+        assert_eq!(aliased_incoming.from.path, normalize_path(&factory_path));
+        assert_eq!(aliased_incoming.from_ranges, constructor.from_ranges);
+        assert!(incoming
+            .iter()
+            .any(|call| call.from.name == "deployNamespace"));
+    }
+
+    #[test]
+    fn test_call_hierarchy_tracks_explicit_base_constructor_invocations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Child.sol");
+        let source = r#"pragma solidity ^0.8.0;
+function buildValue() pure returns (uint256) { return 1; }
+contract Base {
+    constructor(uint256 value) {}
+}
+contract Unrelated {
+    constructor() {}
+}
+contract Child is Base {
+    constructor() Base(buildValue()) Unrelated() {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let child_constructor = source.rfind("constructor() Base").unwrap();
+        let outgoing = index.outgoing_call_hierarchy(&path, source, child_constructor, &get_source);
+        assert_eq!(outgoing.len(), 2);
+        let base_constructor = outgoing
+            .iter()
+            .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+            .expect("explicit base-constructor call");
+        assert_eq!(base_constructor.to.name, "constructor");
+        assert_eq!(base_constructor.to.path, normalize_path(&path));
+        assert_eq!(base_constructor.from_ranges.len(), 1);
+        assert!(outgoing.iter().any(|call| call.to.name == "buildValue"));
+
+        let incoming = index.incoming_call_hierarchy(
+            &path,
+            source,
+            source.find("constructor(uint256").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from.name, "constructor");
+        assert_eq!(incoming[0].from.target_offset, child_constructor);
+        assert_eq!(incoming[0].from_ranges, base_constructor.from_ranges);
+
+        let unrelated_incoming = index.incoming_call_hierarchy(
+            &path,
+            source,
+            source.find("constructor() {}").unwrap(),
+            &get_source,
+        );
+        assert!(unrelated_incoming.is_empty());
+    }
+
+    #[test]
+    fn test_prepare_constructor_uses_new_expression_ast_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Factory.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Child {
+    constructor() {}
+}
+contract Factory {
+    function deploy() external { new /* deployment type */ Child(); }
+    function text() external pure returns (string memory) { return "new Child"; }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let deployment = source.find("Child();").unwrap();
+        let prepared = index
+            .prepare_call_hierarchy(
+                &path,
+                source,
+                offset_to_position(source, deployment),
+                &get_source,
+            )
+            .expect("commented new expression should prepare its constructor");
+        assert_eq!(prepared.kind, LspSymbolKind::CONSTRUCTOR);
+        assert_eq!(prepared.name, "constructor");
+
+        let string_literal = source.find("new Child\"").unwrap() + "new ".len();
+        assert!(index
+            .prepare_call_hierarchy(
+                &path,
+                source,
+                offset_to_position(source, string_literal),
+                &get_source,
+            )
+            .is_none());
     }
 
     #[test]

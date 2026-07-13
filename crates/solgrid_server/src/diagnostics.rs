@@ -593,6 +593,9 @@ impl<'a> CompilerDiagnosticContext<'a> {
             StmtKind::Try(try_stmt) => {
                 self.visit_expr(try_stmt.expr);
                 for clause in try_stmt.clauses.iter() {
+                    for parameter in clause.args.iter() {
+                        self.visit_variable_definition(parameter);
+                    }
                     for stmt in clause.block.stmts.iter() {
                         self.visit_stmt(stmt);
                     }
@@ -3902,6 +3905,85 @@ contract Broken is MissingBase {
                     "compiler/unresolved-type".into(),
                 ))
         }));
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_visit_try_return_and_catch_parameter_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TryTypes.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract TryTypes {
+    function fetch() external {}
+
+    function run() external {
+        try this.fetch() returns (MissingReturn[] memory value) {
+        } catch Error(MissingCatch memory reason) {
+        }
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+        let unresolved_types = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic_code(diagnostic) == Some("compiler/unresolved-type"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(unresolved_types.len(), 2, "diagnostics: {diagnostics:#?}");
+        for missing_type in ["MissingReturn", "MissingCatch"] {
+            let start = source.find(missing_type).unwrap();
+            let expected_range =
+                convert::span_to_range(source, &(start..start + missing_type.len()));
+            assert!(unresolved_types.iter().any(|diagnostic| {
+                diagnostic.range == expected_range && diagnostic.message.contains(missing_type)
+            }));
+        }
+    }
+
+    #[test]
+    fn test_compiler_diagnostics_accept_known_try_clause_parameter_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let types_path = dir.path().join("Types.sol");
+        fs::write(
+            &types_path,
+            "pragma solidity ^0.8.0; struct CatchPayload { uint256 value; }\n",
+        )
+        .unwrap();
+
+        let path = dir.path().join("TryTypes.sol");
+        let source = r#"pragma solidity ^0.8.0;
+import {CatchPayload as ImportedCatchPayload} from "./Types.sol";
+
+struct LocalReturnPayload { uint256 value; }
+
+contract TryTypes {
+    function fetch() external pure returns (LocalReturnPayload memory) {
+        return LocalReturnPayload(1);
+    }
+
+    function run() external {
+        try this.fetch() returns (LocalReturnPayload memory value) {
+        } catch Error(ImportedCatchPayload memory reason) {
+        }
+    }
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let mut index = ProjectIndex::new(Some(dir.path().to_path_buf()));
+        index.update_file(&types_path, &fs::read_to_string(&types_path).unwrap());
+        let get_source = |candidate: &Path| std::fs::read_to_string(candidate).ok();
+        let diagnostics = compiler_to_lsp_diagnostics(&index, source, &path, &get_source);
+
+        assert!(
+            !diagnostics.iter().any(|diagnostic| {
+                diagnostic_code(diagnostic) == Some("compiler/unresolved-type")
+            }),
+            "diagnostics: {diagnostics:#?}"
+        );
     }
 
     #[test]
