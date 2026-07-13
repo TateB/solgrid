@@ -739,6 +739,22 @@ fn resolve_cross_file_member_symbol_inner(
                     resolved_path: resolved,
                 });
             }
+
+            // Keep resolving the namespace member as a file-level symbol when
+            // the imported file re-exports it. Falling through to the
+            // container-member path would instead search for `Member.Member`.
+            if let Some(result) = resolve_cross_file_symbol_inner(
+                &imported_table,
+                target.0,
+                &resolved,
+                get_source,
+                resolver,
+                visited,
+            ) {
+                return Some(result);
+            }
+
+            continue;
         }
 
         // Try direct resolution: find the container, then the member.
@@ -1082,6 +1098,67 @@ contract Main {
                 ls_types::Uri::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
             assert_eq!(loc.uri, expected_uri);
             assert_ne!(loc.range, ls_types::Range::default());
+        } else {
+            panic!("expected scalar response");
+        }
+    }
+
+    #[test]
+    fn test_cross_file_member_access_via_transitive_namespace_re_export() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let token_path = dir.path().join("Token.sol");
+        let token_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Token {}
+"#;
+        fs::write(&token_path, token_source).unwrap();
+
+        let barrel_path = dir.path().join("Barrel.sol");
+        fs::write(
+            &barrel_path,
+            r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {Token} from "./Token.sol";
+"#,
+        )
+        .unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import * as Barrel from "./Barrel.sol";
+
+contract Main {
+    Barrel.Token private token;
+}
+"#;
+        let main_path = dir.path().join("Main.sol");
+        fs::write(&main_path, "").unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source = |path: &Path| -> Option<String> { fs::read_to_string(path).ok() };
+
+        let offset = main_source.find("Barrel.Token").unwrap() + "Barrel.".len();
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let result = goto_definition(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            result.is_some(),
+            "expected definition for transitively re-exported Barrel.Token"
+        );
+        if let Some(ls_types::GotoDefinitionResponse::Scalar(loc)) = result {
+            let expected_uri =
+                ls_types::Uri::from_file_path(token_path.canonicalize().unwrap()).unwrap();
+            assert_eq!(loc.uri, expected_uri);
+            let expected_offset = token_source.find("contract Token").unwrap() + "contract ".len();
+            assert_eq!(
+                loc.range.start,
+                convert::offset_to_position(token_source, expected_offset)
+            );
         } else {
             panic!("expected scalar response");
         }
