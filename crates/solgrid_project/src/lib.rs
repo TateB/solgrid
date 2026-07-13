@@ -4224,9 +4224,10 @@ fn collect_outgoing_calls_for_callable(
             resolver: &'a ImportResolver,
         }
 
-        fn visit_item(
-            item: &solar_ast::Item<'_>,
+        fn visit_item<'ast>(
+            item: &solar_ast::Item<'ast>,
             contract_stack: &mut Vec<String>,
+            contract_bases: Option<&[solar_ast::Modifier<'ast>]>,
             context: &OutgoingCallCollectContext<'_>,
             calls: &mut Vec<ResolvedOutgoingCall>,
         ) {
@@ -4234,7 +4235,13 @@ fn collect_outgoing_calls_for_callable(
                 ItemKind::Contract(contract) => {
                     contract_stack.push(contract.name.as_str().to_string());
                     for body_item in contract.body.iter() {
-                        visit_item(body_item, contract_stack, context, calls);
+                        visit_item(
+                            body_item,
+                            contract_stack,
+                            Some(contract.bases),
+                            context,
+                            calls,
+                        );
                     }
                     contract_stack.pop();
                 }
@@ -4251,6 +4258,25 @@ fn collect_outgoing_calls_for_callable(
                         return;
                     }
 
+                    if function.kind == FunctionKind::Constructor {
+                        // Implicit constructors have no hierarchy item, so inheritance-specifier
+                        // calls attach only to an explicit constructor declaration.
+                        for base in contract_bases
+                            .into_iter()
+                            .flatten()
+                            .filter(|base| !base.arguments.is_dummy())
+                        {
+                            collect_modifier_outgoing_call(
+                                context.snapshot,
+                                context.source,
+                                base,
+                                contract_stack.last().map(String::as_str),
+                                context.get_source,
+                                context.resolver,
+                                calls,
+                            );
+                        }
+                    }
                     for modifier in function.header.modifiers.iter() {
                         collect_modifier_outgoing_call(
                             context.snapshot,
@@ -4291,7 +4317,7 @@ fn collect_outgoing_calls_for_callable(
             resolver,
         };
         for item in source_unit.items.iter() {
-            visit_item(item, &mut contract_stack, &context, &mut calls);
+            visit_item(item, &mut contract_stack, None, &context, &mut calls);
         }
         calls
     })
@@ -4793,7 +4819,7 @@ fn constructor_target_for_contract_path(
     ))
 }
 
-fn direct_base_constructor_target(
+fn hierarchy_constructor_target(
     snapshot: &ProjectSnapshot,
     current_contract: &str,
     contract_path: &TypePath,
@@ -4804,14 +4830,26 @@ fn direct_base_constructor_target(
         .contracts
         .iter()
         .find(|contract| contract.name == current_contract)?;
+    let current_def = find_contract_symbol_def(snapshot, current)?.clone();
+    let current_target = ResolvedPathTarget {
+        snapshot: snapshot.clone(),
+        def: current_def,
+    };
     let resolved = resolve_contract_type_path(snapshot, contract_path, get_source, resolver)?;
-    let is_direct_base = current.bases.iter().any(|base| {
-        resolve_contract_type_path(snapshot, base, get_source, resolver).is_some_and(|candidate| {
-            candidate.snapshot.path == resolved.snapshot.path
-                && candidate.def.name_span == resolved.def.name_span
-        })
+    let mut cache = HashMap::new();
+    let mut active = HashSet::new();
+    let linearized = linearized_contract_targets(
+        &current_target,
+        get_source,
+        resolver,
+        &mut cache,
+        &mut active,
+    )?;
+    let is_ancestor = linearized.iter().skip(1).any(|candidate| {
+        candidate.snapshot.path == resolved.snapshot.path
+            && candidate.def.name_span == resolved.def.name_span
     });
-    if !is_direct_base || resolved.def.kind != SymbolKind::Contract {
+    if !is_ancestor || resolved.def.kind != SymbolKind::Contract {
         return None;
     }
     let constructors = resolved.snapshot.table.constructors(&resolved.def);
@@ -4846,7 +4884,7 @@ fn collect_modifier_outgoing_call(
                             .map(|segment| segment.as_str().to_string())
                             .collect(),
                     };
-                    direct_base_constructor_target(
+                    hierarchy_constructor_target(
                         snapshot,
                         current_contract,
                         &contract_path,
@@ -8505,7 +8543,7 @@ contract Factory {
     }
 
     #[test]
-    fn test_call_hierarchy_tracks_explicit_base_constructor_invocations() {
+    fn test_call_hierarchy_tracks_explicit_ancestor_constructor_invocations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Child.sol");
         let source = r#"pragma solidity ^0.8.0;
@@ -8516,7 +8554,8 @@ contract Base {
 contract Unrelated {
     constructor() {}
 }
-contract Child is Base {
+abstract contract Middle is Base {}
+contract Child is Middle {
     constructor() Base(buildValue()) Unrelated() {}
 }
 "#;
@@ -8554,6 +8593,140 @@ contract Child is Base {
             &get_source,
         );
         assert!(unrelated_incoming.is_empty());
+    }
+
+    #[test]
+    fn test_call_hierarchy_tracks_inheritance_specifier_constructor_invocations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Child.sol");
+        let source = r#"pragma solidity ^0.8.0;
+function buildValue() pure returns (uint256) { return 1; }
+contract Base {
+    constructor(uint256 value) {}
+}
+contract Child is Base(buildValue()) {
+    constructor() {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let child_constructor = source.rfind("constructor() {}").unwrap();
+        let outgoing = index.outgoing_call_hierarchy(&path, source, child_constructor, &get_source);
+        assert_eq!(outgoing.len(), 2);
+        let base_constructor = outgoing
+            .iter()
+            .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+            .expect("inheritance-specifier constructor call");
+        assert_eq!(base_constructor.to.path, normalize_path(&path));
+        assert_eq!(base_constructor.from_ranges.len(), 1);
+        assert!(outgoing.iter().any(|call| call.to.name == "buildValue"));
+
+        let incoming = index.incoming_call_hierarchy(
+            &path,
+            source,
+            source.find("constructor(uint256").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from.target_offset, child_constructor);
+        assert_eq!(incoming[0].from_ranges, base_constructor.from_ranges);
+    }
+
+    #[test]
+    fn test_call_hierarchy_ignores_dummy_inheritance_constructor_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Child.sol");
+        let source = r#"pragma solidity ^0.8.0;
+contract Base {
+    constructor(uint256 value) {}
+}
+contract Child is Base {
+    constructor(uint256 value) Base(value) {}
+}
+"#;
+        fs::write(&path, source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        let child_constructor = source.rfind("constructor(uint256 value) Base").unwrap();
+        let outgoing = index.outgoing_call_hierarchy(&path, source, child_constructor, &get_source);
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].to.kind, LspSymbolKind::CONSTRUCTOR);
+        assert_eq!(outgoing[0].from_ranges.len(), 1);
+        let initializer = source.rfind("Base(value)").unwrap();
+        assert_eq!(
+            outgoing[0].from_ranges[0],
+            span_to_range(source, &(initializer..initializer + "Base".len()))
+        );
+
+        let incoming = index.incoming_call_hierarchy(
+            &path,
+            source,
+            source.find("constructor(uint256 value)").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from_ranges, outgoing[0].from_ranges);
+    }
+
+    #[test]
+    fn test_call_hierarchy_resolves_imported_inheritance_specifier_constructors() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("Base.sol");
+        let base_source = r#"pragma solidity ^0.8.0;
+contract Base {
+    constructor(uint256 value) {}
+}
+"#;
+        fs::write(&base_path, base_source).unwrap();
+
+        let child_path = dir.path().join("Child.sol");
+        let child_source = r#"pragma solidity ^0.8.0;
+import {Base as Parent} from "./Base.sol";
+import * as BaseNs from "./Base.sol";
+function buildValue() pure returns (uint256) { return 1; }
+contract AliasedChild is Parent(buildValue()) {
+    constructor() {}
+}
+contract NamespacedChild is BaseNs.Base(buildValue()) {
+    constructor() {}
+}
+"#;
+        fs::write(&child_path, child_source).unwrap();
+
+        let index = ProjectIndex::build(dir.path());
+        let get_source = |candidate: &Path| fs::read_to_string(candidate).ok();
+        for constructor_offset in [
+            child_source.find("constructor() {}").unwrap(),
+            child_source.rfind("constructor() {}").unwrap(),
+        ] {
+            let outgoing = index.outgoing_call_hierarchy(
+                &child_path,
+                child_source,
+                constructor_offset,
+                &get_source,
+            );
+            assert_eq!(outgoing.len(), 2);
+            let base_constructor = outgoing
+                .iter()
+                .find(|call| call.to.kind == LspSymbolKind::CONSTRUCTOR)
+                .expect("imported inheritance-specifier constructor call");
+            assert_eq!(base_constructor.to.path, normalize_path(&base_path));
+            assert!(outgoing.iter().any(|call| call.to.name == "buildValue"));
+        }
+
+        let incoming = index.incoming_call_hierarchy(
+            &base_path,
+            base_source,
+            base_source.find("constructor").unwrap(),
+            &get_source,
+        );
+        assert_eq!(incoming.len(), 2);
+        assert!(incoming
+            .iter()
+            .all(|call| call.from.path == normalize_path(&child_path)));
     }
 
     #[test]
