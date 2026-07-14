@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-14
+
 ### Added
 - Added an IDE and security expansion roadmap covering a Solar-first semantic backend strategy, compiler-aware diagnostics, detector architecture, security overview UX, richer navigation, graph tooling, inlay hints, and coverage planning
 - Added a shared `solgrid_project` navigation layer plus VS Code/LSP references, document symbols, workspace symbols, import links, reference-count code lenses, and watched-file refresh for closed Solidity files
@@ -303,8 +305,9 @@ Initial development release.
 - **Binary optimization**: strip, LTO, codegen-units=1
 - 309+ tests across Rust workspace, VSCode extension (unit, integration, e2e), and Prettier plugin
 
-[Unreleased]: https://github.com/TateB/solgrid/compare/v0.0.16...HEAD
-[0.0.16]: https://github.com/TateB/solgrid/compare/v0.0.15...v0.0.16
+[Unreleased]: https://github.com/TateB/solgrid/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/TateB/solgrid/compare/v0.0.16...v0.1.0
+[0.0.16]: https://github.com/TateB/solgrid/releases/tag/v0.0.16
 [0.0.15]: https://github.com/TateB/solgrid/releases/tag/v0.0.15
 [0.0.14]: https://github.com/TateB/solgrid/releases/tag/v0.0.14
 [0.0.13]: https://github.com/TateB/solgrid/releases/tag/v0.0.13
