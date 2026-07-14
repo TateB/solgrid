@@ -15,6 +15,7 @@ solgrid_config = { workspace = true }
 solgrid_diagnostics = { workspace = true }
 solgrid_formatter = { workspace = true }
 solgrid_linter = { workspace = true }
+solgrid_project = { workspace = true }
 solgrid_server = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

@@ -11,11 +11,12 @@
  * These e2e tests validate behavior that applies to both editors.
  */
 
-import * as path from "path";
-import * as fs from "fs";
+import * as path from "node:path";
+import * as fs from "node:fs";
 import { runTests } from "@vscode/test-electron";
 
 async function main() {
+  const vscodeVersion = readVsCodeVersion(process.argv.slice(2));
   // The path to the extension root (editors/vscode/)
   // __dirname at runtime is out/test/e2e/, so we need 3 levels up
   const extensionDevelopmentPath = path.resolve(__dirname, "../../../");
@@ -44,8 +45,15 @@ async function main() {
 
   try {
     await runTests({
+      ...(vscodeVersion ? { version: vscodeVersion } : {}),
       extensionDevelopmentPath,
       extensionTestsPath,
+      extensionTestsEnv: {
+        SOLGRID_BIN: solgridBinary,
+        ...(process.env.SOLGRID_E2E_GREP
+          ? { SOLGRID_E2E_GREP: process.env.SOLGRID_E2E_GREP }
+          : {}),
+      },
       launchArgs: [
         testWorkspace,
         "--disable-extensions", // Disable other extensions to isolate our tests
@@ -64,6 +72,18 @@ async function main() {
       }
     }
   }
+}
+
+function readVsCodeVersion(args: readonly string[]): string | undefined {
+  const flagIndex = args.indexOf("--vscode-version");
+  if (flagIndex < 0) {
+    return process.env.SOLGRID_VSCODE_VERSION;
+  }
+  const version = args[flagIndex + 1];
+  if (!version || version.startsWith("-")) {
+    throw new Error("--vscode-version requires a version, such as 1.82.3");
+  }
+  return version;
 }
 
 function getSolgridBinaryPath(extensionDevelopmentPath: string): string {

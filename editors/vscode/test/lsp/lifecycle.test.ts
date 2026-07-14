@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TestLspClient } from "./client";
-import { initializeServer, InitializeResult } from "./helpers";
+import { initializeServer } from "./helpers";
 
 describe("LSP Server Lifecycle", () => {
   let client: TestLspClient;
@@ -30,8 +30,8 @@ describe("LSP Server Lifecycle", () => {
   it("reports server info with name and version", async () => {
     const result = await initializeServer(client);
     expect(result.serverInfo).toBeDefined();
-    expect(result.serverInfo!.name).toBe("solgrid");
-    expect(result.serverInfo!.version).toBeDefined();
+    expect(result.serverInfo?.name).toBe("solgrid");
+    expect(result.serverInfo?.version).toBeDefined();
   });
 
   it("declares full text document sync", async () => {
@@ -82,21 +82,50 @@ describe("LSP Server Lifecycle", () => {
     expect(result.capabilities.hoverProvider).toBeTruthy();
   });
 
+  it("declares navigation providers", async () => {
+    const result = await initializeServer(client);
+    expect(result.capabilities.definitionProvider).toBeTruthy();
+    expect(result.capabilities.referencesProvider).toBeTruthy();
+    expect(result.capabilities.documentSymbolProvider).toBeTruthy();
+    expect(result.capabilities.workspaceSymbolProvider).toBeTruthy();
+    expect(result.capabilities.documentLinkProvider).toBeDefined();
+    expect(result.capabilities.inlayHintProvider).toBeDefined();
+    expect(result.capabilities.semanticTokensProvider).toBeDefined();
+    expect(result.capabilities.semanticTokensProvider?.full).toBeTruthy();
+    expect(result.capabilities.semanticTokensProvider?.range).toBeTruthy();
+    expect(result.capabilities.codeLensProvider).toBeDefined();
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.workspace.rerunSecurityAnalysis"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.imports"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.inheritance"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.linearizedInheritance"
+    );
+    expect(result.capabilities.executeCommandProvider?.commands).toContain(
+      "solgrid.graph.controlFlow"
+    );
+  });
+
   it("declares completion provider with trigger characters", async () => {
     const result = await initializeServer(client);
     const completion = result.capabilities.completionProvider;
     expect(completion).toBeDefined();
-    expect(completion!.triggerCharacters).toBeDefined();
-    expect(completion!.triggerCharacters).toContain("/");
-    expect(completion!.triggerCharacters).toContain(" ");
+    expect(completion?.triggerCharacters).toBeDefined();
+    expect(completion?.triggerCharacters).toContain("/");
+    expect(completion?.triggerCharacters).toContain(" ");
   });
 
   it("declares signature help provider with trigger characters", async () => {
     const result = await initializeServer(client);
     const signatureHelp = result.capabilities.signatureHelpProvider;
     expect(signatureHelp).toBeDefined();
-    expect(signatureHelp!.triggerCharacters).toContain("(");
-    expect(signatureHelp!.triggerCharacters).toContain(",");
+    expect(signatureHelp?.triggerCharacters).toContain("(");
+    expect(signatureHelp?.triggerCharacters).toContain(",");
   });
 
   it("handles shutdown request gracefully", async () => {
@@ -113,20 +142,29 @@ describe("LSP Server Lifecycle", () => {
     const result = await client.request("shutdown", undefined);
     expect(result).toBeNull();
 
-    // Send exit notification
-    client.notify("exit", undefined);
-
     // tower-lsp-server v0.21+ closes transport ~1s after exit notification.
     // The server process should terminate on its own within 5s.
+    const processExit = new Promise<boolean>((resolve) => {
+      client.on("exit", () => resolve(true));
+    });
+    client.notify("exit", undefined);
     const exited = await Promise.race([
-      new Promise<boolean>((resolve) => {
-        client.on("exit", () => resolve(true));
-      }),
+      processExit,
       new Promise<boolean>((resolve) => {
         setTimeout(() => resolve(false), 5000);
       }),
     ]);
 
     expect(exited).toBe(true);
+  });
+
+  it("rejects pending requests when the server process cannot spawn", async () => {
+    const missingClient = new TestLspClient();
+    missingClient.start("/definitely/missing/solgrid-test-server");
+
+    await expect(
+      missingClient.request("initialize", { processId: process.pid })
+    ).rejects.toThrow(/ENOENT|spawn|closed/u);
+    missingClient.kill();
   });
 });

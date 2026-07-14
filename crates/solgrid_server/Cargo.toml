@@ -13,6 +13,7 @@ solgrid_diagnostics = { workspace = true }
 solgrid_formatter = { workspace = true }
 solgrid_linter = { workspace = true }
 solgrid_parser = { workspace = true }
+solgrid_project = { workspace = true }
 ignore = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

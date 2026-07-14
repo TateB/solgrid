@@ -4,7 +4,7 @@
 use crate::span_to_range;
 use solgrid_parser::solar_ast::{
     DataLocation, FunctionKind, ImportItems, ItemFunction, ItemKind, Stmt, StmtKind, Type,
-    TypeKind, VariableDefinition,
+    TypeKind, VariableDefinition, Visibility,
 };
 use solgrid_parser::solar_interface::SpannedOption;
 use solgrid_parser::with_parsed_ast_sequential;
@@ -59,6 +59,7 @@ pub enum TypeSpec {
         display: String,
     },
     Mapping {
+        key: Box<TypeSpec>,
         value: Box<TypeSpec>,
         display: String,
     },
@@ -137,6 +138,8 @@ pub struct SymbolDef {
     pub type_info: Option<TypeSpec>,
     /// Callable signature metadata for functions and modifiers.
     pub signature: Option<SignatureData>,
+    /// Visibility for declarations that expose it in Solidity syntax.
+    pub visibility: Option<Visibility>,
 }
 
 /// An import statement with its path and imported symbols.
@@ -237,6 +240,12 @@ impl SymbolTable {
                     results.push(sym);
                 }
             }
+            // Solidity lexical shadowing stops lookup at the first scope that
+            // defines the name. Keep all definitions in that scope so callers
+            // can still reason conservatively about overload sets.
+            if !results.is_empty() {
+                break;
+            }
             current = scope.parent;
         }
 
@@ -266,6 +275,28 @@ impl SymbolTable {
         best
     }
 
+    /// Find the narrowest declaration that contains `offset`.
+    ///
+    /// This excludes lexical symbols such as locals and parameters so editor
+    /// surfaces can anchor annotations to stable declaration lines.
+    pub fn find_enclosing_declaration(&self, offset: usize) -> Option<&SymbolDef> {
+        let mut best: Option<&SymbolDef> = None;
+        for scope in &self.scopes {
+            for sym in &scope.symbols {
+                if is_declaration_anchor_kind(sym.kind) && sym.def_span.contains(&offset) {
+                    match best {
+                        None => best = Some(sym),
+                        Some(prev) if sym.def_span.len() < prev.def_span.len() => {
+                            best = Some(sym);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        best
+    }
+
     /// Return all direct symbol definitions in the given scope.
     pub fn scope_symbols(&self, scope_id: ScopeId) -> &[SymbolDef] {
         &self.scopes[scope_id].symbols
@@ -281,6 +312,18 @@ impl SymbolTable {
             return &[];
         }
         &self.scopes[0].symbols
+    }
+
+    /// Find the declaration whose identifier exactly occupies `span`.
+    ///
+    /// This deliberately ignores lexical lookup so declarations remain
+    /// addressable when a parameter or local uses the same name as an
+    /// enclosing callable.
+    pub fn definition_at_name_span(&self, span: &Range<usize>) -> Option<&SymbolDef> {
+        self.scopes
+            .iter()
+            .flat_map(|scope| scope.symbols.iter())
+            .find(|definition| definition.name_span == *span)
     }
 
     /// Collect all symbols visible at the given byte offset.
@@ -439,6 +482,24 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
+fn is_declaration_anchor_kind(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Contract
+            | SymbolKind::Interface
+            | SymbolKind::Library
+            | SymbolKind::Constructor
+            | SymbolKind::Function
+            | SymbolKind::Modifier
+            | SymbolKind::Event
+            | SymbolKind::Error
+            | SymbolKind::Struct
+            | SymbolKind::Enum
+            | SymbolKind::Udvt
+            | SymbolKind::StateVariable
+    )
+}
+
 pub(crate) fn normalize_whitespace(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut prev_was_ws = false;
@@ -498,6 +559,12 @@ pub fn type_spec_from_ast(
             display,
         },
         TypeKind::Mapping(mapping) => TypeSpec::Mapping {
+            key: Box::new(type_spec_from_ast(
+                source,
+                &mapping.key,
+                None,
+                resolve_offset,
+            )),
             value: Box::new(type_spec_from_ast(
                 source,
                 &mapping.value,
@@ -543,6 +610,21 @@ fn signature_data_for_function(source: &str, func: &ItemFunction<'_>) -> Signatu
         parameters,
         first_return_type: return_types.first().cloned(),
         return_types,
+    }
+}
+
+fn signature_data_for_parameter_labels(
+    source: &str,
+    def_span: &Range<usize>,
+    param_labels: Vec<String>,
+) -> SignatureData {
+    let label = normalize_whitespace(&source[def_span.clone()]);
+    let parameters = map_parameter_offsets(&label, &param_labels);
+    SignatureData {
+        label,
+        parameters,
+        return_types: Vec::new(),
+        first_return_type: None,
     }
 }
 
@@ -613,6 +695,7 @@ fn collect_item(
                     scope: Some(contract_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
 
@@ -641,6 +724,7 @@ fn collect_item(
                         scope: Some(func_scope),
                         type_info: None,
                         signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
                     },
                 );
             } else if func.kind == FunctionKind::Constructor {
@@ -655,6 +739,25 @@ fn collect_item(
                         scope: Some(func_scope),
                         type_info: None,
                         signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
+                    },
+                );
+            } else if matches!(func.kind, FunctionKind::Fallback | FunctionKind::Receive) {
+                let header_span = span_to_range(func.header.span);
+                let name = func.kind.to_str().to_string();
+                let relative_start = source[header_span.clone()].find(&name).unwrap_or(0);
+                let name_start = header_span.start + relative_start;
+                table.add_symbol(
+                    parent_scope,
+                    SymbolDef {
+                        name: name.clone(),
+                        kind: SymbolKind::Function,
+                        name_span: name_start..name_start + name.len(),
+                        def_span: def_span.clone(),
+                        scope: Some(func_scope),
+                        type_info: None,
+                        signature: Some(signature.clone()),
+                        visibility: func.header.visibility(),
                     },
                 );
             }
@@ -679,6 +782,7 @@ fn collect_item(
                                 param_def_span.start,
                             )),
                             signature: None,
+                            visibility: None,
                         },
                     );
                 }
@@ -705,6 +809,7 @@ fn collect_item(
                                     param_def_span.start,
                                 )),
                                 signature: None,
+                                visibility: None,
                             },
                         );
                     }
@@ -735,6 +840,7 @@ fn collect_item(
                             span_to_range(item.span).start,
                         )),
                         signature: None,
+                        visibility: var.visibility,
                     },
                 );
             }
@@ -742,34 +848,104 @@ fn collect_item(
 
         ItemKind::Event(ev) => {
             let name_span = span_to_range(ev.name.span);
+            let def_span = span_to_range(item.span);
+            let event_scope = table.push_scope(Some(parent_scope), def_span.clone());
+            let signature = signature_data_for_parameter_labels(
+                source,
+                &def_span,
+                ev.parameters
+                    .iter()
+                    .map(|parameter| parameter_label(source, parameter))
+                    .collect(),
+            );
             table.add_symbol(
                 parent_scope,
                 SymbolDef {
                     name: ev.name.as_str().to_string(),
                     kind: SymbolKind::Event,
                     name_span,
-                    def_span: span_to_range(item.span),
-                    scope: None,
+                    def_span,
+                    scope: Some(event_scope),
                     type_info: None,
-                    signature: None,
+                    signature: Some(signature),
+                    visibility: None,
                 },
             );
+            for parameter in ev.parameters.iter() {
+                let Some(name_ident) = parameter.name else {
+                    continue;
+                };
+                let parameter_span = span_to_range(parameter.span);
+                table.add_symbol(
+                    event_scope,
+                    SymbolDef {
+                        name: name_ident.as_str().to_string(),
+                        kind: SymbolKind::Parameter,
+                        name_span: span_to_range(name_ident.span),
+                        def_span: parameter_span.clone(),
+                        scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &parameter.ty,
+                            parameter.data_location,
+                            parameter_span.start,
+                        )),
+                        signature: None,
+                        visibility: None,
+                    },
+                );
+            }
         }
 
         ItemKind::Error(err) => {
             let name_span = span_to_range(err.name.span);
+            let def_span = span_to_range(item.span);
+            let error_scope = table.push_scope(Some(parent_scope), def_span.clone());
+            let signature = signature_data_for_parameter_labels(
+                source,
+                &def_span,
+                err.parameters
+                    .iter()
+                    .map(|parameter| parameter_label(source, parameter))
+                    .collect(),
+            );
             table.add_symbol(
                 parent_scope,
                 SymbolDef {
                     name: err.name.as_str().to_string(),
                     kind: SymbolKind::Error,
                     name_span,
-                    def_span: span_to_range(item.span),
-                    scope: None,
+                    def_span,
+                    scope: Some(error_scope),
                     type_info: None,
-                    signature: None,
+                    signature: Some(signature),
+                    visibility: None,
                 },
             );
+            for parameter in err.parameters.iter() {
+                let Some(name_ident) = parameter.name else {
+                    continue;
+                };
+                let parameter_span = span_to_range(parameter.span);
+                table.add_symbol(
+                    error_scope,
+                    SymbolDef {
+                        name: name_ident.as_str().to_string(),
+                        kind: SymbolKind::Parameter,
+                        name_span: span_to_range(name_ident.span),
+                        def_span: parameter_span.clone(),
+                        scope: None,
+                        type_info: Some(type_spec_from_ast(
+                            source,
+                            &parameter.ty,
+                            parameter.data_location,
+                            parameter_span.start,
+                        )),
+                        signature: None,
+                        visibility: None,
+                    },
+                );
+            }
         }
 
         ItemKind::Struct(s) => {
@@ -786,6 +962,7 @@ fn collect_item(
                     scope: Some(struct_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
             // Register struct fields.
@@ -808,6 +985,7 @@ fn collect_item(
                                 f_def_span.start,
                             )),
                             signature: None,
+                            visibility: None,
                         },
                     );
                 }
@@ -828,6 +1006,7 @@ fn collect_item(
                     scope: Some(enum_scope),
                     type_info: None,
                     signature: None,
+                    visibility: None,
                 },
             );
 
@@ -844,6 +1023,7 @@ fn collect_item(
                         scope: None,
                         type_info: None,
                         signature: None,
+                        visibility: None,
                     },
                 );
             }
@@ -866,6 +1046,7 @@ fn collect_item(
                         span_to_range(item.span).start,
                     )),
                     signature: None,
+                    visibility: None,
                 },
             );
         }
@@ -928,6 +1109,7 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                             span_to_range(stmt.span).start,
                         )),
                         signature: None,
+                        visibility: None,
                     },
                 );
             }
@@ -953,6 +1135,7 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
                                     span_to_range(var.span).start,
                                 )),
                                 signature: None,
+                                visibility: None,
                             },
                         );
                     }
@@ -998,8 +1181,32 @@ fn collect_stmt(table: &mut SymbolTable, scope: ScopeId, source: &str, stmt: &St
 
         StmtKind::Try(try_stmt) => {
             for clause in try_stmt.clauses.iter() {
-                let clause_span = span_to_range(clause.block.span);
+                let clause_span = span_to_range(clause.span);
                 let clause_scope = table.push_scope(Some(scope), clause_span);
+                for argument in clause.args.iter() {
+                    let Some(name_ident) = argument.name else {
+                        continue;
+                    };
+                    let argument_span = span_to_range(argument.span);
+                    table.add_symbol(
+                        clause_scope,
+                        SymbolDef {
+                            name: name_ident.as_str().to_string(),
+                            kind: SymbolKind::LocalVariable,
+                            name_span: span_to_range(name_ident.span),
+                            def_span: argument_span.clone(),
+                            scope: None,
+                            type_info: Some(type_spec_from_ast(
+                                source,
+                                &argument.ty,
+                                argument.data_location,
+                                argument_span.start,
+                            )),
+                            signature: None,
+                            visibility: None,
+                        },
+                    );
+                }
                 collect_stmts(table, clause_scope, source, clause.block.stmts);
             }
         }
@@ -1117,6 +1324,42 @@ contract Test {
         let offset = source.find("return a").unwrap() + 7; // on 'a'
         let def = table.resolve("a", offset).unwrap();
         assert_eq!(def.kind, SymbolKind::Parameter);
+    }
+
+    #[test]
+    fn test_find_enclosing_declaration_prefers_stable_declaration_symbols() {
+        let source = r#"
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract Test {
+    uint256 public threshold;
+    event Flagged(address indexed account);
+
+    function run(uint256 amount) public {
+        uint256 localValue = amount;
+        if (localValue > threshold) {
+            emit Flagged(msg.sender);
+        }
+    }
+}
+"#;
+        let table = table_for(source);
+
+        let local_offset = source.find("localValue >").unwrap();
+        let enclosing = table.find_enclosing_declaration(local_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::Function);
+        assert_eq!(enclosing.name, "run");
+
+        let state_offset = source.find("threshold;").unwrap();
+        let enclosing = table.find_enclosing_declaration(state_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::StateVariable);
+        assert_eq!(enclosing.name, "threshold");
+
+        let event_offset = source.find("Flagged(address").unwrap();
+        let enclosing = table.find_enclosing_declaration(event_offset).unwrap();
+        assert_eq!(enclosing.kind, SymbolKind::Event);
+        assert_eq!(enclosing.name, "Flagged");
     }
 
     #[test]
@@ -1433,5 +1676,75 @@ interface IERC20 {
         // When cursor is on the container name, not the member.
         let source = "MyContract.transfer(to, amount);";
         assert!(find_member_access_at_offset(source, 3).is_none());
+    }
+
+    #[test]
+    fn test_resolve_all_preserves_overloads_but_stops_at_lexical_shadow() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    uint256 value;
+    function run(uint256 value) external { value; }
+    function run(address value) external { value; }
+}
+"#;
+        let table = table_for(source);
+
+        let overloads = table.resolve_all("run", source.find("contract Test").unwrap());
+        assert_eq!(overloads.len(), 2);
+
+        let use_offset = source.find("value; }").unwrap();
+        let values = table.resolve_all("value", use_offset);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].kind, SymbolKind::Parameter);
+    }
+
+    #[test]
+    fn test_collects_try_and_catch_bound_arguments() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    function fetch() external returns (uint256) { return 1; }
+    function run() external returns (uint256) {
+        try this.fetch() returns (uint256 fetched) {
+            return fetched;
+        } catch Error(string memory reason) {
+            revert(reason);
+        }
+    }
+}
+"#;
+        let table = table_for(source);
+
+        let fetched_use = source.rfind("fetched;").unwrap();
+        let fetched = table.resolve("fetched", fetched_use).unwrap();
+        assert_eq!(fetched.kind, SymbolKind::LocalVariable);
+        assert_eq!(fetched.type_info.as_ref().unwrap().display(), "uint256");
+
+        let reason_use = source.rfind("reason);").unwrap();
+        let reason = table.resolve("reason", reason_use).unwrap();
+        assert_eq!(reason.kind, SymbolKind::LocalVariable);
+        assert_eq!(
+            reason.type_info.as_ref().unwrap().display(),
+            "string memory"
+        );
+    }
+
+    #[test]
+    fn test_collects_fallback_and_receive_declarations() {
+        let source = r#"pragma solidity ^0.8.0;
+contract Test {
+    fallback() external payable {}
+    receive() external payable {}
+}
+"#;
+        let table = table_for(source);
+        let contract = table.resolve("Test", source.find("Test").unwrap()).unwrap();
+
+        let fallback = table.resolve_member(contract, "fallback").unwrap();
+        assert_eq!(fallback.kind, SymbolKind::Function);
+        assert_eq!(&source[fallback.name_span.clone()], "fallback");
+
+        let receive = table.resolve_member(contract, "receive").unwrap();
+        assert_eq!(receive.kind, SymbolKind::Function);
+        assert_eq!(&source[receive.name_span.clone()], "receive");
     }
 }

@@ -6,11 +6,16 @@
  * discovers test files, and runs them.
  */
 
-import * as path from "path";
+import * as path from "node:path";
 import Mocha from "mocha";
 
 export function run(): Promise<void> {
-  const mocha = new Mocha({ ui: "bdd", color: true, timeout: 60000 });
+  const mocha = new Mocha({
+    ui: "bdd",
+    color: true,
+    timeout: 60000,
+    grep: process.env.SOLGRID_E2E_GREP,
+  });
 
   const testsRoot = path.resolve(__dirname);
 

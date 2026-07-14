@@ -5,7 +5,7 @@ use crate::definition;
 use crate::resolve::ImportResolver;
 use crate::symbols::{SymbolDef, SymbolKind};
 use crate::{convert, symbols};
-use solgrid_diagnostics::{FixAvailability, RuleMeta};
+use solgrid_diagnostics::{FindingMeta, FixAvailability, RuleMeta};
 use solgrid_linter::LintEngine;
 use std::path::Path;
 use tower_lsp_server::ls_types;
@@ -37,11 +37,13 @@ pub fn hover_for_diagnostic(
     lsp_diagnostics: &[ls_types::Diagnostic],
     position: &ls_types::Position,
 ) -> Option<ls_types::Hover> {
-    for diag in lsp_diagnostics {
-        if !position_in_range(position, &diag.range) {
-            continue;
-        }
+    let mut matching: Vec<&ls_types::Diagnostic> = lsp_diagnostics
+        .iter()
+        .filter(|diag| position_in_range(position, &diag.range))
+        .collect();
+    matching.sort_by_key(|diag| diagnostic_range_key(&diag.range));
 
+    for diag in matching {
         let rule_id = match &diag.code {
             Some(ls_types::NumberOrString::String(id)) => id.as_str(),
             _ => continue,
@@ -57,6 +59,19 @@ pub fn hover_for_diagnostic(
                 }),
                 range: Some(diag.range),
             });
+        }
+
+        if let Some(data) = diag.data.clone() {
+            if let Ok(finding) = serde_json::from_value::<FindingMeta>(data) {
+                let content = format_finding_documentation(&finding);
+                return Some(ls_types::Hover {
+                    contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+                        kind: ls_types::MarkupKind::Markdown,
+                        value: content,
+                    }),
+                    range: Some(diag.range),
+                });
+            }
         }
     }
 
@@ -159,14 +174,24 @@ pub fn hover_for_symbol(
         }
     }
 
-    // 2c. Try Solidity global function (keccak256, require, etc.)
+    // 2c. Try Solidity globals and namespaces before the more expensive
+    // inherited-member traversal.
     if let Some(builtin) = builtins::lookup_solidity_global(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
     }
-
-    // 2d. Try Solidity namespace (hovering on `msg`, `block`, `abi`, etc.)
     if let Some(builtin) = builtins::lookup_solidity_namespace(&name) {
         return Some(make_builtin_hover(builtin, source, &ident_range));
+    }
+
+    // 2d. Try unqualified inherited members from base contracts/interfaces.
+    if let Some(tbl) = &table {
+        let inherited = definition::resolve_inherited_member_symbols(
+            source, offset, &name, uri, tbl, get_source, resolver,
+        );
+        if !inherited.is_empty() {
+            let hover_range = convert::span_to_range(source, &ident_range);
+            return Some(hover_for_cross_file_symbols(&inherited, hover_range));
+        }
     }
 
     // 2e. Try Yul built-in (only inside assembly blocks)
@@ -249,6 +274,35 @@ fn hover_for_cross_file_symbol(
         content.push_str(doc);
     }
 
+    ls_types::Hover {
+        contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
+            kind: ls_types::MarkupKind::Markdown,
+            value: content,
+        }),
+        range: Some(hover_range),
+    }
+}
+
+fn hover_for_cross_file_symbols(
+    symbols: &[definition::CrossFileSymbol],
+    hover_range: ls_types::Range,
+) -> ls_types::Hover {
+    if let [symbol] = symbols {
+        return hover_for_cross_file_symbol(
+            &symbol.source,
+            &symbol.def,
+            &symbol.table,
+            hover_range,
+        );
+    }
+
+    let mut signatures = symbols
+        .iter()
+        .map(|symbol| extract_signature(&symbol.source, &symbol.def, &symbol.table))
+        .collect::<Vec<_>>();
+    signatures.sort();
+    signatures.dedup();
+    let content = format!("```solidity\n{}\n```", signatures.join("\n"));
     ls_types::Hover {
         contents: ls_types::HoverContents::Markup(ls_types::MarkupContent {
             kind: ls_types::MarkupKind::Markdown,
@@ -647,6 +701,58 @@ pub fn format_rule_documentation(meta: &RuleMeta) -> String {
     doc
 }
 
+/// Format metadata-backed finding documentation as Markdown.
+pub fn format_finding_documentation(finding: &FindingMeta) -> String {
+    let mut doc = String::new();
+
+    doc.push_str(&format!("## {} finding\n\n", finding.category));
+    doc.push_str(&format!("**Finding:** `{}`\n\n", finding.id));
+    doc.push_str(&format!("**Kind:** {}\n\n", finding_kind_label(finding)));
+    doc.push_str(&format!("**Severity:** {}\n\n", finding.severity));
+    if let Some(confidence) = finding.confidence {
+        doc.push_str(&format!(
+            "**Confidence:** {}\n\n",
+            confidence_label(confidence)
+        ));
+    }
+    doc.push_str(&format!("{}\n", finding.title));
+
+    if finding.has_fix {
+        doc.push_str("\n**Auto-fix:** available\n");
+    } else {
+        doc.push_str("\n**Auto-fix:** not available\n");
+    }
+
+    if let Some(help_url) = &finding.help_url {
+        doc.push_str(&format!("\n**Help:** <{}>\n", help_url));
+    }
+
+    if finding.suppressible {
+        doc.push_str(&format!(
+            "\n---\n*Disable with:* `// solgrid-disable-next-line {}`",
+            finding.id
+        ));
+    }
+
+    doc
+}
+
+fn finding_kind_label(finding: &FindingMeta) -> &'static str {
+    match finding.kind {
+        solgrid_diagnostics::FindingKind::Compiler => "compiler",
+        solgrid_diagnostics::FindingKind::Lint => "lint",
+        solgrid_diagnostics::FindingKind::Detector => "detector",
+    }
+}
+
+fn confidence_label(confidence: solgrid_diagnostics::Confidence) -> &'static str {
+    match confidence {
+        solgrid_diagnostics::Confidence::Low => "low",
+        solgrid_diagnostics::Confidence::Medium => "medium",
+        solgrid_diagnostics::Confidence::High => "high",
+    }
+}
+
 /// Check if a position falls within a range.
 fn position_in_range(position: &ls_types::Position, range: &ls_types::Range) -> bool {
     if position.line < range.start.line || position.line > range.end.line {
@@ -655,10 +761,17 @@ fn position_in_range(position: &ls_types::Position, range: &ls_types::Range) -> 
     if position.line == range.start.line && position.character < range.start.character {
         return false;
     }
-    if position.line == range.end.line && position.character > range.end.character {
+    if position.line == range.end.line && position.character >= range.end.character {
         return false;
     }
     true
+}
+
+fn diagnostic_range_key(range: &ls_types::Range) -> (u32, u32) {
+    (
+        range.end.line.saturating_sub(range.start.line),
+        range.end.character.saturating_sub(range.start.character),
+    )
 }
 
 #[cfg(test)]
@@ -674,11 +787,25 @@ mod tests {
         };
         assert!(position_in_range(&ls_types::Position::new(1, 5), &range));
         assert!(position_in_range(&ls_types::Position::new(1, 10), &range));
-        assert!(position_in_range(&ls_types::Position::new(1, 15), &range));
+        assert!(!position_in_range(&ls_types::Position::new(1, 15), &range));
         assert!(!position_in_range(&ls_types::Position::new(0, 5), &range));
         assert!(!position_in_range(&ls_types::Position::new(1, 4), &range));
         assert!(!position_in_range(&ls_types::Position::new(1, 16), &range));
         assert!(!position_in_range(&ls_types::Position::new(2, 5), &range));
+    }
+
+    #[test]
+    fn test_diagnostic_range_key_prefers_narrower_ranges() {
+        let wide = ls_types::Range {
+            start: ls_types::Position::new(3, 8),
+            end: ls_types::Position::new(3, 14),
+        };
+        let narrow = ls_types::Range {
+            start: ls_types::Position::new(3, 9),
+            end: ls_types::Position::new(3, 13),
+        };
+
+        assert!(diagnostic_range_key(&narrow) < diagnostic_range_key(&wide));
     }
 
     #[test]
@@ -696,6 +823,27 @@ mod tests {
         assert!(doc.contains("security/tx-origin"));
         assert!(doc.contains("Avoid using tx.origin"));
         assert!(doc.contains("not available"));
+        assert!(doc.contains("solgrid-disable-next-line"));
+    }
+
+    #[test]
+    fn test_format_finding_documentation() {
+        let finding = FindingMeta {
+            id: "security/unchecked-low-level-call".into(),
+            title: "Unchecked low-level call".into(),
+            category: "security".into(),
+            severity: Severity::Warning,
+            kind: solgrid_diagnostics::FindingKind::Detector,
+            confidence: Some(solgrid_diagnostics::Confidence::High),
+            help_url: None,
+            suppressible: true,
+            has_fix: false,
+        };
+
+        let doc = format_finding_documentation(&finding);
+        assert!(doc.contains("security/unchecked-low-level-call"));
+        assert!(doc.contains("detector"));
+        assert!(doc.contains("high"));
         assert!(doc.contains("solgrid-disable-next-line"));
     }
 
@@ -734,6 +882,49 @@ mod tests {
         let lsp_diags = vec![];
         let hover = hover_for_diagnostic(&engine, &lsp_diags, &ls_types::Position::new(0, 0));
         assert!(hover.is_none());
+    }
+
+    #[test]
+    fn test_hover_for_metadata_backed_diagnostic() {
+        let engine = LintEngine::new();
+        let lsp_diags = vec![ls_types::Diagnostic {
+            range: ls_types::Range {
+                start: ls_types::Position::new(4, 8),
+                end: ls_types::Position::new(4, 12),
+            },
+            severity: Some(ls_types::DiagnosticSeverity::WARNING),
+            code: Some(ls_types::NumberOrString::String(
+                "security/unchecked-low-level-call".into(),
+            )),
+            source: Some("solgrid".into()),
+            message: "low-level `.call()` result is ignored".into(),
+            data: Some(
+                serde_json::to_value(FindingMeta {
+                    id: "security/unchecked-low-level-call".into(),
+                    title: "Unchecked low-level call".into(),
+                    category: "security".into(),
+                    severity: Severity::Warning,
+                    kind: solgrid_diagnostics::FindingKind::Detector,
+                    confidence: Some(solgrid_diagnostics::Confidence::High),
+                    help_url: None,
+                    suppressible: true,
+                    has_fix: false,
+                })
+                .unwrap(),
+            ),
+            ..Default::default()
+        }];
+
+        let hover = hover_for_diagnostic(&engine, &lsp_diags, &ls_types::Position::new(4, 10));
+        assert!(hover.is_some());
+        let hover = hover.unwrap();
+        match hover.contents {
+            ls_types::HoverContents::Markup(markup) => {
+                assert!(markup.value.contains("unchecked-low-level-call"));
+                assert!(markup.value.contains("detector"));
+            }
+            _ => panic!("expected markup content"),
+        }
     }
 
     fn noop_uri() -> ls_types::Uri {
@@ -1932,6 +2123,69 @@ contract Vault {
         assert!(
             val.contains("Thrown when the balance is insufficient"),
             "should show NatSpec, got: {val}"
+        );
+    }
+
+    #[test]
+    fn test_hover_inherited_interface_error_natspec() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let interface_path = dir.path().join("IRentPriceOracle.sol");
+        let interface_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IRentPriceOracle {
+    /// @notice Thrown when the rent label is not valid.
+    /// @param label The invalid rent label
+    error NotValid(string label);
+}
+"#;
+        std::fs::write(&interface_path, interface_source).unwrap();
+
+        let main_source = r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {IRentPriceOracle} from "./IRentPriceOracle.sol";
+
+contract StandardRentPriceOracle is IRentPriceOracle {
+    function fail(string calldata label) external {
+        revert NotValid(label);
+    }
+}
+"#;
+        let main_path = dir.path().join("StandardRentPriceOracle.sol");
+        std::fs::write(&main_path, main_source).unwrap();
+
+        let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
+        let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
+        let get_source =
+            |path: &std::path::Path| -> Option<String> { std::fs::read_to_string(path).ok() };
+
+        let offset = main_source.find("revert NotValid").unwrap() + 7;
+        let pos = convert::offset_to_position(main_source, offset);
+
+        let hover = hover_for_symbol(main_source, &pos, &uri, &get_source, &resolver);
+        assert!(
+            hover.is_some(),
+            "should resolve inherited interface error hover"
+        );
+
+        let val = match hover.unwrap().contents {
+            ls_types::HoverContents::Markup(m) => m.value,
+            _ => panic!("expected markup"),
+        };
+
+        assert!(
+            val.contains("error NotValid(string label)"),
+            "should show inherited error signature, got: {val}"
+        );
+        assert!(
+            val.contains("Thrown when the rent label is not valid"),
+            "should show inherited error NatSpec, got: {val}"
+        );
+        assert!(
+            val.contains("The invalid rent label"),
+            "should show inherited error param NatSpec, got: {val}"
         );
     }
 

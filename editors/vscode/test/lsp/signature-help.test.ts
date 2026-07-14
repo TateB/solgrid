@@ -57,10 +57,10 @@ describe("LSP Signature Help", () => {
     });
 
     expect(help).toBeTruthy();
-    expect(help!.signatures[0].label).toContain(
+    expect(help?.signatures[0].label).toContain(
       "function transfer(address recipient, uint256 amount, string memory note) public"
     );
-    expect(help!.activeParameter).toBe(1);
+    expect(help?.activeParameter).toBe(1);
   });
 
   it("returns signature help for contract member calls", async () => {
@@ -95,10 +95,10 @@ describe("LSP Signature Help", () => {
     });
 
     expect(help).toBeTruthy();
-    expect(help!.signatures[0].label).toContain(
+    expect(help?.signatures[0].label).toContain(
       "function update(uint256 count, address owner) public"
     );
-    expect(help!.activeParameter).toBe(1);
+    expect(help?.activeParameter).toBe(1);
   });
 
   it("returns signature help for constructors and builtins", async () => {
@@ -148,13 +148,13 @@ describe("LSP Signature Help", () => {
     });
 
     expect(constructorHelp).toBeTruthy();
-    expect(constructorHelp!.signatures[0].label).toContain(
+    expect(constructorHelp?.signatures[0].label).toContain(
       "constructor(uint256 count, address owner)"
     );
-    expect(constructorHelp!.activeParameter).toBe(1);
+    expect(constructorHelp?.activeParameter).toBe(1);
 
     expect(builtinHelp).toBeTruthy();
-    expect(builtinHelp!.signatures[0].label).toContain("require(");
-    expect(builtinHelp!.activeParameter).toBe(1);
+    expect(builtinHelp?.signatures[0].label).toContain("require(");
+    expect(builtinHelp?.activeParameter).toBe(1);
   });
 });

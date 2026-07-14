@@ -4,6 +4,7 @@
 
 pub mod natspec;
 pub mod resolve;
+pub mod selectors;
 pub mod symbols;
 
 pub use solgrid_parser::solar_ast;

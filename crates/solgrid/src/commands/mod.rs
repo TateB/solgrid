@@ -2,6 +2,7 @@ pub mod check;
 pub mod explain;
 pub mod fix;
 pub mod fmt;
+pub mod graph;
 pub mod list_rules;
 pub mod migrate;
 

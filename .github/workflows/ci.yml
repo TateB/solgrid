@@ -97,6 +97,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter solgrid-vscode run lint:ci
       - run: pnpm --filter solgrid-vscode run compile
       - run: pnpm --filter solgrid-vscode test
 
@@ -140,9 +141,13 @@ jobs:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
   vscode-e2e-tests:
-    name: VSCode E2E Tests
+    name: VSCode E2E Tests (${{ matrix.vscode-version }})
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vscode-version: ["1.82.3", "stable"]
     steps:
       - uses: actions/checkout@v4
       # Download pre-built binary
@@ -161,7 +166,7 @@ jobs:
       # Build and run e2e tests
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter solgrid-vscode run compile:tests
-      - run: xvfb-run -a node editors/vscode/out/test/e2e/run.js
+      - run: xvfb-run -a node editors/vscode/out/test/e2e/run.js --vscode-version "${{ matrix.vscode-version }}"
         env:
           SOLGRID_BIN: ${{ github.workspace }}/target/release/solgrid
 
@@ -191,6 +196,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93
+      - name: Test version tooling
+        run: bash scripts/version_test.sh
       - name: Verify versions are in sync
         run: bash scripts/version.sh
 

@@ -4,23 +4,42 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish (vX.Y.Z)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   BINARY_NAME: solgrid
   NODE_VERSION: 24.14.0
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   validate-version:
     name: Validate tag version
     runs-on: ubuntu-latest
     steps:
+      - name: Verify release tag context
+        run: |
+          if ! echo "$RELEASE_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: Stable release tag must use vX.Y.Z format, got: $RELEASE_TAG" >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@1.93
       - name: Check tag matches Cargo.toml version
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${RELEASE_TAG#v}"
           CARGO_VERSION=$(grep -A5 '^\[workspace\.package\]' Cargo.toml | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "Tag version:   $TAG_VERSION"
           echo "Cargo version: $CARGO_VERSION"
@@ -31,7 +50,7 @@ jobs:
       - name: Verify all package versions are in sync
         run: bash scripts/version.sh
       - name: Verify changelog has entry for this version
-        run: bash scripts/changelog.sh --check "${GITHUB_REF_NAME#v}"
+        run: bash scripts/changelog.sh --check "${RELEASE_TAG#v}"
 
   build:
     name: Build ${{ matrix.vscode-target }}
@@ -80,6 +99,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: dtolnay/rust-toolchain@1.93
         with:
@@ -89,7 +110,7 @@ jobs:
 
       # Build the Rust binary
       - name: Build binary
-        run: cargo build --release --target ${{ matrix.rust-target }} -p ${{ env.BINARY_NAME }}
+        run: cargo build --locked --release --target ${{ matrix.rust-target }} -p ${{ env.BINARY_NAME }}
 
       # Stage standalone binary
       - name: Stage binary
@@ -109,12 +130,14 @@ jobs:
       - name: Stage extension binary
         shell: bash
         run: |
-          mkdir -p editors/vscode/bin
+          mkdir -p "editors/vscode/bin/${{ matrix.vscode-target }}"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" editors/vscode/bin/
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}.exe" \
+               "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}.exe"
           else
-            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" editors/vscode/bin/
-            chmod +x "editors/vscode/bin/${{ env.BINARY_NAME }}"
+            cp "target/${{ matrix.rust-target }}/release/${{ env.BINARY_NAME }}" \
+               "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}"
+            chmod +x "editors/vscode/bin/${{ matrix.vscode-target }}/${{ env.BINARY_NAME }}"
           fi
 
       # Build and package VSCode extension
@@ -128,7 +151,7 @@ jobs:
       - run: pnpm --filter solgrid-vscode run compile
       - name: Package VSIX
         working-directory: editors/vscode
-        run: npx @vscode/vsce package --no-dependencies --target ${{ matrix.vscode-target }}
+        run: node scripts/package-vsix.cjs --target ${{ matrix.vscode-target }}
 
       # Upload standalone binary
       - uses: actions/upload-artifact@v4
@@ -180,6 +203,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@v4
         with:
@@ -188,7 +213,7 @@ jobs:
       - name: Extract release notes from CHANGELOG.md
         id: release-notes
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           BODY=$(bash scripts/changelog.sh --extract "$VERSION")
           # Use GH Actions delimiter for multiline output
           echo "body<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
@@ -228,6 +253,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           body: ${{ steps.release-notes.outputs.body }}
           files: |
             release/solgrid-*
@@ -263,6 +289,8 @@ jobs:
       NPM_CONFIG_PROVENANCE: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -315,6 +343,8 @@ jobs:
       NPM_CONFIG_PROVENANCE: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4

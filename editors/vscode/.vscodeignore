@@ -2,8 +2,13 @@
 .vscode-test/**
 src/**
 test/**
+out/**
+!out/extension.js
+scripts/**
 node_modules/**
 .gitignore
+esbuild.mjs
+biome.json
 tsconfig.json
 tsconfig.test.json
 vitest.config.ts
@@ -11,5 +16,7 @@ vitest.config.ts
 **/.eslintrc*
 
 # Include the bundled binary for platform-specific VSIX
+bin/**
 !bin/
-!bin/**
+!bin/solgrid
+!bin/solgrid.exe

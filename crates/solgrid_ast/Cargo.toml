@@ -11,6 +11,7 @@ solgrid_config = { workspace = true }
 solgrid_parser = { workspace = true }
 solar-ast = { workspace = true }
 solar-interface = { workspace = true }
+sha3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -11,9 +11,9 @@ use crate::definition::uri_to_path;
 use crate::resolve::ImportResolver;
 use crate::semantic;
 use crate::symbols::{self, ImportedSymbols, SymbolKind};
-use crate::workspace_index::WorkspaceIndex;
 use crate::{builtins, convert};
 use solgrid_linter::LintEngine;
+use solgrid_project::ProjectIndex;
 use std::collections::HashSet;
 use std::path::Path;
 use tower_lsp_server::ls_types;
@@ -105,7 +105,7 @@ pub fn completions(
     uri: &ls_types::Uri,
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
-    workspace_index: &WorkspaceIndex,
+    project_index: &ProjectIndex,
 ) -> Vec<ls_types::CompletionItem> {
     // 1. Check for suppression comment context first.
     let suppression = suppression_completions(engine, source, position);
@@ -129,7 +129,7 @@ pub fn completions(
     }
 
     // 3. General identifier completions.
-    identifier_completions(source, offset, uri, get_source, resolver, workspace_index)
+    identifier_completions(source, offset, uri, get_source, resolver, project_index)
 }
 
 // ── Dot completions ────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ fn identifier_completions(
     uri: &ls_types::Uri,
     get_source: &dyn Fn(&Path) -> Option<String>,
     resolver: &ImportResolver,
-    workspace_index: &WorkspaceIndex,
+    project_index: &ProjectIndex,
 ) -> Vec<ls_types::CompletionItem> {
     // Try parsing the original source first, then fall back to a patched version.
     let table = match symbols::build_symbol_table(source, "buffer.sol") {
@@ -442,7 +442,7 @@ fn identifier_completions(
 
     // e) Auto-import candidates from workspace index.
     if let Some(current_path) = uri_to_path(uri) {
-        for entry in workspace_index.symbols_matching("") {
+        for entry in project_index.symbols_matching("") {
             // Skip symbols from the current file.
             if entry.file_path == current_path {
                 continue;
@@ -736,11 +736,10 @@ fn get_line_text(source: &str, line: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace_index::WorkspaceIndex;
     use std::fs;
 
-    fn empty_index() -> WorkspaceIndex {
-        WorkspaceIndex::new()
+    fn empty_index() -> ProjectIndex {
+        ProjectIndex::new(None)
     }
 
     fn noop_resolver() -> ImportResolver {
@@ -1172,7 +1171,7 @@ contract Main {}
 "#;
         fs::write(&main_path, main_source).unwrap();
 
-        let index = WorkspaceIndex::build(dir.path());
+        let index = ProjectIndex::build(dir.path());
         let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
         let engine = LintEngine::new();
         let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));
@@ -1235,7 +1234,7 @@ contract Main is Token {}
 "#;
         fs::write(&main_path, main_source).unwrap();
 
-        let index = WorkspaceIndex::build(dir.path());
+        let index = ProjectIndex::build(dir.path());
         let uri = ls_types::Uri::from_file_path(&main_path).unwrap();
         let engine = LintEngine::new();
         let resolver = ImportResolver::new(Some(dir.path().to_path_buf()));

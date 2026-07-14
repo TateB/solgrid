@@ -14,10 +14,12 @@ import {
   openDocument,
   requestFormatting,
   waitForDiagnostics,
+  waitForNextDiagnostics,
   requestWillSaveWaitUntil,
   readFixture,
   fixtureUri,
   resetDocumentVersions,
+  requireDefined,
 } from "./helpers";
 
 describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
@@ -49,10 +51,17 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
 
     const edits = await requestWillSaveWaitUntil(client, uri);
 
-    // fixable.sol has `uint` which may be fixed to `uint256`
-    // Also may include formatting edits
-    // The important thing is no crash
-    expect(edits === null || Array.isArray(edits)).toBe(true);
+    // fixable.sol has `uint` declarations that the configured safe fixes
+    // canonicalize to `uint256` (alongside any formatting changes).
+    expect(edits).not.toBeNull();
+    expect(edits?.length).toBeGreaterThan(0);
+    const fixed = applyEdits(
+      content,
+      requireDefined(edits, "will-save edits")
+    );
+    expect(fixed).toContain("uint256 public x;");
+    expect(fixed).toContain("uint256 public y;");
+    expect(fixed).toContain("uint256 public z;");
   });
 
   it("returns formatting edits for unformatted file", async () => {
@@ -60,15 +69,15 @@ describe("LSP Will-Save (fix-on-save + format-on-save)", () => {
     const content = readFixture("needs_formatting.sol");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     const edits = await requestWillSaveWaitUntil(client, uri);
 
     // Unformatted file should get formatting edits on save
-    if (edits && edits.length > 0) {
-      expect(edits[0].range).toBeDefined();
-      expect(edits[0].newText).toBeDefined();
-    }
+    expect(edits).not.toBeNull();
+    expect(edits?.length).toBeGreaterThan(0);
+    expect(edits?.[0].range).toBeDefined();
+    expect(edits?.[0].newText).toBeDefined();
   });
 
   it("applies import formatting and ordering in one save edit", async () => {
@@ -224,14 +233,12 @@ contract Test {
     const content = readFixture("clean.sol");
 
     openDocument(client, uri, content);
-    await waitForDiagnostics(client, uri).catch(() => {});
+    await waitForDiagnostics(client, uri);
 
     // Get willSaveWaitUntil result
     const edits = await requestWillSaveWaitUntil(client, uri);
 
-    // If edits are returned, they should be meaningful
-    // A truly clean+formatted file would return null
-    expect(edits === null || Array.isArray(edits)).toBe(true);
+    expect(edits).toBeNull();
   });
 });
 
@@ -277,7 +284,7 @@ describe("LSP Configuration Change", () => {
     await waitForDiagnostics(client, uri);
 
     // Send config change — should trigger re-lint
-    const reLintPromise = waitForDiagnostics(client, uri);
+    const reLintPromise = waitForNextDiagnostics(client, uri);
     client.notify("workspace/didChangeConfiguration", {
       settings: {
         fixOnSave: true,
@@ -323,7 +330,7 @@ describe("LSP Configuration Change", () => {
     await waitForDiagnostics(client, uri);
 
     // Send didSave — should trigger re-lint
-    const reLintPromise = waitForDiagnostics(client, uri);
+    const reLintPromise = waitForNextDiagnostics(client, uri);
     client.notify("textDocument/didSave", {
       textDocument: { uri },
       text: content,

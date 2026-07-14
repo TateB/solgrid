@@ -1,22 +1,202 @@
-import { workspace, ExtensionContext, window } from "vscode";
 import {
+  commands,
+  type ExtensionContext,
+  languages,
+  Location,
+  Position,
+  Range,
+  StatusBarAlignment,
+  type StatusBarItem,
+  ThemeColor,
+  Uri,
+  window,
+  workspace,
+} from "vscode";
+import {
+  type CodeAction as ProtocolCodeAction,
+  type CodeActionParams,
+  type Command as ProtocolCommand,
   LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
+  type LanguageClientOptions,
+  type ServerOptions,
+  State as LanguageClientState,
 } from "vscode-languageclient/node";
 import {
-  EditorSaveConfig,
-  SolgridConfig,
+  type CoverageExtensionConfig,
+  DEFAULT_COVERAGE_CONFIG,
+  type EditorSaveConfig,
+  type SolgridConfig,
   getServerPath,
   getInitializationOptions,
   getSettings,
 } from "./config";
+import {
+  CoverageOverviewFeature,
+  type CoverageOverviewNode,
+} from "./coverageOverview";
+import { runCoverageCommand, runPreferredCoverageCommand } from "./coverageRun";
+import {
+  applyGroupFixes,
+  applyFindingFix,
+  applyFindingFixForTests,
+  clearIgnoredBaselinesWithConfirmation,
+  openFindingHelp,
+  openSecurityFinding,
+  previewFindingFix,
+  type SecurityOverviewNode,
+  SecurityOverviewProvider,
+  setSecurityCodeActionResolver,
+  suppressGroupNextLine,
+  suppressFindingNextLine,
+} from "./securityOverview";
+import type { SecurityOverviewFindingNode } from "./securityOverviewModel";
+import {
+  activeImportsGraphArgs,
+  getGraphPreviewSnapshot,
+  showGraph,
+} from "./graphPreview";
+import {
+  LanguageServerLifecycle,
+  type LanguageServerLifecycleUpdate,
+} from "./languageServerLifecycle";
+import {
+  requestSecurityAnalysisRerun,
+  SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE,
+} from "./securityAnalysisRerun";
+import { refreshTreeWhenVisible } from "./treeVisibility";
 
 let client: LanguageClient | undefined;
 
+interface ReferenceLensArgs {
+  locations?: ReferenceLocationArg[];
+  position?: {
+    character: number;
+    line: number;
+  };
+  uri?: string;
+}
+
+interface ReferenceLocationArg {
+  range: {
+    end: {
+      character: number;
+      line: number;
+    };
+    start: {
+      character: number;
+      line: number;
+    };
+  };
+  uri: string;
+}
+
+interface ProjectIndexStatus {
+  durationMs?: number | null;
+  files?: number;
+  state?: string;
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const solgridConfig = readVSCodeConfig();
+  let coverageConfig = readCoverageConfig();
   const editorSaveConfig = readEditorSaveConfig();
+
+  const coverageOverview = new CoverageOverviewFeature();
+  const coverageOverviewView = window.createTreeView<CoverageOverviewNode>(
+    "solgridCoverageOverview",
+    {
+      treeDataProvider: coverageOverview,
+      showCollapseAll: true,
+    }
+  );
+  coverageOverview.attachView(coverageOverviewView);
+  applyCoverageConfig(coverageOverview, coverageConfig);
+  context.subscriptions.push(
+    coverageOverview,
+    coverageOverviewView,
+    coverageOverviewView.onDidChangeVisibility((event) =>
+      refreshTreeWhenVisible(event.visible, coverageOverview)
+    ),
+    commands.registerCommand("solgrid.coverage.refresh", () =>
+      coverageOverview.refresh()
+    ),
+    commands.registerCommand("solgrid.coverage.run", () =>
+      runPreferredCoverageCommand(coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runFoundryLcov", () =>
+      runCoverageCommand("foundry-lcov", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runHardhatLcov", () =>
+      runCoverageCommand("hardhat-lcov", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.runCustom", () =>
+      runCoverageCommand("custom", coverageConfig, () =>
+        coverageOverview.refresh()
+      )
+    ),
+    commands.registerCommand("solgrid.coverage.showActionable", () =>
+      coverageOverview.setFilterMode("actionable")
+    ),
+    commands.registerCommand("solgrid.coverage.showAll", () =>
+      coverageOverview.setFilterMode("all")
+    ),
+    commands.registerCommand("solgrid.coverage.openNode", (node) =>
+      coverageOverview.openNode(node)
+    ),
+    commands.registerCommand("_solgrid.test.getCoverageOverviewSnapshot", async () =>
+      snapshotCoverageOverview(coverageOverview)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.findCoverageOverviewNode",
+      async (criteria) => findCoverageOverviewNode(coverageOverview, criteria)
+    ),
+    workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("solgrid.coverage")) {
+        return;
+      }
+      coverageConfig = readCoverageConfig();
+      applyCoverageConfig(coverageOverview, coverageConfig);
+    })
+  );
+
+  const activatedWithLanguageServer = solgridConfig.enable;
+  await commands.executeCommand(
+    "setContext",
+    "solgrid.languageServerActive",
+    false
+  );
+  let enableReloadPromptOpen = false;
+  context.subscriptions.push(
+    workspace.onDidChangeConfiguration(async (event) => {
+      if (
+        !event.affectsConfiguration("solgrid.enable") ||
+        readVSCodeConfig().enable === activatedWithLanguageServer ||
+        enableReloadPromptOpen
+      ) {
+        return;
+      }
+      enableReloadPromptOpen = true;
+      try {
+        const action = await window.showInformationMessage(
+          activatedWithLanguageServer
+            ? "Reload VS Code to stop the solgrid language server."
+            : "Reload VS Code to start the solgrid language server.",
+          "Reload Window"
+        );
+        if (action === "Reload Window") {
+          await commands.executeCommand("workbench.action.reloadWindow");
+        }
+      } finally {
+        enableReloadPromptOpen = false;
+      }
+    })
+  );
 
   if (!solgridConfig.enable) {
     return;
@@ -32,14 +212,58 @@ export async function activate(context: ExtensionContext): Promise<void> {
     args: ["server"],
   };
 
+  const fileWatchers = [
+    workspace.createFileSystemWatcher("**/*.sol"),
+    workspace.createFileSystemWatcher("**/solgrid.toml"),
+    workspace.createFileSystemWatcher("**/foundry.toml"),
+    workspace.createFileSystemWatcher("**/remappings.txt"),
+  ];
+  context.subscriptions.push(...fileWatchers);
+
+  const securityOverview = new SecurityOverviewProvider(context.workspaceState);
+  securityOverview.beginAnalysis();
+  const securityOverviewView = window.createTreeView<SecurityOverviewNode>(
+    "solgridSecurityOverview",
+    {
+      treeDataProvider: securityOverview,
+      showCollapseAll: true,
+    }
+  );
+  securityOverview.attachView(securityOverviewView);
+  context.subscriptions.push(
+    securityOverviewView,
+    securityOverviewView.onDidChangeVisibility((event) =>
+      refreshTreeWhenVisible(event.visible, securityOverview)
+    )
+  );
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "solidity" }],
     synchronize: {
       configurationSection: "solgrid",
-      fileEvents: workspace.createFileSystemWatcher("**/solgrid.toml"),
+      fileEvents: fileWatchers,
     },
     initializationOptions: getInitializationOptions(solgridConfig, editorSaveConfig),
     middleware: {
+      provideDocumentFormattingEdits: (document, options, token, next) =>
+        next(
+          document,
+          options ?? fallbackFormattingOptions(document.uri),
+          token
+        ),
+      provideDocumentRangeFormattingEdits: (
+        document,
+        range,
+        options,
+        token,
+        next
+      ) =>
+        next(
+          document,
+          range,
+          options ?? fallbackFormattingOptions(document.uri),
+          token
+        ),
       workspace: {
         configuration: async (params, token, next) => {
           const result = await next(params, token);
@@ -56,7 +280,243 @@ export async function activate(context: ExtensionContext): Promise<void> {
     clientOptions
   );
 
+  setSecurityCodeActionResolver(async (finding) => {
+    if (!client) {
+      return [];
+    }
+    const uri = Uri.parse(finding.uri);
+    const range = new Range(
+      new Position(finding.range.start.line, finding.range.start.character),
+      new Position(finding.range.end.line, finding.range.end.character)
+    );
+    const diagnostic = languages.getDiagnostics(uri).find((candidate) => {
+      const code =
+        typeof candidate.code === "object" && candidate.code !== null
+          ? candidate.code.value
+          : candidate.code;
+      return (
+        candidate.source === finding.source &&
+        String(code) === finding.code &&
+        candidate.range.isEqual(range)
+      );
+    });
+    if (!diagnostic) {
+      return [];
+    }
+
+    const params: CodeActionParams = {
+      textDocument: { uri: finding.uri },
+      range: client.code2ProtocolConverter.asRange(range),
+      context: {
+        diagnostics: [client.code2ProtocolConverter.asDiagnostic(diagnostic)],
+        only: ["quickfix"],
+        triggerKind: 1,
+      },
+    };
+    try {
+      const protocolActions = await client.sendRequest<
+        Array<ProtocolCodeAction | ProtocolCommand> | null
+      >(
+        "textDocument/codeAction",
+        params
+      );
+      return protocolActions
+        ? await client.protocol2CodeConverter.asCodeActionResult(protocolActions)
+        : [];
+    } catch {
+      return [];
+    }
+  });
+
   client.outputChannel.appendLine(`Using solgrid binary: ${serverPath}`);
+
+  const projectIndexStatus = window.createStatusBarItem(
+    StatusBarAlignment.Left,
+    100
+  );
+  projectIndexStatus.name = "solgrid workspace index";
+  projectIndexStatus.text = "$(sync~spin) solgrid: starting";
+  projectIndexStatus.tooltip = "Starting the solgrid language server.";
+  projectIndexStatus.show();
+  context.subscriptions.push(projectIndexStatus);
+
+  const languageServerLifecycle = new LanguageServerLifecycle();
+  client.onNotification("solgrid/projectIndexStatus", (status: ProjectIndexStatus) => {
+    if (!languageServerLifecycle.recordProjectIndexStatus()) {
+      return;
+    }
+    if (status.state === "building") {
+      securityOverview.beginAnalysis();
+    } else {
+      securityOverview.completeAnalysis();
+    }
+    updateProjectIndexStatus(projectIndexStatus, status);
+  });
+
+  context.subscriptions.push(
+    client.onDidChangeState((event) => {
+      const update = languageServerLifecycle.stateChanged(
+        event.newState === LanguageClientState.Starting
+          ? "starting"
+          : event.newState === LanguageClientState.Running
+            ? "running"
+            : "stopped"
+      );
+      applyLanguageServerLifecycleUpdate(
+        update,
+        projectIndexStatus,
+        securityOverview
+      );
+      if (update.status === "unavailable") {
+        updateLanguageServerUnavailableStatus(
+          projectIndexStatus,
+          "The solgrid language server stopped. Click to check the configured binary, then reload VS Code."
+        );
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    languages.onDidChangeDiagnostics((event) => {
+      for (const uri of event.uris) {
+        securityOverview.updateFromDiagnostics({
+          uri: uri.toString(),
+          diagnostics: languages.getDiagnostics(uri).map((diagnostic) => ({
+            range: diagnostic.range,
+            severity: diagnostic.severity,
+            code:
+              typeof diagnostic.code === "object" &&
+              diagnostic.code !== null &&
+              "value" in diagnostic.code
+                ? diagnostic.code.value
+                : diagnostic.code,
+            source: diagnostic.source,
+            message: diagnostic.message,
+            data: (diagnostic as typeof diagnostic & { data?: unknown }).data,
+          })),
+        });
+      }
+    }),
+    commands.registerCommand("solgrid.securityOverview.refresh", async () => {
+      await rerunSecurityAnalysis(securityOverview);
+    }),
+    commands.registerCommand("solgrid.securityOverview.groupByFile", () =>
+      securityOverview.setGroupMode("file")
+    ),
+    commands.registerCommand("solgrid.securityOverview.groupBySeverity", () =>
+      securityOverview.setGroupMode("severity")
+    ),
+    commands.registerCommand("solgrid.securityOverview.groupByConfidence", () =>
+      securityOverview.setGroupMode("confidence")
+    ),
+    commands.registerCommand("solgrid.securityOverview.groupByFinding", () =>
+      securityOverview.setGroupMode("finding")
+    ),
+    commands.registerCommand("solgrid.securityOverview.showSecurity", () =>
+      securityOverview.setFilterMode("security")
+    ),
+    commands.registerCommand("solgrid.securityOverview.showAll", () =>
+      securityOverview.setFilterMode("all")
+    ),
+    commands.registerCommand("solgrid.securityOverview.showCompiler", () =>
+      securityOverview.setFilterMode("compiler")
+    ),
+    commands.registerCommand("solgrid.securityOverview.showDetectors", () =>
+      securityOverview.setFilterMode("detector")
+    ),
+    commands.registerCommand("solgrid.securityOverview.openFinding", openSecurityFinding),
+    commands.registerCommand("solgrid.securityOverview.openHelp", openFindingHelp),
+    commands.registerCommand("solgrid.securityOverview.applyFix", applyFindingFix),
+    commands.registerCommand("solgrid.securityOverview.applyGroupFixes", applyGroupFixes),
+    commands.registerCommand("solgrid.graph.show", (args) => showGraph(client, args)),
+    commands.registerCommand("solgrid.showReferences", showReferences),
+    commands.registerCommand("solgrid.graph.showImports", async () => {
+      const args = activeImportsGraphArgs();
+      if (args) {
+        await showGraph(client, args);
+      }
+    }),
+    commands.registerCommand("_solgrid.test.getGraphPreviewSnapshot", () =>
+      getGraphPreviewSnapshot()
+    ),
+    commands.registerCommand("_solgrid.test.getSecurityOverviewSnapshot", async () =>
+      snapshotSecurityOverview(securityOverview)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.findSecurityOverviewFinding",
+      async (criteria) => findSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand("_solgrid.test.resetSecurityOverviewState", () =>
+      securityOverview.resetForTests()
+    ),
+    commands.registerCommand("_solgrid.test.getSecurityOverviewDebugState", () =>
+      securityOverview.debugStateForTests()
+    ),
+    commands.registerCommand(
+      "_solgrid.test.ignoreSecurityOverviewGroup",
+      async (criteria) =>
+        ignoreSecurityOverviewGroup(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.restoreSecurityOverviewGroup",
+      async (criteria) =>
+        restoreSecurityOverviewGroup(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.applySecurityOverviewGroupFixes",
+      async (criteria) =>
+        applySecurityOverviewGroupFixes(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.suppressSecurityOverviewGroupNextLine",
+      async (criteria) =>
+        suppressSecurityOverviewGroupNextLine(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.ignoreSecurityOverviewFinding",
+      async (criteria) =>
+        ignoreSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.restoreSecurityOverviewFinding",
+      async (criteria) =>
+        restoreSecurityOverviewFinding(securityOverview, criteria)
+    ),
+    commands.registerCommand(
+      "_solgrid.test.previewSecurityOverviewFix",
+      previewFindingFix
+    ),
+    commands.registerCommand(
+      "_solgrid.test.applySecurityOverviewFix",
+      applyFindingFixForTests
+    ),
+    commands.registerCommand("solgrid.securityOverview.ignoreFinding", (node) =>
+      securityOverview.ignoreFinding(node)
+    ),
+    commands.registerCommand("solgrid.securityOverview.restoreFinding", (node) =>
+      securityOverview.restoreFinding(node)
+    ),
+    commands.registerCommand("solgrid.securityOverview.ignoreGroup", (node) =>
+      securityOverview.ignoreGroup(node)
+    ),
+    commands.registerCommand("solgrid.securityOverview.restoreGroup", (node) =>
+      securityOverview.restoreGroup(node)
+    ),
+    commands.registerCommand("solgrid.securityOverview.toggleShowIgnored", () =>
+      securityOverview.toggleShowIgnoredBaselines()
+    ),
+    commands.registerCommand("solgrid.securityOverview.clearIgnoredBaselines", () =>
+      clearIgnoredBaselinesWithConfirmation(securityOverview)
+    ),
+    commands.registerCommand(
+      "solgrid.securityOverview.suppressNextLine",
+      suppressFindingNextLine
+    ),
+    commands.registerCommand(
+      "solgrid.securityOverview.suppressGroupNextLine",
+      suppressGroupNextLine
+    )
+  );
 
   // Watch for configuration changes
   context.subscriptions.push(
@@ -75,31 +535,208 @@ export async function activate(context: ExtensionContext): Promise<void> {
     })
   );
 
-  // Register willSaveTextDocument for fix-on-save and format-on-save
-  context.subscriptions.push(
-    workspace.onWillSaveTextDocument((e) => {
-      if (e.document.languageId !== "solidity") {
-        return;
-      }
-      // The LSP server handles willSaveWaitUntil for fix-on-save + format-on-save
-    })
-  );
-
   try {
     await client.start();
-  } catch (error) {
-    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
-    window.showErrorMessage(
-      `Failed to start solgrid language server: ${error}`
+    if (!client.isRunning()) {
+      throw new Error("the language client stopped before startup completed");
+    }
+    applyLanguageServerLifecycleUpdate(
+      languageServerLifecycle.initialStartSucceeded(),
+      projectIndexStatus,
+      securityOverview
     );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[solgrid] Failed to start language server at "${serverPath}":`, error);
+    const failedClient = client;
+    applyLanguageServerLifecycleUpdate(
+      languageServerLifecycle.initialStartFailed(),
+      projectIndexStatus,
+      securityOverview
+    );
+    setSecurityCodeActionResolver(undefined);
+    updateLanguageServerUnavailableStatus(
+      projectIndexStatus,
+      `Failed to start the solgrid language server at ${serverPath}: ${detail}. Click to configure solgrid.path, then reload VS Code.`
+    );
+    await disposeFailedLanguageClient(failedClient);
+    if (client === failedClient) {
+      client = undefined;
+    }
+    void window
+      .showErrorMessage(
+        `Failed to start solgrid language server: ${detail}`,
+        "Open Settings",
+        "Reload Window"
+      )
+      .then(async (action) => {
+        if (action === "Open Settings") {
+          await commands.executeCommand(
+            "workbench.action.openSettings",
+            "solgrid.path"
+          );
+        } else if (action === "Reload Window") {
+          await commands.executeCommand("workbench.action.reloadWindow");
+        }
+      });
   }
 }
 
 export async function deactivate(): Promise<void> {
+  setSecurityCodeActionResolver(undefined);
+  await commands.executeCommand(
+    "setContext",
+    "solgrid.languageServerActive",
+    false
+  );
   if (client) {
     await client.stop();
     client = undefined;
   }
+}
+
+async function showReferences(args?: ReferenceLensArgs): Promise<void> {
+  const activeEditor = window.activeTextEditor;
+  const uri = typeof args?.uri === "string" ? Uri.parse(args.uri) : activeEditor?.document.uri;
+  const position =
+    args?.position &&
+    Number.isInteger(args.position.line) &&
+    Number.isInteger(args.position.character)
+      ? new Position(args.position.line, args.position.character)
+      : activeEditor?.selection.active;
+
+  if (!uri || !position) {
+    void window.showWarningMessage(
+      "Open a Solidity file before requesting solgrid references."
+    );
+    return;
+  }
+
+  const locations =
+    referenceLocationsFromArgs(args?.locations) ??
+    ((await commands.executeCommand<Location[]>(
+      "vscode.executeReferenceProvider",
+      uri,
+      position
+    )) ??
+      []);
+
+  if (locations.length === 0) {
+    void window.showInformationMessage("solgrid found no references for this symbol.");
+    return;
+  }
+
+  await commands.executeCommand("editor.action.showReferences", uri, position, locations);
+}
+
+function referenceLocationsFromArgs(
+  locations: ReferenceLocationArg[] | undefined
+): Location[] | undefined {
+  if (!Array.isArray(locations)) {
+    return undefined;
+  }
+
+  return locations.flatMap((location) => {
+    if (
+      typeof location?.uri !== "string" ||
+      !Number.isInteger(location.range?.start?.line) ||
+      !Number.isInteger(location.range?.start?.character) ||
+      !Number.isInteger(location.range?.end?.line) ||
+      !Number.isInteger(location.range?.end?.character)
+    ) {
+      return [];
+    }
+
+    return [
+      new Location(
+        Uri.parse(location.uri),
+        new Range(
+          new Position(location.range.start.line, location.range.start.character),
+          new Position(location.range.end.line, location.range.end.character)
+        )
+      ),
+    ];
+  });
+}
+
+function updateProjectIndexStatus(
+  statusBar: StatusBarItem,
+  status: ProjectIndexStatus
+): void {
+  const files = Number.isInteger(status.files) ? status.files ?? 0 : 0;
+  const fileLabel = `${files} Solidity file${files === 1 ? "" : "s"}`;
+  const duration =
+    typeof status.durationMs === "number" && Number.isFinite(status.durationMs)
+      ? ` in ${formatDuration(status.durationMs)}`
+      : "";
+
+  if (status.state === "building") {
+    statusBar.backgroundColor = undefined;
+    statusBar.command = undefined;
+    statusBar.text = "$(sync~spin) solgrid: indexing";
+    statusBar.tooltip =
+      files > 0
+        ? `Rebuilding the solgrid workspace index from ${fileLabel}.`
+        : "Building the solgrid workspace index.";
+    statusBar.show();
+    return;
+  }
+
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
+  statusBar.text = "$(check) solgrid";
+  statusBar.tooltip =
+    files > 0
+      ? `Workspace index ready for ${fileLabel}${duration}.`
+      : "Workspace index ready.";
+  statusBar.show();
+}
+
+function updateLanguageServerReadyStatus(statusBar: StatusBarItem): void {
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
+  statusBar.text = "$(check) solgrid";
+  statusBar.tooltip =
+    "solgrid language server is ready. Waiting for workspace index status.";
+  statusBar.show();
+}
+
+function updateLanguageServerStartingStatus(
+  statusBar: StatusBarItem,
+  restarting: boolean
+): void {
+  statusBar.backgroundColor = undefined;
+  statusBar.command = undefined;
+  statusBar.text = restarting
+    ? "$(sync~spin) solgrid: restarting"
+    : "$(sync~spin) solgrid: starting";
+  statusBar.tooltip = restarting
+    ? "Restarting the solgrid language server."
+    : "Starting the solgrid language server.";
+  statusBar.show();
+}
+
+function updateLanguageServerUnavailableStatus(
+  statusBar: StatusBarItem,
+  tooltip: string
+): void {
+  statusBar.text = "$(error) solgrid: unavailable";
+  statusBar.tooltip = tooltip;
+  statusBar.backgroundColor = new ThemeColor("statusBarItem.errorBackground");
+  statusBar.command = {
+    command: "workbench.action.openSettings",
+    title: "Configure solgrid language server",
+    arguments: ["solgrid.path"],
+  };
+  statusBar.show();
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1000) {
+    return `${Math.max(0, Math.round(milliseconds))}ms`;
+  }
+
+  return `${(milliseconds / 1000).toFixed(1)}s`;
 }
 
 /**
@@ -107,14 +744,52 @@ export async function deactivate(): Promise<void> {
  */
 function readVSCodeConfig(): SolgridConfig {
   const config = workspace.getConfiguration("solgrid");
+  const unsafeFixes = config.inspect<boolean>("unsafeFixesOnSave");
+  const explicitlyConfiguredUnsafeFixes =
+    unsafeFixes?.workspaceFolderValue ??
+    unsafeFixes?.workspaceValue ??
+    unsafeFixes?.globalValue;
   return {
     enable: config.get<boolean>("enable", true),
     path: config.get<string | null>("path", null),
     fixOnSave: config.get<boolean>("fixOnSave", true),
-    fixOnSaveUnsafe: config.get<boolean>("fixOnSave.unsafeFixes", false),
+    fixOnSaveUnsafe:
+      explicitlyConfiguredUnsafeFixes ??
+      config.get<boolean>("fixOnSave.unsafeFixes", false),
     formatOnSave: config.get<boolean>("formatOnSave", true),
     configPath: config.get<string | null>("configPath", null),
   };
+}
+
+function readCoverageConfig(): CoverageExtensionConfig {
+  const config = workspace.getConfiguration("solgrid");
+  return {
+    enable: config.get<boolean>(
+      "coverage.enable",
+      DEFAULT_COVERAGE_CONFIG.enable
+    ),
+    artifacts: config.get<string[]>(
+      "coverage.artifacts",
+      DEFAULT_COVERAGE_CONFIG.artifacts
+    ),
+    autoRefreshAfterRun: config.get<boolean>(
+      "coverage.autoRefreshAfterRun",
+      DEFAULT_COVERAGE_CONFIG.autoRefreshAfterRun
+    ),
+    customCommand: config.get<string[]>(
+      "coverage.customCommand",
+      DEFAULT_COVERAGE_CONFIG.customCommand
+    ),
+  };
+}
+
+function applyCoverageConfig(
+  coverageOverview: CoverageOverviewFeature,
+  coverageConfig: CoverageExtensionConfig
+): void {
+  void coverageOverview.applyConfig(coverageConfig).catch((error) => {
+    console.error("[solgrid] Failed to load coverage artifacts:", error);
+  });
 }
 
 function readEditorSaveConfig(): EditorSaveConfig {
@@ -136,4 +811,435 @@ function readEditorSaveConfig(): EditorSaveConfig {
     formatOnSave,
     defaultFormatter,
   };
+}
+
+function fallbackFormattingOptions(uri: Uri): {
+  tabSize: number;
+  insertSpaces: boolean;
+} {
+  const editorConfig = workspace.getConfiguration("editor", uri);
+  return {
+    tabSize: editorConfig.get<number>("tabSize", 4),
+    insertSpaces: editorConfig.get<boolean>("insertSpaces", true),
+  };
+}
+
+async function rerunSecurityAnalysis(
+  securityOverview: SecurityOverviewProvider
+): Promise<void> {
+  securityOverview.beginAnalysis();
+  const activeClient = client;
+  if (!activeClient) {
+    securityOverview.failAnalysis(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
+    void window.showErrorMessage(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
+    return;
+  }
+
+  const result = await requestSecurityAnalysisRerun(
+    async () => {
+      await activeClient.sendRequest("workspace/executeCommand", {
+        command: "solgrid.workspace.rerunSecurityAnalysis",
+        arguments: [],
+      });
+    },
+    async () => {
+      const config = readVSCodeConfig();
+      const editorSaveConfig = readEditorSaveConfig();
+      await activeClient.sendNotification("workspace/didChangeConfiguration", {
+        settings: getSettings(config, editorSaveConfig),
+      });
+    }
+  );
+
+  if (result.status === "complete") {
+    securityOverview.completeAnalysis();
+    return;
+  }
+
+  securityOverview.failAnalysis(result.message);
+  if (result.status === "unconfirmed") {
+    void window.showWarningMessage(result.message);
+  } else {
+    void window.showErrorMessage(result.message);
+  }
+}
+
+function applyLanguageServerLifecycleUpdate(
+  update: LanguageServerLifecycleUpdate,
+  statusBar: StatusBarItem,
+  securityOverview: SecurityOverviewProvider
+): void {
+  if (update.active !== undefined) {
+    void commands.executeCommand(
+      "setContext",
+      "solgrid.languageServerActive",
+      update.active
+    );
+  }
+
+  switch (update.status) {
+    case "none":
+      return;
+    case "starting":
+      securityOverview.beginAnalysis();
+      updateLanguageServerStartingStatus(statusBar, true);
+      return;
+    case "ready":
+      securityOverview.beginAnalysis();
+      updateLanguageServerReadyStatus(statusBar);
+      return;
+    case "unavailable":
+      securityOverview.failAnalysis(SECURITY_ANALYSIS_UNAVAILABLE_MESSAGE);
+      return;
+  }
+}
+
+async function disposeFailedLanguageClient(
+  failedClient: LanguageClient
+): Promise<void> {
+  try {
+    if (failedClient.needsStop()) {
+      await failedClient.stop();
+    }
+  } catch (cleanupError) {
+    console.error("[solgrid] Failed to stop the partially started client:", cleanupError);
+  }
+
+  try {
+    await failedClient.dispose();
+  } catch (cleanupError) {
+    console.error("[solgrid] Failed to dispose the failed client:", cleanupError);
+  }
+}
+
+interface SecurityOverviewFindingCriteria {
+  uri?: string;
+  code?: string;
+  fixable?: boolean;
+  suppressible?: boolean;
+  labelIncludes?: string;
+}
+
+interface SecurityOverviewGroupCriteria {
+  labelIncludes?: string;
+  childUri?: string;
+  childCode?: string;
+}
+
+interface SecurityOverviewFindingNodeLike {
+  kind: "finding";
+  label: string;
+  description: string;
+  ignored: boolean;
+  finding: {
+    uri: string;
+    code: string;
+    message: string;
+    source: string;
+    range: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    meta: {
+      id: string;
+      title: string;
+      category: string;
+      severity: "error" | "warning" | "info";
+      kind: "compiler" | "lint" | "detector";
+      hasFix: boolean;
+      suppressible: boolean;
+    };
+  };
+}
+
+interface CoverageOverviewNodeCriteria {
+  filePath?: string;
+  kind?: "file" | "line";
+  label?: string;
+  line?: number;
+}
+
+async function snapshotSecurityOverview(
+  securityOverview: SecurityOverviewProvider
+): Promise<unknown[]> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  return roots.map((node) => snapshotSecurityNode(securityOverview, node));
+}
+
+function snapshotSecurityNode(
+  securityOverview: SecurityOverviewProvider,
+  node: SecurityOverviewNode
+): unknown {
+  const item = securityOverview.getTreeItem(node);
+  if (node.kind === "group") {
+    return {
+      kind: "group",
+      label: node.label,
+      description: node.description,
+      contextValue: item.contextValue,
+      children: node.children.map((child) =>
+        snapshotSecurityNode(securityOverview, child)
+      ),
+    };
+  }
+  return {
+    kind: "finding",
+    label: node.label,
+    description: node.description,
+    contextValue: item.contextValue,
+    code: node.finding.code,
+    uri: node.finding.uri,
+  };
+}
+
+async function findSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<SecurityOverviewFindingNodeLike | undefined> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  return node;
+}
+
+async function ignoreSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.ignoreFinding(node);
+  return true;
+}
+
+async function restoreSecurityOverviewFinding(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewFindingNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.restoreFinding(node);
+  return true;
+}
+
+async function ignoreSecurityOverviewGroup(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.ignoreGroup(node);
+  return true;
+}
+
+async function restoreSecurityOverviewGroup(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await securityOverview.restoreGroup(node);
+  return true;
+}
+
+async function applySecurityOverviewGroupFixes(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await applyGroupFixes(node);
+  return true;
+}
+
+async function suppressSecurityOverviewGroupNextLine(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<boolean> {
+  const node = await findSecurityOverviewGroupNode(securityOverview, criteria);
+  if (!node) {
+    return false;
+  }
+  await suppressGroupNextLine(node);
+  return true;
+}
+
+async function findSecurityOverviewFindingNode(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewFindingCriteria = {}
+): Promise<SecurityOverviewFindingNode | undefined> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  for (const root of roots) {
+    if (root.kind !== "group") {
+      continue;
+    }
+    for (const child of root.children) {
+      if (matchesSecurityFinding(child, criteria)) {
+        return child;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function findSecurityOverviewGroupNode(
+  securityOverview: SecurityOverviewProvider,
+  criteria: SecurityOverviewGroupCriteria = {}
+): Promise<Extract<SecurityOverviewNode, { kind: "group" }> | undefined> {
+  const roots = await resolveProviderChildren(securityOverview.getChildren());
+  for (const root of roots) {
+    if (root.kind !== "group") {
+      continue;
+    }
+    if (matchesSecurityGroup(root, criteria)) {
+      return root;
+    }
+  }
+  return undefined;
+}
+
+function matchesSecurityFinding(
+  node: SecurityOverviewFindingNodeLike,
+  criteria: SecurityOverviewFindingCriteria
+): boolean {
+  if (criteria.uri && node.finding.uri !== criteria.uri) {
+    return false;
+  }
+  if (criteria.code && node.finding.code !== criteria.code) {
+    return false;
+  }
+  if (
+    typeof criteria.fixable === "boolean" &&
+    node.finding.meta.hasFix !== criteria.fixable
+  ) {
+    return false;
+  }
+  if (
+    typeof criteria.suppressible === "boolean" &&
+    node.finding.meta.suppressible !== criteria.suppressible
+  ) {
+    return false;
+  }
+  if (
+    criteria.labelIncludes &&
+    !node.label.toLowerCase().includes(criteria.labelIncludes.toLowerCase())
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function matchesSecurityGroup(
+  node: Extract<SecurityOverviewNode, { kind: "group" }>,
+  criteria: SecurityOverviewGroupCriteria
+): boolean {
+  if (
+    criteria.labelIncludes &&
+    !node.label.toLowerCase().includes(criteria.labelIncludes.toLowerCase())
+  ) {
+    return false;
+  }
+  if (criteria.childUri || criteria.childCode) {
+    return node.children.some(
+      (child) =>
+        (!criteria.childUri || child.finding.uri === criteria.childUri) &&
+        (!criteria.childCode || child.finding.code === criteria.childCode)
+    );
+  }
+  return true;
+}
+
+async function snapshotCoverageOverview(
+  coverageOverview: CoverageOverviewFeature
+): Promise<unknown[]> {
+  const roots = await resolveProviderChildren(coverageOverview.getChildren());
+  return roots.map((node) => snapshotCoverageNode(coverageOverview, node));
+}
+
+function snapshotCoverageNode(
+  coverageOverview: CoverageOverviewFeature,
+  node: CoverageOverviewNode
+): unknown {
+  const item = coverageOverview.getTreeItem(node);
+  if (node.kind === "file") {
+    return {
+      kind: "file",
+      label: node.label,
+      description: node.description,
+      contextValue: item.contextValue,
+      filePath: node.summary.filePath,
+      children: node.children.map((child) =>
+        snapshotCoverageNode(coverageOverview, child)
+      ),
+    };
+  }
+  return {
+    kind: "line",
+    label: node.label,
+    description: node.description,
+    contextValue: item.contextValue,
+    filePath: node.filePath,
+    line: node.detail.line,
+    status: node.detail.status,
+  };
+}
+
+async function findCoverageOverviewNode(
+  coverageOverview: CoverageOverviewFeature,
+  criteria: CoverageOverviewNodeCriteria = {}
+): Promise<CoverageOverviewNode | undefined> {
+  const roots = await resolveProviderChildren(coverageOverview.getChildren());
+  for (const root of roots) {
+    if (matchesCoverageNode(root, criteria)) {
+      return root;
+    }
+    if (root.kind === "file") {
+      for (const child of root.children) {
+        if (matchesCoverageNode(child, criteria)) {
+          return child;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function matchesCoverageNode(
+  node: CoverageOverviewNode,
+  criteria: CoverageOverviewNodeCriteria
+): boolean {
+  if (criteria.kind && node.kind !== criteria.kind) {
+    return false;
+  }
+  if (criteria.label && node.label !== criteria.label) {
+    return false;
+  }
+  if (criteria.filePath) {
+    const nodeFilePath =
+      node.kind === "file" ? node.summary.filePath : node.filePath;
+    if (nodeFilePath !== criteria.filePath) {
+      return false;
+    }
+  }
+  if (typeof criteria.line === "number") {
+    if (node.kind !== "line" || node.detail.line !== criteria.line) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function resolveProviderChildren<T>(
+  value: T[] | undefined | null | Promise<T[] | undefined | null> | Thenable<T[] | undefined | null>
+): Promise<T[]> {
+  const resolved = await Promise.resolve(value);
+  return resolved ?? [];
 }
