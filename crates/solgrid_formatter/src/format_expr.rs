@@ -373,11 +373,23 @@ pub fn format_call_args(
                     .into_iter()
                     .map(|(item, trailing)| attach_inline_comments(item, trailing))
                     .collect();
-                if config.bracket_spacing {
-                    concat(vec![text("{ "), join(items, text(", ")), text(" }")])
+                // Group so the struct literal breaks one field per line when it
+                // doesn't fit. The parens of the enclosing call hug the braces:
+                // `Foo({` ... `})`.
+                let edge = if config.bracket_spacing {
+                    line()
                 } else {
-                    concat(vec![text("{"), join(items, text(", ")), text("}")])
-                }
+                    softline()
+                };
+                group(vec![
+                    text("{"),
+                    indent(vec![
+                        edge.clone(),
+                        join(items, concat(vec![text(","), line()])),
+                    ]),
+                    edge,
+                    text("}"),
+                ])
             }
         }
     }

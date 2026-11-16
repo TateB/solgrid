@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Named call arguments (inline struct literals like `Foo({a: 1, b: 2})`) now break one field per line when they exceed the line length, instead of staying on one line and splitting nested positional calls
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

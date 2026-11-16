@@ -3002,3 +3002,68 @@ fn test_format_single_statement_if_body_over_multiple_lines() {
     let formatted = format_source(source, &default_config()).unwrap();
     assert_eq!(formatted, expected);
 }
+
+// --- Named argument (struct literal) breaking ---
+
+#[test]
+fn test_named_args_break_one_per_line_when_too_long() {
+    let source = r#"contract T {
+    function f() public {
+        try IPermit2AllowanceTransfer(HCAPermit2Lib.PERMIT2).permit(owner_, IPermit2AllowanceTransfer.PermitSingle({details: IPermit2AllowanceTransfer.PermitDetails({token: address(token), amount: permit.amount, expiration: permit.expiration, nonce: permit.nonce}), spender: address(this), sigDeadline: permit.sigDeadline}), permit.signature) {} catch {}
+    }
+}
+"#;
+    let expected = r#"contract T {
+    function f() public {
+        try IPermit2AllowanceTransfer(HCAPermit2Lib.PERMIT2).permit(
+            owner_,
+            IPermit2AllowanceTransfer.PermitSingle({
+                details: IPermit2AllowanceTransfer.PermitDetails({
+                    token: address(token),
+                    amount: permit.amount,
+                    expiration: permit.expiration,
+                    nonce: permit.nonce
+                }),
+                spender: address(this),
+                sigDeadline: permit.sigDeadline
+            }),
+            permit.signature
+        ) {} catch {}
+    }
+}
+"#;
+
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert_eq!(formatted, expected);
+    assert_eq!(
+        format_source(&formatted, &default_config()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn test_named_args_stay_inline_when_they_fit() {
+    let source = "contract T {\n    function f() public {\n        foo({a: 1, b: 2});\n    }\n}\n";
+    let formatted = format_source(source, &default_config()).unwrap();
+    assert!(formatted.contains("foo({a: 1, b: 2});"), "{formatted}");
+
+    let config = FormatConfig {
+        bracket_spacing: true,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert!(formatted.contains("foo({ a: 1, b: 2 });"), "{formatted}");
+}
+
+#[test]
+fn test_named_args_break_with_bracket_spacing() {
+    let source = "contract T {\n    function f() public {\n        bar = Foo({alpha: someLongValueName, beta: anotherLongValueName, gamma: yetAnotherValue});\n    }\n}\n";
+    let expected = "contract T {\n    function f() public {\n        bar = Foo({\n            alpha: someLongValueName,\n            beta: anotherLongValueName,\n            gamma: yetAnotherValue\n        });\n    }\n}\n";
+    let config = FormatConfig {
+        bracket_spacing: true,
+        line_length: 80,
+        ..default_config()
+    };
+    let formatted = format_source(source, &config).unwrap();
+    assert_eq!(formatted, expected);
+}
