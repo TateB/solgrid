@@ -2842,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ariadne",
  "clap",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_ast"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sha3 0.10.9",
  "solar-ast",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "regex",
  "serde",
@@ -2888,14 +2888,14 @@ dependencies = [
 
 [[package]]
 name = "solgrid_diagnostics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "solgrid_formatter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "insta",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_linter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "insta",
@@ -2933,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_napi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -2945,7 +2945,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "solar-ast",
  "solar-data-structures",
@@ -2955,7 +2955,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_project"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ignore",
  "serde",
@@ -2969,7 +2969,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ignore",
  "serde",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "solgrid_wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
